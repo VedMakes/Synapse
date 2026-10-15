@@ -1110,3 +1110,62 @@ episode spawn/termination behavior, track difficulty, or PPO rollout/update
 length. Use an ablation or a longer measured run, and record the result before
 freezing any budget or architecture decision. Keep the ONNX/tournament work
 after the training behavior is credible.
+
+## 24. SESSION HANDOFF (2026-10-16, DETERMINISTIC EVALUATION SLICE)
+
+### Goal and result
+
+The next engine slice is implemented: saved PPO artifacts can now be checked
+against the exact environment contract and evaluated from the fixed start line
+with deterministic mean actions. Evaluation is deliberately one-lane and
+streaming so a long run does not accumulate trajectory frames in memory.
+
+### Implemented files
+
+- `racing_event/evaluation.py`
+  - Adds `EvaluationResult`, `evaluate_policy`, and strict contract/hash
+    validation.
+  - Uses `reset(evaluation=True)`, a frozen normalizer path, fixed `dt` lap
+    timing, physical outcome metrics, and a streaming SHA-256 transition hash.
+  - Distinguishes `finished`, `dnf_crash`, `dnf_timeout`, `dnf_stuck`, and
+    `dnf_backward` outcomes.
+- `tools/evaluate_policy.py`
+  - Loads the safe state-dictionary PPO artifact plus `TrainingContract`.
+  - Evaluates sequentially and rejects a repeated deterministic run if its
+    trajectory digest changes.
+- `tools/run_e2_baseline.py`
+  - Adds optional `--artifact-dir` output for policy weights, metadata, and a
+    frozen training contract/normalizer.
+- `racing_event/env.py` and `racing_event/vector_env.py`
+  - Reject custom spawn, speed, lateral, or heading overrides in evaluation
+    mode, and validate scalar reset inputs before state mutation.
+- `tests/test_evaluation.py` and `tests/test_vector_env.py`
+  - Cover deterministic hashes, normalizer immutability, artifact contract
+    mismatches, DNF classification, and canonical evaluation starts.
+- `README.md` and `docs/state_schema.md`
+  - Document the low-memory evaluation workflow and artifact boundary.
+
+### Checks
+
+- Focused evaluation tests: **passed** — 4 tests with
+  `.venv/bin/python -m unittest discover -s tests -p 'test_evaluation.py' -v`.
+- Full test suite before this handoff update: **passed** — 55 tests with
+  `.venv/bin/python -m unittest discover -s tests -v`.
+- Syntax check: **passed** — `.venv/bin/python -m py_compile racing_event/*.py tools/*.py tests/*.py`.
+- Artifact/evaluation smoke: **passed** — a 2-update, 2-lane E2 run saved a
+  policy and frozen contract under `/tmp/omnirush/racing-e2-artifact`; two
+  deterministic evaluations at a 16-step horizon both returned
+  `dnf_timeout` with the identical trajectory hash
+  `d292786217a1658deb70150a095d5ab56f600e8b44c4ab9c2b67842931754166`.
+  This temporary path is not a repository deliverable.
+- E2 diagnosis: **not complete** — the smoke run only proves the artifact and
+  evaluator path. It does not explain the earlier zero-lap result.
+
+### Next session action
+
+Run the evaluator against a longer, measured E2 artifact and record the
+deterministic fixed-start outcome beside the stochastic rollout metrics. Then
+use a bounded ablation to identify whether the zero-lap result comes from
+reward scale, random-spawn coverage, track geometry/difficulty, or PPO update
+settings. Keep the run small enough to avoid memory pressure, and do not freeze
+the public step budget, tick rate, or track count until the evidence is written.
