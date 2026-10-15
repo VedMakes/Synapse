@@ -183,6 +183,7 @@ class PpoTests(unittest.TestCase):
             loaded, payload = FixedMLPActorCritic.load_artifact(weights, metadata, expected_observation_size=4)
             np.testing.assert_allclose(policy.act(observations, deterministic=True), loaded.act(observations, deterministic=True))
             self.assertEqual(payload["distribution"], "tanh_normal")
+            self.assertEqual(payload["policy_mean_bias"], [0.0, 0.5])
             metadata.write_text(metadata.read_text(encoding="utf-8").replace('"action_size": 2', '"action_size": 3'), encoding="utf-8")
             with self.assertRaises(ValueError):
                 FixedMLPActorCritic.load_artifact(weights, metadata)

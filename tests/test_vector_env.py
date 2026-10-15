@@ -40,6 +40,16 @@ class VectorizedEnvironmentTests(unittest.TestCase):
             for name, value in scalar_result[4]["state"].items():
                 self.assertEqual(value, vector_result[4]["state"][name][0])
 
+    def test_random_training_spawn_matches_scalar_for_one_lane(self) -> None:
+        scalar = RacingEnv(TRACK, CONFIG)
+        vector = self.make_vector()
+        scalar_observation, scalar_info = scalar.reset(seed=321)
+        vector_observation, vector_info = vector.reset(seed=321)
+        np.testing.assert_array_equal(scalar_observation, vector_observation[0])
+        self.assertEqual(scalar_info["track_id"], vector_info["track_id"][0])
+        self.assertEqual(scalar_info["spawn_s"], vector_info["spawn_s"][0])
+        self.assertEqual(scalar.state.__dict__, vector.state.item(0).__dict__)
+
     def test_batch_seed_and_actions_are_deterministic(self) -> None:
         actions = np.asarray([[0.1, 0.6], [-0.2, 0.4], [0.0, -0.3], [0.4, 0.2]])
         first = self.make_vector(4)

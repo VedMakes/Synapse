@@ -1170,3 +1170,86 @@ use a bounded ablation to identify whether the zero-lap result comes from
 reward scale, random-spawn coverage, track geometry/difficulty, or PPO update
 settings. Keep the run small enough to avoid memory pressure, and do not freeze
 the public step budget, tick rate, or track count until the evidence is written.
+
+## 25. SESSION HANDOFF (2026-10-16, E2 DIAGNOSIS AND ENGINE HARDENING)
+
+### Goal and result
+
+The longer E2 artifact was run and evaluated. The first 32-update artifact
+showed that the throttle prior removed the zero-speed local failure, but a
+64-update run with the old PPO settings later collapsed. A bounded PPO
+stability ablation found a better provisional update configuration. The current
+engine passes the physics, scalar/vector parity, reset, reward, rollout, GAE,
+artifact, and deterministic-evaluation checks.
+
+### Measured diagnosis
+
+- Old 32-update PPO settings (`10` epochs, `3e-4` learning rate,
+  `0.01` entropy) produced a finished fixed-start lap at `50.7333 s` after
+  `8,192` transitions, but the corresponding 64-update run later ended
+  `dnf_stuck` after `186` steps. Its final approximate KL was `0.0267` and clip
+  fraction was `0.3164`.
+- Stabilized settings (`4` epochs, `1e-4` learning rate, `0.005` entropy)
+  remained competent after `16,384` transitions. The deterministic artifact
+  finished in `923` steps (`30.7667 s`) on both repeated evaluations. The final
+  approximate KL was `0.000062` and clip fraction was `0.0`.
+- The stabilized evaluation used `204` off-track steps. A stronger baseline
+  off-track weight of `-4.0` was tested and rejected because its policy crashed
+  after `272` steps with `146` off-track steps.
+- The synthetic fixture is physically completable: the scripted controller
+  finished in `863` steps (`28.7667 s`). The remaining gap is policy quality,
+  not a proven impossible track.
+
+### Implemented changes
+
+- `racing_event/config.py` and `config/simulation.json`
+  - Add `standing_start_probability=0.25` to expose evaluation-like starts
+    during training while retaining random spawns.
+- `racing_event/reward.py`, `racing_event/signals.py`,
+  `examples/baseline_reward.json`
+  - Add a one-shot `stuck` signal and baseline weight `-8.0`, preventing an
+    early negligible-progress truncation from being a cheap reward escape.
+- `racing_event/physics.py`
+  - Couple longitudinal acceleration and lateral grip with a friction-circle
+    budget.
+  - Reject non-positive or non-finite `dt` and grip factors.
+  - Preserve scalar/batched parity.
+- `racing_event/ppo.py`
+  - Model artifact format is now version `2`.
+  - Fixed policy mean bias is `[0.0, 0.5]` for steering and throttle/brake.
+    The throttle prior helps standing starts leave the zero-speed local basin.
+  - The bias is stored and validated in artifact metadata.
+- `racing_event/rollout.py` and `tools/run_e2_baseline.py`
+  - Adopt the measured provisional PPO settings: four update epochs,
+    learning rate `1e-4`, and entropy coefficient `0.005`.
+- Tests now cover 61 cases, including random scalar/vector spawn parity,
+  one-shot stuck rewards, friction-circle behavior, invalid physics inputs,
+  and policy-bias artifact metadata.
+- `reports/e2_deterministic_evaluation.md` records the full comparison and
+  reproduction commands.
+
+### Checks
+
+- Full suite: **passed** — 61 tests with `make test`.
+- Physics-focused suite: **passed** — scalar/batched parity, deterministic
+  repeatability, grip coupling, acceleration/braking, and invalid input tests.
+- PPO/rollout suite: **passed** — masked GAE, safe artifact loading, inactive
+  lanes, exact budget behavior, normalizer persistence, and provisional
+  hyperparameter serialization.
+- E2 artifact: **passed/measured** — 64 updates, 4 environments, 64-step
+  rollout, 16,384 transitions, frozen normalizer, repeated deterministic
+  fixed-start evaluation, identical trajectory hash.
+- UI/Unity: **not implemented**. Python remains the only physics authority.
+
+### Next session action: UI boundary
+
+Begin the renderer-facing slice without moving any game logic into Unity:
+
+1. Freeze the Python trajectory/state message fields and schema version.
+2. Add a Python trajectory exporter that records the state and event stream
+   needed by a renderer without changing simulation outcomes.
+3. Add a lightweight local replay preview or HTML canvas first, using only
+   exported Python frames.
+4. Then build the Unity playback adapter against the same versioned data.
+
+Do not add Unity-side collision, lap timing, reward, progress, or physics.
