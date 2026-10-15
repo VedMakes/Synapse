@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import unittest
 
@@ -61,6 +62,27 @@ class RacingEnvironmentTests(unittest.TestCase):
         self.assertEqual(env.state.x, point[0])
         self.assertEqual(env.state.y, point[1])
         self.assertEqual(env.state.heading, heading)
+
+    def test_stuck_signal_is_emitted_once_for_stuck_truncation(self) -> None:
+        config = replace(
+            CONFIG,
+            episode=replace(CONFIG.episode, max_steps=20, stuck_steps=1),
+        )
+        env = RacingEnv(TRACK, config)
+        env.reset(seed=2, evaluation=True)
+        _, _, terminated, truncated, info = env.step([0.0, 0.0])
+        self.assertFalse(terminated)
+        self.assertTrue(truncated)
+        self.assertEqual(info["signals"]["stuck"], 1.0)
+
+    def test_training_spawn_can_match_evaluation_standing_start(self) -> None:
+        config = replace(
+            CONFIG,
+            episode=replace(CONFIG.episode, standing_start_probability=1.0),
+        )
+        env = RacingEnv(TRACK, config)
+        env.reset(seed=123)
+        self.assertEqual(env.state.speed, 0.0)
 
 
 if __name__ == "__main__":

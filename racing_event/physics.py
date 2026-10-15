@@ -118,6 +118,10 @@ def step_car(state: CarState, action: np.ndarray, config: CarConfig, dt: float, 
         raise ValueError("action must contain steering and throttle/brake")
     if not np.all(np.isfinite(action_array)):
         raise ValueError("action must contain only finite values")
+    if not np.isfinite(dt) or dt <= 0.0:
+        raise ValueError("dt must be positive and finite")
+    if not np.isfinite(grip_factor) or grip_factor <= 0.0:
+        raise ValueError("grip_factor must be positive and finite")
     steering_command = _clip(float(action_array[0]), -1.0, 1.0)
     longitudinal_command = _clip(float(action_array[1]), -1.0, 1.0)
     target_steering = steering_command * config.max_steering_rad
@@ -134,10 +138,14 @@ def step_car(state: CarState, action: np.ndarray, config: CarConfig, dt: float, 
     speed = _clip(state.speed + acceleration * dt, 0.0, config.max_speed_mps)
 
     grip = max(1e-6, config.peak_lateral_accel_mps2 * grip_factor)
+    longitudinal_acceleration = (speed - state.speed) / dt
+    usable_lateral_grip = float(
+        np.sqrt(max(0.0, grip * grip - min(abs(longitudinal_acceleration), grip) ** 2))
+    )
     requested_yaw_rate = speed * math.tan(steering_angle) / config.wheelbase_m
     requested_lateral_accel = abs(speed * requested_yaw_rate)
-    if requested_lateral_accel > grip:
-        yaw_rate = math.copysign(grip / max(speed, 1e-6), requested_yaw_rate)
+    if requested_lateral_accel > usable_lateral_grip:
+        yaw_rate = math.copysign(usable_lateral_grip / max(speed, 1e-6), requested_yaw_rate)
     else:
         yaw_rate = requested_yaw_rate
 
@@ -177,6 +185,8 @@ def step_car_batch(
         raise ValueError(f"actions must have shape ({state.size}, 2)")
     if not np.all(np.isfinite(action_array)):
         raise ValueError("action must contain only finite values")
+    if not np.isfinite(dt) or dt <= 0.0:
+        raise ValueError("dt must be positive and finite")
     grip = np.asarray(grip_factors, dtype=np.float64)
     if grip.ndim == 0:
         grip = np.full(state.size, float(grip), dtype=np.float64)
@@ -199,10 +209,18 @@ def step_car_batch(
     speed = np.clip(state.speed + acceleration * dt, 0.0, config.max_speed_mps)
 
     peak_grip = np.maximum(1.0e-6, config.peak_lateral_accel_mps2 * grip)
+    longitudinal_acceleration = (speed - state.speed) / dt
+    usable_lateral_grip = np.sqrt(
+        np.maximum(
+            0.0,
+            peak_grip * peak_grip
+            - np.minimum(np.abs(longitudinal_acceleration), peak_grip) ** 2,
+        )
+    )
     requested_yaw_rate = speed * np.tan(steering_angle) / config.wheelbase_m
     requested_lateral_accel = np.abs(speed * requested_yaw_rate)
-    limited_yaw_rate = np.sign(requested_yaw_rate) * peak_grip / np.maximum(speed, 1.0e-6)
-    yaw_rate = np.where(requested_lateral_accel > peak_grip, limited_yaw_rate, requested_yaw_rate)
+    limited_yaw_rate = np.sign(requested_yaw_rate) * usable_lateral_grip / np.maximum(speed, 1.0e-6)
+    yaw_rate = np.where(requested_lateral_accel > usable_lateral_grip, limited_yaw_rate, requested_yaw_rate)
 
     heading = state.heading + yaw_rate * dt
     average_heading = state.heading + 0.5 * yaw_rate * dt

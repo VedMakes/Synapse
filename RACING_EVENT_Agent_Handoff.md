@@ -260,6 +260,7 @@ All signals are defined so that they are **independent of tick rate** (scaled by
 | `curvature_matched_speed` | `-abs(v - v_target) / v_max * dt`. `v_target = min(v_max, sqrt(a_lat_max / max(abs(kappa_ahead), eps)))`, `kappa_ahead` from a speed-scaled lookahead point. Encourages braking before corners. | Every tick |
 | `off_track` | 1 while any car corner is outside the drivable surface (in the runoff band), else 0, times `dt`. | Every tick |
 | `crash` | 1 on barrier contact, else 0. | Once, ends episode |
+| `stuck` | 1 when the negligible-progress limit ends the episode, else 0. | Once, ends episode |
 | `lap_complete` | 1 when the episode distance target (one full lap from the spawn point) is reached. | Once, ends episode |
 | `time` | `dt`. Constant. Used with a negative weight as a per-tick cost. | Every tick |
 | `steer_smoothness` | `abs(steer_t - steer_{t-1}) * (v / v_max)`. Used with a negative weight. | Every tick |
@@ -280,7 +281,7 @@ Notes carried over from research (see Section 18):
 
 ### 6.7 Episode structure, spawn, and termination
 
-**Spawn (training):** at every reset, each env draws a track uniformly from the training set and a spawn arclength `s0` uniformly along the centerline. Add small noise: lateral offset within about ±30 percent of half-width, small heading error, initial speed random from 0 to about half of max speed. `[TUNE]`
+**Spawn (training):** at every reset, each env draws a track uniformly from the training set and a spawn arclength `s0` uniformly along the centerline. Add small noise: lateral offset within about ±30 percent of half-width, small heading error, and initial speed random from 0 to about half of max speed. Include a measured standing-start mixture so a policy sees the evaluation start distribution. `[TUNE]`
 
 **Spawn (evaluation):** fixed start line, standing start, zero noise.
 

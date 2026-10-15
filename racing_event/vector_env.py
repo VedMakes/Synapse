@@ -239,7 +239,13 @@ class VectorizedRacingEnv:
             if evaluation:
                 speed_values = np.zeros(selected.size, dtype=np.float64)
             else:
-                speed_values = self.rng.uniform(0.0, 0.5 * self.config.car.max_speed_mps, size=selected.size)
+                standing_starts = self.rng.random(selected.size) < self.config.episode.standing_start_probability
+                random_speeds = self.rng.uniform(
+                    0.0,
+                    0.5 * self.config.car.max_speed_mps,
+                    size=selected.size,
+                )
+                speed_values = np.where(standing_starts, 0.0, random_speeds)
         else:
             speed_values = speed_values_all[selected]
 
@@ -372,9 +378,10 @@ class VectorizedRacingEnv:
             self.steps[active_indices] += 1
             backward_too_far = self.distance_since_spawn[active_indices] < -self.config.episode.backward_limit_m
             terminated_active = crash_active | lap_complete_active | backward_too_far
+            stuck_active = self.stuck_ticks[active_indices] >= self.config.episode.stuck_steps
             truncated_active = (~terminated_active) & (
                 (self.steps[active_indices] >= self.config.episode.max_steps)
-                | (self.stuck_ticks[active_indices] >= self.config.episode.stuck_steps)
+                | stuck_active
             )
             terminated[active_indices] = terminated_active
             truncated[active_indices] = truncated_active
@@ -416,6 +423,9 @@ class VectorizedRacingEnv:
                 curvature_ahead=curvature_ahead,
                 off_track=bool(edge.off_track),
                 crash=bool(crash[index]),
+                stuck=bool(
+                    self.stuck_ticks[index] >= self.config.episode.stuck_steps
+                ),
                 lap_complete=bool(lap_complete[index]),
             )
             for name, value in current_signals.items():

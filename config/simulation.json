@@ -16,7 +16,8 @@
   "episode": {
     "max_steps": 2400,
     "stuck_steps": 90,
-    "backward_limit_m": 25.0
+    "backward_limit_m": 25.0,
+    "standing_start_probability": 0.25
   },
   "sensors": {
     "ray_angles_deg": [0, -15, 15, -30, 30, -60, 60, -90, 90],

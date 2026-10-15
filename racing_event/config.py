@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 
 
@@ -31,6 +32,7 @@ class EpisodeConfig:
     max_steps: int = 2400
     stuck_steps: int = 90
     backward_limit_m: float = 25.0
+    standing_start_probability: float = 0.25
 
 
 @dataclass(frozen=True)
@@ -77,5 +79,9 @@ class SimulationConfig:
             raise ValueError("runoff_grip_factor must be in (0, 1]")
         if self.episode.max_steps <= 0 or self.episode.stuck_steps <= 0:
             raise ValueError("episode limits must be positive")
+        if not math.isfinite(self.episode.standing_start_probability) or not (
+            0.0 <= self.episode.standing_start_probability <= 1.0
+        ):
+            raise ValueError("standing_start_probability must be in [0, 1]")
         if not self.sensors.ray_angles_deg or not self.sensors.lookahead_distances_m:
             raise ValueError("at least one sensor ray and lookahead are required")

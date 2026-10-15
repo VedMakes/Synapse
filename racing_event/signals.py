@@ -21,6 +21,7 @@ def compute_signals(
     curvature_ahead: float,
     off_track: bool,
     crash: bool,
+    stuck: bool,
     lap_complete: bool,
 ) -> dict[str, float]:
     raw_delta = current_s - previous_s
@@ -40,6 +41,7 @@ def compute_signals(
         "curvature_matched_speed": curvature_signal,
         "off_track": float(off_track) * dt,
         "crash": float(crash),
+        "stuck": float(stuck),
         "lap_complete": float(lap_complete),
         "time": dt,
         "steer_smoothness": abs(steering_command - previous_steering_command) * (speed / car.max_speed_mps),

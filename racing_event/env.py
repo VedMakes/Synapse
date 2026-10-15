@@ -87,7 +87,12 @@ class RacingEnv:
         if not np.isfinite(lateral_offset):
             raise ValueError("lateral_offset must be finite")
         if initial_speed is None:
-            initial_speed = 0.0 if evaluation else float(self.rng.uniform(0.0, 0.5 * self.config.car.max_speed_mps))
+            if evaluation:
+                initial_speed = 0.0
+            else:
+                standing_start = self.rng.random() < self.config.episode.standing_start_probability
+                random_speed = self.rng.uniform(0.0, 0.5 * self.config.car.max_speed_mps)
+                initial_speed = 0.0 if standing_start else float(random_speed)
         if not np.isfinite(initial_speed) or initial_speed < 0.0:
             raise ValueError("initial_speed must be finite and non-negative")
         if heading_error is None:
@@ -150,7 +155,8 @@ class RacingEnv:
         self.steps += 1
         backward_too_far = self.distance_since_spawn < -self.config.episode.backward_limit_m
         terminated = bool(crash or lap_complete or backward_too_far)
-        truncated = bool(not terminated and (self.steps >= self.config.episode.max_steps or self.stuck_ticks >= self.config.episode.stuck_steps))
+        stuck = bool(self.stuck_ticks >= self.config.episode.stuck_steps)
+        truncated = bool(not terminated and (self.steps >= self.config.episode.max_steps or stuck))
         self._done = terminated or truncated
         events: list[str] = []
         if edge.off_track and not previous_off_track:
@@ -174,6 +180,7 @@ class RacingEnv:
             curvature_ahead=curvature_ahead,
             off_track=edge.off_track,
             crash=crash,
+            stuck=stuck,
             lap_complete=lap_complete,
         )
         reward = self.reward_config.calculate(signals)
