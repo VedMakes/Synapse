@@ -106,6 +106,9 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertEqual(payload["rollout_length"], 128)
         self.assertEqual(payload["hidden_sizes"], [64, 64])
         self.assertAlmostEqual(payload["gamma"], 0.99)
+        self.assertEqual(payload["update_epochs"], 4)
+        self.assertAlmostEqual(payload["learning_rate"], 1.0e-4)
+        self.assertAlmostEqual(payload["entropy_coefficient"], 0.005)
 
 
 if __name__ == "__main__":

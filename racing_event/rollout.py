@@ -35,9 +35,9 @@ class PPOHyperparameters:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_range: float = 0.2
-    update_epochs: int = 10
-    learning_rate: float = 3.0e-4
-    entropy_coefficient: float = 0.01
+    update_epochs: int = 4
+    learning_rate: float = 1.0e-4
+    entropy_coefficient: float = 0.005
     value_loss_coefficient: float = 0.5
     hidden_sizes: tuple[int, ...] = (64, 64)
     max_grad_norm: float = 0.5

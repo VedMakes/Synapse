@@ -56,7 +56,6 @@ def run(args: argparse.Namespace) -> str:
     env = VectorizedRacingEnv(track, config, reward, n_envs=args.n_envs)
     hyperparameters = PPOHyperparameters(
         rollout_length=args.rollout_length,
-        update_epochs=10,
     )
     policy = FixedMLPActorCritic(env.observation_size)
     trainer = PPOTrainer(policy, hyperparameters)
