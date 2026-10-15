@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "racing-event"
+version = "0.1.0"
+description = "Python-authoritative reinforcement-learning racing event prototype"
+requires-python = ">=3.10"
+dependencies = [
+  "numpy>=1.24,<3",
+  "torch>=2.7,<2.8",
+]
+
+[tool.setuptools.packages.find]
+include = ["racing_event*"]
