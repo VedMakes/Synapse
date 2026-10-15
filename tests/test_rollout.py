@@ -100,6 +100,38 @@ class RolloutCollectorTests(unittest.TestCase):
             collector.collect(1)
         self.assertEqual(self.budget.status(self.run_id)["used_steps"], 0)
 
+    def test_crash_reset_is_random_new_episode_and_budget_keeps_counting(self) -> None:
+        class CrashProbe(VectorizedRacingEnv):
+            def __init__(self):
+                super().__init__(TRACK, CONFIG, n_envs=1)
+                self.spawns = []
+
+            def reset(self, *args, **kwargs):
+                observation, info = super().reset(*args, **kwargs)
+                self.spawns.append(float(info["spawn_s"][0]))
+                return observation, info
+
+        env = CrashProbe()
+
+        def barrier_impact(observation):
+            # Force a barrier-contact scenario before each real engine step;
+            # the collector must preserve its failure then reset normally.
+            barrier = env.tracks[int(env.track_indices[0])].barrier_left[0]
+            env.state.x[0], env.state.y[0] = barrier
+            return np.zeros((1, 2))
+
+        collector = RolloutCollector(env, barrier_impact, self.budget, self.run_id, seed=17)
+        result = collector.collect(2)
+        self.assertEqual(len(env.spawns), 2)
+        self.assertNotEqual(env.spawns[0], env.spawns[1])
+        self.assertTrue(np.all(result.batch.terminated))
+        np.testing.assert_array_equal(result.batch.signals["crash"], [[1.0], [1.0]])
+        self.assertEqual(self.budget.status(self.run_id)["used_steps"], 2)
+        # The next episode starts with a new distance target, not free progress
+        # from the old spawn; no reset itself is stored as a PPO transition.
+        self.assertEqual(result.batch.transitions, 2)
+        self.assertTrue(np.all(result.batch.signals["lap_complete"] == 0))
+
     def test_hyperparameters_are_explicit_and_serializable(self) -> None:
         hyperparameters = PPOHyperparameters()
         payload = hyperparameters.to_dict()

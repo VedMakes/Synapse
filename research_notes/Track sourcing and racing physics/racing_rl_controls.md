@@ -147,3 +147,61 @@ Keep **two total continuous outputs**: steering plus one signed longitudinal con
 - No local throughput benchmark has been run as part of this research. The existing project README correctly treats vectorization and fixed training throughput as the next implementation milestone; publish no steps-per-second target until that benchmark is complete. [Project README](../../README.md) [Project first-slice document](../../docs/first_slice.md)
 
 - The observation schema still needs a final field table and a decision on whether normalization is purely static or includes a saved running normalizer. That decision should be made together with the fixed PPO trainer, because action distribution, observation preprocessing, and evaluation loading are one reproducibility contract. [Current `RacingEnv` observation code](../../racing_event/env.py) [SB3 VecNormalize documentation](https://stable-baselines3.readthedocs.io/en/master/guide/vec_envs.html#vecnormalize)
+
+## Random respawns: verified follow-up (2026-10-16)
+
+### Evidence and its limits
+
+- Czechmanowski et al., **On learning racing policies with reinforcement
+  learning** (2025), Section III-E, explicitly resets a rollout to a random
+  position on the track when track limits are exceeded, "to ensure full track
+  exploration." Their setup uses PPO, 400 concurrent instances and 120 million
+  environment steps. This is a precedent for coverage, not a measured result
+  for our small NumPy environment.
+  [Primary full text, v1](https://arxiv.org/html/2504.02420v1#S3.SS5)
+- That paper does **not** isolate random respawn versus fixed respawn as an
+  unseen-track generalization ablation. Random respawn should reduce repeated
+  practice of early corners, but does not prove that a policy cannot identify
+  familiar sections from local geometry.
+- Fuchs et al., **Super-Human Performance in Gran Turismo Sport Using Deep
+  Reinforcement Learning**, Section V-C and conclusion, report failure to
+  finish an unseen track despite local geometry/range observations. They also
+  describe full-braking/stationary behavior with fixed wall penalties in
+  Section III-A. These are useful warnings against equating good training
+  reward or one-track performance with generalization.
+  [Primary full text, v2](https://arxiv.org/html/2008.07971v2)
+- No source code, geometry, dataset, or assets were copied from either paper.
+  The exact paper the user recalled has not been identified; the 2025 paper is
+  a directly verified match to the reset practice, not a claim to be that paper.
+
+### Current project behavior
+
+- `RolloutCollector` already resets ended lanes to a random track from the
+  public training pool and a uniform centreline arclength. This includes barrier
+  crashes, lap endings, backward endings, and stuck/time truncations.
+- A reset is a **new episode**, not a teleport transition inside an existing
+  lap. The terminal transition/reward is preserved, GAE does not cross the
+  reset, distance starts at zero, and the persistent transition budget does not
+  reset. Sampling a new spawn does not earn progress.
+- Ordinary runoff entry currently continues with lower grip and an off-track
+  signal. It does not reset the episode. Evaluation always has a fixed standing
+  start and ends on a crash, with no respawn or second chance.
+
+### Recommendation and questions saved for after the session
+
+1. **Keep the present crash -> new random episode behavior.** Keep the 25%
+   standing-start mixture pending a multi-seed experiment; random moving spawns
+   alone can undertrain standing starts.
+2. **Decision needed: retain soft runoff recovery, or test immediate off-track
+   reset as a training-only ablation?** Recommend retaining recovery now. An
+   immediate reset improves coverage but removes recovery examples, changes the
+   task, and must not skip failure costs or be presented as a completed lap.
+3. **Experiment E6/E3:** compare fixed-start and random-respawn training at equal
+   budgets and several seeds, then evaluate fixed-start completion, lap time,
+   crash/off-track rates, section coverage, and unseen public development tracks.
+   Do not expose private tournament tracks or claim anti-memorization without
+   that measurement.
+4. **Question:** can the user supply the paper title/link later? It may contain
+   a more specific reset ablation than these verified sources.
+
+No training or physics rule is changed by this research/UI session.
