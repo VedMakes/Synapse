@@ -1322,14 +1322,15 @@ provenance. The viewer is a local tool, not a hardened public upload service.
 
 All commands ran from the project root.
 
-- **Tests passed:** `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 make test`
-  ran 74 unittest cases, including the JS-runner case, with no skips here.
+- **Tests passed:** `make test` ran 77 unittest cases, including telemetry,
+  scalar/vector parity, metrics, and the JS-runner case, with no skips here.
 - **JS checks passed:** `node --test tests/replay_frontend.test.cjs` ran 59
   playback/validation/DOM-control tests. They use a DOM/canvas double, not a
   real browser. On machines without Node, `make test` explicitly skips this
   optional runner; Python/export checks still run offline.
-- **Syntax passed:** `node --check racing_event/assets/replay.js` and
-  `.venv/bin/python -m py_compile racing_event/trajectory.py racing_event/evaluation.py tools/export_replay.py tools/build_replay.py`.
+- **Syntax passed:** `node --check racing_event/assets/replay.js`,
+  `.venv/bin/python -m py_compile racing_event/*.py tools/*.py tests/*.py`,
+  and `git diff --check`.
 - **End-to-end saved-policy export passed:** `artifacts/replay/e2-stable.json`
   contains 924 frames (initial + 923 steps), a `30.7666666667 s` finish, and the
   unchanged E2 trajectory hash
@@ -1346,6 +1347,12 @@ All commands ran from the project root.
   `http://localhost:8765/`. Server PID `1176` in this session serves only
   `artifacts/replay`, bound to loopback. It may not survive session/container
   restarts; restart with the README's `http.server` command if needed.
+- **Telemetry smoke passed:** a scripted export/build/read-back produced 864
+  frames and 863 steps with schema `1.1`, tick `0`, and final tick/result
+  consistency.
+- **Coverage semantics:** a reset reports sector `0` but starts with zero driven
+  coverage; the first transition marks the reached sector. This prevents random
+  respawns or selective resets from being counted as policy achievement.
 - **Not run:** real-browser screenshot/visual layout verification, Unity mesh
   parity, and Docker image build. No browser or Unity tool is available in this
   session. No dedicated lint/typecheck configuration exists.
@@ -1353,8 +1360,9 @@ All commands ran from the project root.
 ### Exact next action
 
 Open the local E2 and scripted previews in a real browser and review layout,
-playback controls, tick-zero pose, final result/event timing, and mobile sizing.
-Fix any visual issues before adding more UI. Then implement a small Unity
-read-only playback adapter using `docs/replay_contract.md` and run the geometry,
-forward-axis, timing, and schema-mismatch parity tests. Multi-ghost comparison
-and multi-episode training replays are separate later slices.
+playback controls, tick-zero pose, final result/event timing, and mobile sizing;
+this remains blocked because no browser binary is installed in the current
+container. Next, implement the lowest-risk viewer-only QoL slice: an event-marker
+rail with exact-tick jumps, then keyboard help/reduced-motion behavior. Keep
+Unity read-only and defer camera modes, multi-ghost comparison, and multi-episode
+training replays until the browser layer is stable.

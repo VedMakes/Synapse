@@ -36,14 +36,26 @@ class RacingEnvironmentTests(unittest.TestCase):
 
     def test_observation_contract_and_signal_contract(self) -> None:
         env = self.make_env()
-        observation, _ = env.reset(seed=7, spawn_s=0.0, lateral_offset=0.0, initial_speed=0.0, heading_error=0.0)
+        observation, reset_info = env.reset(
+            seed=7,
+            spawn_s=0.0,
+            lateral_offset=0.0,
+            initial_speed=0.0,
+            heading_error=0.0,
+        )
         self.assertEqual(observation.shape, (23,))
         self.assertEqual(observation.dtype, np.float32)
+        self.assertEqual(reset_info["sector_index"], 0)
+        self.assertEqual(reset_info["sector_coverage_count"], 0)
         _, reward, _, _, info = env.step([0.0, 0.5])
         self.assertEqual(set(info["signals"]), set(SIGNAL_NAMES))
         expected = sum(env.reward_config.weights[name] * info["signals"][name] for name in SIGNAL_NAMES)
         self.assertAlmostEqual(reward, expected)
         self.assertEqual(set(info["state"]), {"x", "y", "heading", "speed", "lateral_velocity", "yaw_rate", "steer"})
+        self.assertEqual(info["sector_coverage_count"], 1)
+        self.assertGreaterEqual(info["sector_index"], 0)
+        self.assertGreaterEqual(info["boundary_excess_m"], 0.0)
+        self.assertGreaterEqual(info["off_track_progress_m"], 0.0)
 
     def test_reward_weights_can_be_replaced_without_changing_physics(self) -> None:
         reward = RewardConfig({"progress": 1.0})

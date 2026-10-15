@@ -19,8 +19,11 @@ def make_info(
     off_track: np.ndarray | None = None,
     crash: np.ndarray | None = None,
     lap_complete: np.ndarray | None = None,
+    boundary_excess_m: np.ndarray | None = None,
+    off_track_progress_m: np.ndarray | None = None,
+    sector_coverage_count: np.ndarray | None = None,
 ) -> dict:
-    return {
+    info = {
         "track_id": track_ids or tuple("track_a" for _ in range(n_envs)),
         "signals": signals
         or {name: np.zeros(n_envs, dtype=np.float64) for name in SIGNAL_NAMES},
@@ -31,6 +34,13 @@ def make_info(
         if lap_complete is not None
         else np.zeros(n_envs, dtype=bool),
     }
+    if boundary_excess_m is not None:
+        info["boundary_excess_m"] = boundary_excess_m
+    if off_track_progress_m is not None:
+        info["off_track_progress_m"] = off_track_progress_m
+    if sector_coverage_count is not None:
+        info["sector_coverage_count"] = sector_coverage_count
+    return info
 
 
 class RolloutMetricsTests(unittest.TestCase):
@@ -116,7 +126,14 @@ class RolloutMetricsTests(unittest.TestCase):
             truncated=np.asarray([False, False]),
             actions=np.asarray([[0.1, 0.0], [0.8, 0.8]]),
             active_mask=np.asarray([True, True]),
-            info=make_info(2, track_ids=("used", "ignored"), speed=np.asarray([3.0, 99.0])),
+            info=make_info(
+                2,
+                track_ids=("used", "ignored"),
+                speed=np.asarray([3.0, 99.0]),
+                boundary_excess_m=np.asarray([1.0, 100.0]),
+                off_track_progress_m=np.asarray([2.0, 100.0]),
+                sector_coverage_count=np.asarray([2, 9]),
+            ),
         )
         metrics.update(
             rewards=np.asarray([2.0, 99.0]),
@@ -124,11 +141,20 @@ class RolloutMetricsTests(unittest.TestCase):
             truncated=np.asarray([False, False]),
             actions=np.asarray([[0.2, 0.0], [1.0, 1.0]]),
             active_mask=np.asarray([True, False]),
-            info=make_info(2, track_ids=("used", "ignored"), speed=np.asarray([4.0, 99.0])),
+            info=make_info(
+                2,
+                track_ids=("used", "ignored"),
+                speed=np.asarray([4.0, 99.0]),
+                boundary_excess_m=np.asarray([3.0, 999.0]),
+                off_track_progress_m=np.asarray([4.0, 999.0]),
+                sector_coverage_count=np.asarray([3, 99]),
+            ),
         )
         snapshot = metrics.snapshot(wall_time_s=1.0)
         self.assertEqual(snapshot["env_steps"], 3)
         self.assertEqual(snapshot["reward_sum"], 8.0)
+        self.assertEqual(snapshot["boundary_excess_m_sum"], 104.0)
+        self.assertEqual(snapshot["positive_off_track_progress_m"], 106.0)
         self.assertEqual(set(snapshot["per_track"]), {"used", "ignored"})
         self.assertEqual(metrics._episode_returns[1], 0.0)
         self.assertEqual(metrics._episode_lengths[1], 0)
@@ -178,6 +204,31 @@ class RolloutMetricsTests(unittest.TestCase):
         self.assertIsNone(snapshot["mean_abs_action_delta"])
         self.assertIsNone(snapshot["env_steps_per_second"])
         json.dumps(snapshot, allow_nan=False)
+
+    def test_anti_grind_and_sector_metrics_are_aggregated(self) -> None:
+        metrics = RolloutMetrics(2, 0.1, {})
+        metrics.update(
+            rewards=np.asarray([1.0, 2.0]),
+            terminated=np.asarray([True, False]),
+            truncated=np.asarray([False, False]),
+            actions=np.zeros((2, 2)),
+            info=make_info(
+                2,
+                track_ids=("a", "b"),
+                off_track=np.asarray([True, False]),
+                boundary_excess_m=np.asarray([0.5, 0.0]),
+                off_track_progress_m=np.asarray([1.25, 0.0]),
+                sector_coverage_count=np.asarray([3, 4]),
+            ),
+        )
+
+        snapshot = metrics.snapshot(wall_time_s=1.0)
+        self.assertEqual(snapshot["positive_off_track_progress_m"], 1.25)
+        self.assertEqual(snapshot["boundary_excess_m_sum"], 0.5)
+        self.assertEqual(snapshot["boundary_excess_step_rate"], 0.5)
+        self.assertEqual(snapshot["mean_sector_coverage"], 3.0)
+        self.assertEqual(snapshot["per_track"]["a"]["mean_sector_coverage"], 3.0)
+        self.assertIsNone(snapshot["per_track"]["b"]["mean_sector_coverage"])
 
     def test_invalid_update_is_rejected_atomically(self) -> None:
         metrics = RolloutMetrics(1, 0.1, {})

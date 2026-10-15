@@ -14,6 +14,7 @@ from .reward import RewardConfig
 from .signals import compute_signals
 from .track import TrackGeometry
 from .observation import TrainingContract, build_observation_schema
+from .telemetry import DEFAULT_SECTOR_COUNT, sector_bit, sector_coverage_count, sector_index
 
 
 def _wrap_angle(angle: float) -> float:
@@ -45,6 +46,8 @@ class RacingEnv:
         self.distance_since_spawn = 0.0
         self.steps = 0
         self.stuck_ticks = 0
+        self.sector_index = 0
+        self.sector_coverage_mask = 0
         self._done = False
         self.last_info: dict[str, Any] = {}
 
@@ -106,6 +109,10 @@ class RacingEnv:
         self.distance_since_spawn = 0.0
         self.steps = 0
         self.stuck_ticks = 0
+        self.sector_index = 0
+        # The spawn sector is reported, but coverage counts only sectors the
+        # car reaches on a transition. A reset/teleport is not driven coverage.
+        self.sector_coverage_mask = 0
         self._done = False
         observation = self._observation()
         info = {
@@ -113,6 +120,12 @@ class RacingEnv:
             "spawn_s": self.previous_s,
             "signals": {name: 0.0 for name in self.reward_config.weights},
             "evaluation": bool(evaluation),
+            "sector_index": self.sector_index,
+            "sector_count": DEFAULT_SECTOR_COUNT,
+            "sector_coverage_mask": self.sector_coverage_mask,
+            "sector_coverage_count": sector_coverage_count(self.sector_coverage_mask),
+            "boundary_excess_m": 0.0,
+            "off_track_progress_m": 0.0,
         }
         self.last_info = info
         return observation, info
@@ -158,6 +171,10 @@ class RacingEnv:
         stuck = bool(self.stuck_ticks >= self.config.episode.stuck_steps)
         truncated = bool(not terminated and (self.steps >= self.config.episode.max_steps or stuck))
         self._done = terminated or truncated
+        self.sector_index = sector_index(self.distance_since_spawn, self.track.length)
+        self.sector_coverage_mask |= sector_bit(self.sector_index)
+        boundary_excess_m = max(edge.maximum_left_excess, edge.maximum_right_excess)
+        off_track_progress_m = max(delta_s, 0.0) if edge.off_track else 0.0
         events: list[str] = []
         if edge.off_track and not previous_off_track:
             events.append("off_track_start")
@@ -197,6 +214,12 @@ class RacingEnv:
             "lap_complete": lap_complete,
             "step": self.steps,
             "previous_distance_since_spawn": previous_distance,
+            "sector_index": self.sector_index,
+            "sector_count": DEFAULT_SECTOR_COUNT,
+            "sector_coverage_mask": self.sector_coverage_mask,
+            "sector_coverage_count": sector_coverage_count(self.sector_coverage_mask),
+            "boundary_excess_m": boundary_excess_m,
+            "off_track_progress_m": off_track_progress_m,
         }
         self.previous_s = projection.s
         self.last_info = info

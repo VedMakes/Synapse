@@ -23,6 +23,11 @@ class _Summary:
         self.terminated_episodes = 0
         self.truncated_episodes = 0
         self.off_track_steps = 0
+        self.off_track_progress_m = 0.0
+        self.boundary_excess_m_sum = 0.0
+        self.boundary_excess_steps = 0
+        self.sector_coverage_sum = 0
+        self.sector_coverage_episodes = 0
         self.speed_sum = 0.0
         self.action_saturation_components = 0
         self.action_components = 0
@@ -40,10 +45,15 @@ class _Summary:
         lap_complete: bool,
         action_saturated: int,
         action_delta: float,
+        boundary_excess_m: float,
+        off_track_progress_m: float,
     ) -> None:
         self.env_steps += 1
         self.reward_sum += reward
         self.off_track_steps += int(off_track)
+        self.off_track_progress_m += off_track_progress_m
+        self.boundary_excess_m_sum += boundary_excess_m
+        self.boundary_excess_steps += int(boundary_excess_m > 0.0)
         self.speed_sum += speed
         self.action_saturation_components += action_saturated
         self.action_components += 2
@@ -59,11 +69,15 @@ class _Summary:
         episode_return: float,
         terminated: bool,
         truncated: bool,
+        sector_coverage_count: int | None,
     ) -> None:
         self.episodes += 1
         self.completed_return_sum += episode_return
         self.terminated_episodes += int(terminated)
         self.truncated_episodes += int(truncated)
+        if sector_coverage_count is not None:
+            self.sector_coverage_sum += sector_coverage_count
+            self.sector_coverage_episodes += 1
 
 
 class RolloutMetrics:
@@ -108,6 +122,7 @@ class RolloutMetrics:
         self._per_track: dict[str, _Summary] = {}
         self._episode_returns = np.zeros(self.n_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(self.n_envs, dtype=np.int64)
+        self._episode_sector_coverage_available = np.zeros(self.n_envs, dtype=bool)
         self._last_applied_actions = np.zeros((self.n_envs, 2), dtype=np.float64)
 
     @staticmethod
@@ -158,6 +173,9 @@ class RolloutMetrics:
         np.ndarray,
         np.ndarray,
         np.ndarray,
+        bool,
+        np.ndarray,
+        np.ndarray,
         np.ndarray,
     ]:
         shape = (self.n_envs,)
@@ -193,6 +211,20 @@ class RolloutMetrics:
         off_track_values = self._bool_array(info.get("off_track"), shape, "info['off_track']")
         crash_values = self._bool_array(info.get("crash"), shape, "info['crash']")
         lap_values = self._bool_array(info.get("lap_complete"), shape, "info['lap_complete']")
+        boundary_excess_values = self._optional_nonnegative_array(
+            info.get("boundary_excess_m"), shape, "info['boundary_excess_m']"
+        )
+        off_track_progress_values = self._optional_nonnegative_array(
+            info.get("off_track_progress_m"), shape, "info['off_track_progress_m']"
+        )
+        coverage_present = "sector_coverage_count" in info
+        coverage_values = (
+            self._optional_nonnegative_integer_array(
+                info.get("sector_coverage_count"), shape, "info['sector_coverage_count']"
+            )
+            if coverage_present
+            else np.zeros(self.n_envs, dtype=np.float64)
+        )
         return (
             reward_values,
             terminated_values,
@@ -205,7 +237,29 @@ class RolloutMetrics:
             lap_values,
             active_values,
             action_values,
+            boundary_excess_values,
+            off_track_progress_values,
+            coverage_present,
+            coverage_values,
         )
+
+    def _optional_nonnegative_array(
+        self, value: Any, shape: tuple[int, ...], name: str
+    ) -> np.ndarray:
+        if value is None:
+            return np.zeros(shape, dtype=np.float64)
+        result = self._finite_array(value, shape, name)
+        if np.any(result < 0.0):
+            raise ValueError(f"{name} must contain only non-negative values")
+        return result
+
+    def _optional_nonnegative_integer_array(
+        self, value: Any, shape: tuple[int, ...], name: str
+    ) -> np.ndarray:
+        result = self._optional_nonnegative_array(value, shape, name)
+        if np.any(result != np.floor(result)):
+            raise ValueError(f"{name} must contain only integer values")
+        return result
 
     def update(
         self,
@@ -230,6 +284,10 @@ class RolloutMetrics:
             lap_values,
             active_values,
             action_values,
+            boundary_excess_values,
+            off_track_progress_values,
+            coverage_present,
+            coverage_values,
         ) = self._validate_update(
             rewards=rewards,
             terminated=terminated,
@@ -257,9 +315,13 @@ class RolloutMetrics:
                 "lap_complete": bool(lap_values[lane]),
                 "action_saturated": action_saturated,
                 "action_delta": action_delta,
+                "boundary_excess_m": float(boundary_excess_values[lane]),
+                "off_track_progress_m": float(off_track_progress_values[lane]),
             }
             self._summary.add_step(**step_args)
             track_summary.add_step(**step_args)
+            if coverage_present:
+                self._episode_sector_coverage_available[lane] = True
 
             episode_return = float(self._episode_returns[lane] + reward_values[lane])
             self._episode_returns[lane] = episode_return
@@ -270,11 +332,17 @@ class RolloutMetrics:
                     "episode_return": episode_return,
                     "terminated": bool(terminated_values[lane]),
                     "truncated": bool(truncated_values[lane]),
+                    "sector_coverage_count": (
+                        int(coverage_values[lane])
+                        if self._episode_sector_coverage_available[lane]
+                        else None
+                    ),
                 }
                 self._summary.add_episode(**episode_args)
                 track_summary.add_episode(**episode_args)
                 self._episode_returns[lane] = 0.0
                 self._episode_lengths[lane] = 0
+                self._episode_sector_coverage_available[lane] = False
                 self._last_applied_actions[lane] = 0.0
             else:
                 self._last_applied_actions[lane] = applied_actions[lane]
@@ -284,6 +352,7 @@ class RolloutMetrics:
         masked_done = (~active_values) & (terminated_values | truncated_values)
         self._episode_returns[masked_done] = 0.0
         self._episode_lengths[masked_done] = 0
+        self._episode_sector_coverage_available[masked_done] = False
         self._last_applied_actions[masked_done] = 0.0
 
     def _summary_dict(self, summary: _Summary) -> dict[str, Any]:
@@ -306,6 +375,16 @@ class RolloutMetrics:
             "crash_rate": float(summary.crashes / episodes) if episodes else None,
             "off_track_rate": (
                 float(summary.off_track_steps / steps) if steps else None
+            ),
+            "positive_off_track_progress_m": float(summary.off_track_progress_m),
+            "boundary_excess_m_sum": float(summary.boundary_excess_m_sum),
+            "boundary_excess_step_rate": (
+                float(summary.boundary_excess_steps / steps) if steps else None
+            ),
+            "mean_sector_coverage": (
+                float(summary.sector_coverage_sum / summary.sector_coverage_episodes)
+                if summary.sector_coverage_episodes
+                else None
             ),
             "mean_speed_mps": float(summary.speed_sum / steps) if steps else None,
             "action_saturation_rate": (

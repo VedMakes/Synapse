@@ -12,6 +12,8 @@ The current prototype proves the parts that should be stable before a trainer or
 6. Raw reward signals are returned in `info["signals"]` and can be weighted with the declarative `RewardConfig`.
 7. `RunBudget` persists `n` logical runs with at most `k` environment transitions per run.
 8. The scripted tool writes the versioned trajectory shape intended for later Unity playback.
+9. Rollout diagnostics expose spawn-relative sector coverage, positive off-track
+   progress, and boundary excess without changing the policy contract.
 
 ## Decisions that remain open
 

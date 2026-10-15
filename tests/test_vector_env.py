@@ -35,6 +35,12 @@ class VectorizedEnvironmentTests(unittest.TestCase):
             self.assertEqual(scalar_result[3], vector_result[3][0])
             for name in ("s", "distance_since_spawn", "off_track", "crash", "lap_complete"):
                 self.assertEqual(scalar_result[4][name], vector_result[4][name][0])
+            for name in ("sector_index", "sector_coverage_count", "boundary_excess_m", "off_track_progress_m"):
+                self.assertEqual(scalar_result[4][name], vector_result[4][name][0])
+            self.assertEqual(
+                scalar_result[4]["sector_coverage_mask"],
+                int(vector_result[4]["sector_coverage_mask"][0]),
+            )
             for name, value in scalar_result[4]["signals"].items():
                 self.assertEqual(value, vector_result[4]["signals"][name][0])
             for name, value in scalar_result[4]["state"].items():
@@ -73,6 +79,7 @@ class VectorizedEnvironmentTests(unittest.TestCase):
         np.testing.assert_array_equal(info["spawn_s"], np.full(3, TRACK.start_line_s))
         np.testing.assert_array_equal(env.state.speed, np.zeros(3))
         np.testing.assert_array_equal(env.state.x, np.full(3, TRACK.point_at_s(TRACK.start_line_s)[0][0]))
+        np.testing.assert_array_equal(info["sector_coverage_count"], np.zeros(3, dtype=np.int64))
 
     def test_non_finite_actions_are_rejected(self) -> None:
         scalar = RacingEnv(TRACK, CONFIG)

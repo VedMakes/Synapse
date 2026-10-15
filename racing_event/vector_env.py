@@ -22,6 +22,7 @@ from .physics import CarStateBatch, step_car_batch
 from .reward import RewardConfig
 from .signals import compute_signals
 from .track import EdgeStatus, Projection, TrackGeometry
+from .telemetry import DEFAULT_SECTOR_COUNT, sector_bit, sector_coverage_count, sector_index
 
 
 class VectorizedRacingEnv:
@@ -71,6 +72,8 @@ class VectorizedRacingEnv:
         self.distance_since_spawn = np.zeros(self.n_envs, dtype=np.float64)
         self.steps = np.zeros(self.n_envs, dtype=np.int64)
         self.stuck_ticks = np.zeros(self.n_envs, dtype=np.int64)
+        self.sector_index = np.zeros(self.n_envs, dtype=np.int64)
+        self.sector_coverage_mask = np.zeros(self.n_envs, dtype=np.uint64)
         self._done = np.zeros(self.n_envs, dtype=bool)
         self.last_info: dict[str, Any] = {}
 
@@ -192,6 +195,14 @@ class VectorizedRacingEnv:
                 "spawn_s": self.previous_s.copy(),
                 "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights},
                 "evaluation": bool(evaluation),
+                "sector_index": self.sector_index.copy(),
+                "sector_count": DEFAULT_SECTOR_COUNT,
+                "sector_coverage_mask": self.sector_coverage_mask.copy(),
+                "sector_coverage_count": np.asarray(
+                    [sector_coverage_count(int(mask)) for mask in self.sector_coverage_mask], dtype=np.int64
+                ),
+                "boundary_excess_m": np.zeros(self.n_envs, dtype=np.float64),
+                "off_track_progress_m": np.zeros(self.n_envs, dtype=np.float64),
             }
             self.last_info = info
             return observation, info
@@ -283,6 +294,10 @@ class VectorizedRacingEnv:
         self.distance_since_spawn[selected] = 0.0
         self.steps[selected] = 0
         self.stuck_ticks[selected] = 0
+        self.sector_index[selected] = 0
+        # The spawn sector is reported, but coverage counts only sectors the
+        # car reaches on a transition. A reset/teleport is not driven coverage.
+        self.sector_coverage_mask[selected] = np.uint64(0)
         self._done[selected] = False
         observation = self._observations()
         info = {
@@ -290,6 +305,14 @@ class VectorizedRacingEnv:
             "spawn_s": self.previous_s.copy(),
             "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights},
             "evaluation": bool(evaluation),
+            "sector_index": self.sector_index.copy(),
+            "sector_count": DEFAULT_SECTOR_COUNT,
+            "sector_coverage_mask": self.sector_coverage_mask.copy(),
+            "sector_coverage_count": np.asarray(
+                [sector_coverage_count(int(mask)) for mask in self.sector_coverage_mask], dtype=np.int64
+            ),
+            "boundary_excess_m": np.zeros(self.n_envs, dtype=np.float64),
+            "off_track_progress_m": np.zeros(self.n_envs, dtype=np.float64),
         }
         self.last_info = info
         return observation, info
@@ -395,6 +418,27 @@ class VectorizedRacingEnv:
         off_track = np.asarray([edge.off_track for edge in edges], dtype=bool)
         crash = np.asarray([edge.barrier_contact for edge in edges], dtype=bool)
         lap_complete |= self.distance_since_spawn >= lengths
+        boundary_excess = np.asarray(
+            [max(edge.maximum_left_excess, edge.maximum_right_excess) for edge in edges], dtype=np.float64
+        )
+        off_track_progress = np.zeros(self.n_envs, dtype=np.float64)
+        if active_indices.size:
+            delta_s_active = self.distance_since_spawn[active_indices] - previous_distance[active_indices]
+            off_track_progress[active_indices] = np.where(
+                off_track[active_indices], np.maximum(delta_s_active, 0.0), 0.0
+            )
+            sector_indices_active = np.asarray(
+                [
+                    sector_index(float(distance), float(length))
+                    for distance, length in zip(self.distance_since_spawn[active_indices], lengths[active_indices])
+                ],
+                dtype=np.int64,
+            )
+            coverage_bits = np.asarray(
+                [sector_bit(int(index)) for index in sector_indices_active], dtype=np.uint64
+            )
+            self.sector_index[active_indices] = sector_indices_active
+            self.sector_coverage_mask[active_indices] |= coverage_bits
 
         signals: dict[str, np.ndarray] = {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights}
         rewards = np.zeros(self.n_envs, dtype=np.float64)
@@ -456,6 +500,14 @@ class VectorizedRacingEnv:
             "step": self.steps.copy(),
             "previous_distance_since_spawn": previous_distance,
             "active_mask": mask.copy(),
+            "sector_index": self.sector_index.copy(),
+            "sector_count": DEFAULT_SECTOR_COUNT,
+            "sector_coverage_mask": self.sector_coverage_mask.copy(),
+            "sector_coverage_count": np.asarray(
+                [sector_coverage_count(int(mask_value)) for mask_value in self.sector_coverage_mask], dtype=np.int64
+            ),
+            "boundary_excess_m": boundary_excess,
+            "off_track_progress_m": off_track_progress,
         }
         self.previous_s[active_indices] = current_s[active_indices]
         self.last_info = info

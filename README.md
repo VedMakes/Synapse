@@ -85,8 +85,10 @@ boundary. It accepts a batched policy callable, reserves the persistent
 `RunBudget` in individual environment-transition units, uses a partial active
 mask for a final batch, and resets only lanes that ended.
 `RolloutMetrics` records raw and weighted reward signals, episode outcomes,
-speed, off-track rate, action saturation, action smoothness, and per-track
-statistics.
+speed, off-track rate, action saturation, action smoothness, policy-invisible
+sector coverage, positive off-track progress, boundary excess, and per-track
+statistics. The diagnostic fields do not enter observations, rewards,
+termination, ranking, or replay schema 1.1.
 
 The collector can update a `RunningObservationNormalizer` during training. Save
 that normalizer with `TrainingContract.save`; freeze it before evaluation so
