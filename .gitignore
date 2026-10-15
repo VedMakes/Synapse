@@ -6,3 +6,4 @@ __pycache__/
 .venv/
 budget-state*.json
 budget-state*.json.lock
+/artifacts/

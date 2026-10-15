@@ -145,3 +145,7 @@ The evaluator reports `finished`, `dnf_crash`, `dnf_timeout`,
 `dnf_stuck`, or `dnf_backward`, plus step count, fixed-step lap time when
 finished, physical metrics, and the trajectory digest. A repeated evaluation
 must produce the same digest; a mismatch is treated as an error.
+
+The measured local E2 artifact is retained outside Git at
+`artifacts/e2-stable/` (`policy.pt`, `policy.json`, and
+`training_contract.json`).
