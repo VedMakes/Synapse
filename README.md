@@ -5,7 +5,7 @@ This repository contains the first Python-only vertical slice for the technical-
 The current slice provides:
 
 - A deterministic, track-relative racing environment.
-- A validated geometry-file format and one synthetic fixture track.
+- A validated geometry-file format and three original synthetic development tracks.
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
 - The participant-facing reward signal DSL.
 - A persistent `n` runs by `k` steps-per-run budget.
@@ -13,6 +13,8 @@ The current slice provides:
 - A versioned state/action contract, serializable observation normalizer, and a batched NumPy environment for headless training.
 - A fixed two-layer PyTorch actor-critic, masked GAE, clipped PPO update, safe
   state-dictionary artifact format, and a measured baseline convergence tool.
+- A validated, streaming replay export and dependency-free read-only browser
+  preview, with a documented future Unity adapter contract.
 
 Python is authoritative. Unity is not part of this slice and will consume recorded state later.
 
@@ -20,10 +22,10 @@ Python is authoritative. Unity is not part of this slice and will consume record
 
 These are provisional implementation decisions based on the handoff and the latest project answers:
 
-- Three training tracks are the intended first event target. The current code starts with one fixture track so the vertical slice stays testable.
+- Three training tracks are the intended first event target. Three synthetic development tracks are present; E2 currently uses the oval only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
 - Evaluation submissions will use ONNX. The model input/output contract is not implemented yet.
-- Participants may choose their model architecture, subject to a future tournament runner contract. The first slice has no trainer or architecture validator.
+- Participant architecture freedom remains subject to the future tournament contract. The local PPO baseline currently uses one fixed MLP; it is not the final architecture submission validator.
 - The reward interface is declarative signals and weights only. A raw Python reward escape hatch is intentionally deferred because it weakens reproducibility and sandboxing.
 - Training uses a configurable maximum of `n` runs, with at most `k` environment steps in each run. The budget state is persistent and tamper-evident by hash, but it is not a cumulative-week budget.
 - The provisional simulation rate is 30 Hz.
@@ -149,3 +151,77 @@ must produce the same digest; a mismatch is treated as an error.
 The measured local E2 artifact is retained outside Git at
 `artifacts/e2-stable/` (`policy.pt`, `policy.json`, and
 `training_contract.json`).
+
+## Replay UI boundary (Python simulation only)
+
+Generate a complete smoke-controller replay and bundle an offline preview:
+
+```bash
+mkdir -p artifacts/replay
+.venv/bin/python tools/export_replay.py --scripted \
+  --participant-id scripted-demo --output artifacts/replay/run.json
+.venv/bin/python tools/build_replay.py artifacts/replay/run.json \
+  --output artifacts/replay/index.html
+.venv/bin/python -m http.server 8765 --bind 127.0.0.1 --directory artifacts/replay
+```
+
+Open **http://localhost:8765/**, or open `artifacts/replay/index.html` directly.
+The HTML contains its own data/styles/scripts and needs no network connection,
+frontend dependencies, Node runtime, or running simulator. It has play/pause,
+restart, next-tick, scrubber, playback speed, recorded telemetry/events, track
+geometry, car pose, and the Python result. Exported files are ignored by Git.
+
+To view the retained learned E2 artifact instead of the scripted controller:
+
+```bash
+.venv/bin/python tools/export_replay.py \
+  --weights artifacts/e2-stable/policy.pt \
+  --metadata artifacts/e2-stable/policy.json \
+  --contract artifacts/e2-stable/training_contract.json \
+  --participant-id e2-stable --output artifacts/replay/e2-stable.json
+.venv/bin/python tools/build_replay.py artifacts/replay/e2-stable.json \
+  --output artifacts/replay/index.html
+```
+
+The exporter streams frames to an atomic JSON file. The bundler verifies
+version, tick ordering, hashes, finite values, and outcome consistency first.
+See `docs/replay_contract.md` for schema **1.1**, units, time-zero semantics,
+memory limits, checksum details, and the Unity coordinate mapping. The legacy
+scripted smoke format 1.0 is intentionally not accepted by the new UI.
+
+The browser interpolates **only the recorded pose**, never physics. Neither
+browser nor future Unity may compute contacts, resets, rewards, progress,
+finishes, or lap times. Private held-out geometry must never be exported into
+a public preview. Checksums are integrity checks, not anti-cheat authentication.
+
+### Layer checks and container preview
+
+`make test` runs Python simulation/export/read-back checks. If Node is available
+it also runs the dependency-free JavaScript playback/DOM tests; otherwise that
+test is explicitly **skipped**. Run them directly with:
+
+```bash
+node --test tests/replay_frontend.test.cjs
+```
+
+No browser binary is installed by the project. The JS checks use a DOM/canvas
+test double, not a visual browser test. A real browser/Unity visual parity pass
+is still required before the renderer contract is frozen for the event.
+
+To generate and serve a preview using the existing Python container:
+
+```bash
+docker build -t racing-event .
+mkdir -p artifacts/replay
+docker run --rm -v "$PWD/artifacts/replay:/preview" racing-event \
+  python tools/export_replay.py --scripted --output /preview/run.json
+docker run --rm -v "$PWD/artifacts/replay:/preview" racing-event \
+  python tools/build_replay.py /preview/run.json --output /preview/index.html
+docker run --rm -p 127.0.0.1:8765:8765 \
+  -v "$PWD/artifacts/replay:/preview:ro" racing-event \
+  python -m http.server 8765 --bind 0.0.0.0 --directory /preview
+```
+
+This is a local preview deployment, not a public upload or tournament service.
+Random-respawn findings and the questions deferred for later discussion are in
+`research_notes/Track sourcing and racing physics/racing_rl_controls.md`.

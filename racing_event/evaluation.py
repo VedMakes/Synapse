@@ -16,6 +16,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .observation import RunningObservationNormalizer, TrainingContract
+from .trajectory import replay_frame
 from .vector_env import VectorizedRacingEnv
 
 
@@ -148,6 +149,7 @@ def evaluate_policy(
     *,
     normalizer: RunningObservationNormalizer | None = None,
     max_steps: int | None = None,
+    frame_sink: Callable[[dict[str, Any]], None] | None = None,
 ) -> EvaluationResult:
     """Run one deterministic fixed-start evaluation with bounded memory.
 
@@ -155,6 +157,9 @@ def evaluate_policy(
     one normalized observation and must return a finite ``(1, 2)`` action.  A
     normalizer is always invoked with ``training=False`` so evaluation cannot
     change its saved statistics, even if the loaded object was not frozen.
+    An optional ``frame_sink`` receives independent snapshots at tick zero and
+    after each step. Its return value is ignored; renderers cannot send actions
+    or decisions back through this boundary.
     """
 
     if not isinstance(env, VectorizedRacingEnv) or env.n_envs != 1:
@@ -168,8 +173,20 @@ def evaluate_policy(
     max_steps = int(max_steps)
     if normalizer is not None and normalizer.size != env.observation_size:
         raise ValueError("normalizer size does not match the environment")
+    if frame_sink is not None and not callable(frame_sink):
+        raise TypeError("frame_sink must be callable")
 
     observation, _ = env.reset(evaluation=True)
+    if frame_sink is not None:
+        track = env.tracks[int(env.track_indices[0])]
+        edge = track.edge_status(
+            np.asarray([env.state.x[0], env.state.y[0]]), float(env.state.heading[0]),
+            env.config.car.length_m, env.config.car.width_m,
+        )
+        frame_sink(replay_frame(
+            0, {name: float(values[0]) for name, values in env.state_to_dict().items()},
+            off_track=bool(edge.off_track),
+        ))
     digest = hashlib.sha256()
     steps = 0
     total_reward = 0.0
@@ -212,6 +229,14 @@ def evaluate_policy(
         off_track_steps += int(bool(info["off_track"][0]))
         crash = crash or bool(info["crash"][0])
         final_distance = float(info["distance_since_spawn"][0])
+        if frame_sink is not None:
+            frame_sink(replay_frame(
+                steps, {name: float(values[0]) for name, values in state.items()},
+                steering_command=float(env.state.previous_steering_command[0]),
+                throttle_brake=float(env.state.previous_longitudinal_command[0]),
+                off_track=bool(info["off_track"][0]), events=info["events"][0],
+                terminated=step_terminated, truncated=step_truncated,
+            ))
         observation = next_observation
 
         if step_terminated or step_truncated:

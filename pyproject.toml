@@ -14,3 +14,6 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["racing_event*"]
+
+[tool.setuptools.package-data]
+racing_event = ["assets/*.html", "assets/*.css", "assets/*.js"]
