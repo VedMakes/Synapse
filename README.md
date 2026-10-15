@@ -109,3 +109,34 @@ make e2
 ```
 
 The report is written to `reports/e2_baseline_convergence.md`.
+
+## Deterministic policy evaluation
+
+The engine includes a fixed-start evaluation path that uses the same Python
+physics as training. It runs one lane at a time, uses the policy mean action,
+keeps the observation normalizer frozen, and streams a trajectory hash instead
+of retaining every frame in memory. This keeps evaluation suitable for a
+machine with limited RAM and makes repeated runs comparable.
+
+Save an artifact from an E2 run, then evaluate it twice:
+
+```bash
+.venv/bin/python tools/run_e2_baseline.py \
+  --updates 4 --n-envs 4 --rollout-length 64 \
+  --artifact-dir /tmp/racing-e2-artifact \
+  --output /tmp/racing-e2.md
+
+.venv/bin/python tools/evaluate_policy.py \
+  --weights /tmp/racing-e2-artifact/policy.pt \
+  --metadata /tmp/racing-e2-artifact/policy.json \
+  --contract /tmp/racing-e2-artifact/training_contract.json \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --repeats 2 \
+  --output /tmp/racing-evaluation.json
+```
+
+The evaluator reports `finished`, `dnf_crash`, `dnf_timeout`,
+`dnf_stuck`, or `dnf_backward`, plus step count, fixed-step lap time when
+finished, physical metrics, and the trajectory digest. A repeated evaluation
+must produce the same digest; a mismatch is treated as an error.

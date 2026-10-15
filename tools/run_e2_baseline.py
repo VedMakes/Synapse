@@ -33,6 +33,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rollout-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=None,
+        help="optional directory for the final policy, metadata, and frozen contract",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=ROOT / "reports" / "e2_baseline_convergence.md",
@@ -95,6 +101,19 @@ def run(args: argparse.Namespace) -> str:
                 }
             )
 
+        if args.artifact_dir is not None:
+            args.artifact_dir.mkdir(parents=True, exist_ok=True)
+            normalizer.freeze()
+            policy.save_artifact(
+                args.artifact_dir / "policy.pt",
+                args.artifact_dir / "policy.json",
+                hyperparameters=hyperparameters,
+            )
+            env.training_contract.save(
+                args.artifact_dir / "training_contract.json",
+                normalizer=normalizer,
+            )
+
     lines = [
         "# E2 baseline convergence",
         "",
@@ -113,6 +132,14 @@ def run(args: argparse.Namespace) -> str:
         f"- PPO hyperparameters: `{hyperparameters.to_dict()}`",
         "- Reward: `examples/baseline_reward.json`",
         "- Observation normalizer: updated during training; not evaluated in this experiment",
+        *(
+            [
+                f"- Saved artifact directory: `{args.artifact_dir}`",
+                "- The saved normalizer is frozen for deterministic evaluation.",
+            ]
+            if args.artifact_dir is not None
+            else []
+        ),
         "",
         "## Measurements",
         "",

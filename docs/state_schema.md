@@ -77,3 +77,17 @@ terminated transitions from truncated transitions for value bootstrapping and
 never carries GAE across a lane reset. Its output records policy loss, value
 loss, entropy, approximate KL, clip fraction, explained variance, and update
 throughput.
+
+## Deterministic evaluation
+
+`racing_event.evaluation.evaluate_policy` requires a one-lane vector
+environment and calls `reset(evaluation=True)`. Evaluation owns the start line,
+standing start, and zero spawn noise. Supplying custom spawn parameters in
+evaluation mode is rejected. A loaded normalizer is called with
+`training=False`, so its statistics cannot change.
+
+The evaluator reports a fixed-step lap time (`steps * dt`) only for a finished
+lap. For a DNF it reports the reason separately. It keeps running counters and
+updates a SHA-256 trajectory digest per transition instead of storing frames.
+The CLI in `tools/evaluate_policy.py` also checks the saved observation,
+configuration, and track hashes before stepping the engine.

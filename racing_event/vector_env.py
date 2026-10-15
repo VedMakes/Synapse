@@ -176,6 +176,14 @@ class VectorizedRacingEnv:
         nonselected entries are ignored after full-batch validation.
         """
 
+        if evaluation and any(
+            value is not None
+            for value in (spawn_s, lateral_offset, initial_speed, heading_error)
+        ):
+            raise ValueError(
+                "evaluation reset owns spawn_s, lateral_offset, initial_speed, and heading_error"
+            )
+
         selected = self._validate_indices(indices)
         if selected.size == 0:
             observation = self._observations()

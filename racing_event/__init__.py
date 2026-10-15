@@ -2,6 +2,7 @@
 
 from .config import SimulationConfig
 from .env import RacingEnv
+from .evaluation import EvaluationResult, evaluate_policy, validate_evaluation_contract
 from .observation import (
     ObservationSchema,
     RunningObservationNormalizer,
@@ -33,4 +34,7 @@ __all__ = [
     "VectorizedRacingEnv",
     "build_observation_schema",
     "compute_masked_gae",
+    "EvaluationResult",
+    "evaluate_policy",
+    "validate_evaluation_contract",
 ]

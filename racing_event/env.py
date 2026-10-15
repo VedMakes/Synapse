@@ -67,18 +67,33 @@ class RacingEnv:
         initial_speed: float | None = None,
         heading_error: float | None = None,
     ) -> tuple[np.ndarray, dict[str, Any]]:
+        if evaluation and any(
+            value is not None
+            for value in (spawn_s, lateral_offset, initial_speed, heading_error)
+        ):
+            raise ValueError(
+                "evaluation reset owns spawn_s, lateral_offset, initial_speed, and heading_error"
+            )
         if seed is not None:
             self.rng = np.random.default_rng(seed)
         if spawn_s is None:
             spawn_s = self.track.start_line_s if evaluation else float(self.rng.uniform(0.0, self.track.length))
+        if not np.isfinite(spawn_s):
+            raise ValueError("spawn_s must be finite")
         point, track_heading, _ = self.track.point_at_s(spawn_s)
         left_width, right_width = self.track.width_at_s(spawn_s)
         if lateral_offset is None:
             lateral_offset = 0.0 if evaluation else float(self.rng.uniform(-0.3 * right_width, 0.3 * left_width))
+        if not np.isfinite(lateral_offset):
+            raise ValueError("lateral_offset must be finite")
         if initial_speed is None:
             initial_speed = 0.0 if evaluation else float(self.rng.uniform(0.0, 0.5 * self.config.car.max_speed_mps))
+        if not np.isfinite(initial_speed) or initial_speed < 0.0:
+            raise ValueError("initial_speed must be finite and non-negative")
         if heading_error is None:
             heading_error = 0.0 if evaluation else float(self.rng.uniform(-0.08, 0.08))
+        if not np.isfinite(heading_error):
+            raise ValueError("heading_error must be finite")
         normal_left = np.array([-math.sin(track_heading), math.cos(track_heading)], dtype=np.float64)
         start = point + lateral_offset * normal_left
         self.state = CarState(float(start[0]), float(start[1]), track_heading + heading_error, max(0.0, initial_speed))

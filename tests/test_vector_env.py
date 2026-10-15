@@ -94,7 +94,7 @@ class VectorizedEnvironmentTests(unittest.TestCase):
 
         observations, info = env.reset(
             indices=[1],
-            evaluation=True,
+            evaluation=False,
             spawn_s=np.asarray([40.0, 50.0, 60.0]),
             lateral_offset=np.zeros(3),
             initial_speed=np.asarray([7.0, 0.0, 9.0]),
