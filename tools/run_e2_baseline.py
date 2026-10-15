@@ -133,7 +133,7 @@ def run(args: argparse.Namespace) -> str:
         "- Observation normalizer: updated during training; not evaluated in this experiment",
         *(
             [
-                f"- Saved artifact directory: `{args.artifact_dir}`",
+                f"- Saved artifact directory name: `{args.artifact_dir.name}`",
                 "- The saved normalizer is frozen for deterministic evaluation.",
             ]
             if args.artifact_dir is not None

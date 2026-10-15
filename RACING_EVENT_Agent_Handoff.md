@@ -885,7 +885,7 @@ throughput guarantee.
 - Full test suite: **passed** —
   `python3 -m unittest discover -s tests -v`; 28 tests passed.
 - Scripted smoke run: **passed** —
-  `python3 tools/run_scripted.py --steps 10 --output /tmp/racing-run-engine.json`;
+  `OUTPUT="$(mktemp)"; python3 tools/run_scripted.py --steps 10 --output "$OUTPUT"`;
   wrote 10 frames and completed with the expected timeout DNF for this short
   smoke horizon.
 - E1 benchmark: **passed/measured** — report saved at
@@ -1154,7 +1154,7 @@ streaming so a long run does not accumulate trajectory frames in memory.
   `.venv/bin/python -m unittest discover -s tests -v`.
 - Syntax check: **passed** — `.venv/bin/python -m py_compile racing_event/*.py tools/*.py tests/*.py`.
 - Artifact/evaluation smoke: **passed** — a 2-update, 2-lane E2 run saved a
-  policy and frozen contract under `/tmp/omnirush/racing-e2-artifact`; two
+  policy and frozen contract under a temporary directory; two
   deterministic evaluations at a 16-step horizon both returned
   `dnf_timeout` with the identical trajectory hash
   `d292786217a1658deb70150a095d5ab56f600e8b44c4ab9c2b67842931754166`.

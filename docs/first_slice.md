@@ -37,7 +37,8 @@ From the project root:
 
 ```bash
 python3 -m unittest discover -s tests -v
-python3 tools/run_scripted.py --steps 120 --output /tmp/racing-run.json
+OUTPUT="$(mktemp)"
+python3 tools/run_scripted.py --steps 120 --output "$OUTPUT"
 ```
 
 The test suite covers track hashes and geometry rejection, deterministic physics and environment stepping, reward signal accounting, local budget persistence/concurrency, and trajectory output shape.

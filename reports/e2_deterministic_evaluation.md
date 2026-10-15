@@ -76,12 +76,12 @@ training window.
 ## Reproduction
 
 ```bash
-ARTIFACT_DIR=/tmp/racing-e2-artifact
+ARTIFACT_DIR="$(mktemp -d)"
 
 .venv/bin/python tools/run_e2_baseline.py \
   --updates 64 --n-envs 4 --rollout-length 64 --seed 17 \
   --artifact-dir "$ARTIFACT_DIR" \
-  --output /tmp/e2-artifact.md
+  --output "$ARTIFACT_DIR/training.md"
 
 .venv/bin/python tools/evaluate_policy.py \
   --weights "$ARTIFACT_DIR/policy.pt" \
@@ -90,5 +90,5 @@ ARTIFACT_DIR=/tmp/racing-e2-artifact
   --track tracks/train/synthetic_oval.json \
   --config config/simulation.json \
   --repeats 2 \
-  --output /tmp/e2-deterministic-evaluation.json
+  --output "$ARTIFACT_DIR/evaluation.json"
 ```

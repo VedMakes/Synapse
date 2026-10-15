@@ -44,7 +44,8 @@ The same dependency set is available through the `Dockerfile`.
 ## Try the first slice
 
 ```bash
-.venv/bin/python tools/run_scripted.py --steps 120 --output /tmp/racing-run.json
+OUTPUT="$(mktemp)"
+.venv/bin/python tools/run_scripted.py --steps 120 --output "$OUTPUT"
 ```
 
 The command loads `tracks/train/synthetic_oval.json`, drives a deterministic scripted policy, and writes positions, controls, signals, and termination state to the output file.
@@ -123,19 +124,21 @@ machine with limited RAM and makes repeated runs comparable.
 Save an artifact from an E2 run, then evaluate it twice:
 
 ```bash
+ARTIFACT_DIR="$(mktemp -d)"
+
 .venv/bin/python tools/run_e2_baseline.py \
   --updates 4 --n-envs 4 --rollout-length 64 \
-  --artifact-dir /tmp/racing-e2-artifact \
-  --output /tmp/racing-e2.md
+  --artifact-dir "$ARTIFACT_DIR" \
+  --output "$ARTIFACT_DIR/training.md"
 
 .venv/bin/python tools/evaluate_policy.py \
-  --weights /tmp/racing-e2-artifact/policy.pt \
-  --metadata /tmp/racing-e2-artifact/policy.json \
-  --contract /tmp/racing-e2-artifact/training_contract.json \
+  --weights "$ARTIFACT_DIR/policy.pt" \
+  --metadata "$ARTIFACT_DIR/policy.json" \
+  --contract "$ARTIFACT_DIR/training_contract.json" \
   --track tracks/train/synthetic_oval.json \
   --config config/simulation.json \
   --repeats 2 \
-  --output /tmp/racing-evaluation.json
+  --output "$ARTIFACT_DIR/evaluation.json"
 ```
 
 The evaluator reports `finished`, `dnf_crash`, `dnf_timeout`,
