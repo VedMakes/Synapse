@@ -91,7 +91,9 @@ evaluation does not change the artifact.
 
 `FixedMLPActorCritic` in `racing_event/ppo.py` is the fixed trainer model. It
 has two 64-unit tanh layers, a two-dimensional tanh-squashed Gaussian policy,
-and a scalar value head. `PPOTrainer.update` computes masked GAE and performs
+and a scalar value head. Its initial output bias is `[0.0, 0.5]`, giving the
+longitudinal action a small throttle prior at standing starts. The bias is
+stored in the artifact metadata. `PPOTrainer.update` computes masked GAE and performs
 the configured full-batch clipped PPO epochs. Terminations do not bootstrap;
 truncations bootstrap but do not carry GAE across the reset boundary.
 

@@ -64,6 +64,10 @@ The first trainer slice uses `racing_event.ppo.FixedMLPActorCritic`:
 - a two-action tanh-squashed Gaussian policy;
 - a scalar value head; and
 - a learned global log standard deviation with two entries.
+- The initial policy-mean bias is `[0.0, 0.5]` for steering and
+  throttle/brake. This gives a new policy a small throttle prior so standing
+  starts do not collapse into the zero-speed stuck termination. The value is
+  stored in the model metadata.
 
 `FixedMLPActorCritic.save_artifact` writes a state dictionary to `policy.pt`
 and architecture metadata to a separate JSON file. The loader uses

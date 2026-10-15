@@ -26,9 +26,10 @@ from .rollout import PPOHyperparameters, RolloutBatch
 
 
 PPO_FORMAT = "racing_event_fixed_mlp"
-PPO_FORMAT_VERSION = 1
+PPO_FORMAT_VERSION = 2
 PPO_HIDDEN_SIZES = (64, 64)
 PPO_ACTION_SIZE = 2
+PPO_POLICY_MEAN_BIAS = (0.0, 0.5)
 _LOG_PROB_EPSILON = 1.0e-6
 
 
@@ -155,6 +156,8 @@ class FixedMLPActorCritic(nn.Module):
         self.policy_mean = nn.Linear(64, self.action_size)
         self.value_head = nn.Linear(64, 1)
         self.log_std = nn.Parameter(torch.full((self.action_size,), self.log_std_init))
+        with torch.no_grad():
+            self.policy_mean.bias.copy_(torch.as_tensor(PPO_POLICY_MEAN_BIAS))
 
     def forward(self, observations: Tensor) -> tuple[Tensor, Tensor]:
         if observations.ndim != 2 or observations.shape[1] != self.observation_size:
@@ -236,6 +239,7 @@ class FixedMLPActorCritic(nn.Module):
             "hidden_sizes": list(self.hidden_sizes),
             "activation": "tanh",
             "distribution": "tanh_normal",
+            "policy_mean_bias": list(PPO_POLICY_MEAN_BIAS),
             "log_std_shape": list(self.log_std.shape),
             "log_std_init": self.log_std_init,
         }
@@ -314,6 +318,7 @@ class FixedMLPActorCritic(nn.Module):
             "hidden_sizes",
             "activation",
             "distribution",
+            "policy_mean_bias",
             "log_std_shape",
             "log_std_init",
         }
@@ -334,6 +339,8 @@ class FixedMLPActorCritic(nn.Module):
             raise ValueError("unsupported model hidden_sizes")
         if payload["activation"] != "tanh" or payload["distribution"] != "tanh_normal":
             raise ValueError("unsupported model activation or distribution")
+        if payload["policy_mean_bias"] != list(PPO_POLICY_MEAN_BIAS):
+            raise ValueError("unsupported model policy mean bias")
         if payload["log_std_shape"] != [PPO_ACTION_SIZE] or not np.isfinite(float(payload["log_std_init"])):
             raise ValueError("invalid model log_std metadata")
 
