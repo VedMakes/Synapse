@@ -1253,3 +1253,108 @@ Begin the renderer-facing slice without moving any game logic into Unity:
 4. Then build the Unity playback adapter against the same versioned data.
 
 Do not add Unity-side collision, lap timing, reward, progress, or physics.
+
+## 26. SESSION HANDOFF (2026-10-16, RESPAWN REVIEW AND REPLAY UI)
+
+### Goal and current state
+
+The user asked to investigate random respawns, defer questions until after the
+session, and begin the UI boundary in checked layers. Research and the first
+read-only replay UI are complete. Training/physics rules were not changed.
+Source changes are on `master`: research/reset regression in `0023a8a`, replay
+export/viewer in `65f505e`.
+
+### Respawn findings and deferred decisions
+
+- The primary text of Czechmanowski et al. (2025), arXiv `2504.02420v1`,
+  Section III-E, explicitly uses random track-position resets after exceeding
+  limits to improve exploration. It does not provide an isolated respawn
+  ablation proving unseen-track generalization or prevention of memorization.
+- Our collector already makes a new random episode after a crash/end. A new
+  regression verifies that the crash transition is retained, the spawn changes,
+  no free lap is awarded, and the persistent budget continues counting.
+- Keep soft runoff recovery and the 25% standing-start mixture unchanged.
+  Random respawn is not a replacement for local-only observations, varied
+  training geometry, and held-out evaluation.
+- Sources, limits, and E6/E3 experiment recommendations are saved in
+  `research_notes/Track sourcing and racing physics/racing_rl_controls.md`.
+
+**Questions saved for discussion after the session, not blockers here:**
+
+1. Can the user share the paper title/link they recall? We found a direct
+   precedent, but have not identified their exact paper.
+2. Keep soft runoff recovery, or run an equal-budget training-only ablation of
+   immediate reset on any off-track entry? Recommendation: keep recovery for
+   now; a reset must remain an episode boundary with failure/budget accounting.
+   Evaluation crashes remain final with no respawn.
+3. Before freezing spawn rules, approve an equal-budget multi-seed E6/E3 test
+   measuring section coverage and unseen public-development-track performance.
+   Do not use private tournament tracks for a public experiment report.
+
+### Implemented layers
+
+- `racing_event/trajectory.py`: replay schema **1.1**, initial tick-zero pose,
+  exact embedded geometry, car dimensions, engine/config/track identities,
+  Python-authored result, independent frame snapshots, streaming/atomic writer,
+  bounded loader, strict validation and payload checksum.
+- `racing_event/evaluation.py`: optional one-way `frame_sink`; recording does
+  not change the existing trajectory hash or evaluation result. Frame consumers
+  cannot mutate state through the copied snapshot or return an action.
+- `tools/export_replay.py`: export smoke-controller or saved-policy evaluation
+  using the same Python transition path. No optimizer runs during export.
+- `tools/build_replay.py`: validate then build one offline, self-contained HTML.
+  Reject source overwrites and escape embedded text against script injection.
+- `racing_event/assets/replay.html`, `replay.css`, `replay.js`: responsive
+  canvas track/car view, play/pause/restart/next tick, seeking, speed, recorded
+  telemetry/events, Python results, and provenance. Only pose is interpolated.
+- `docs/replay_contract.md`: time-zero/tick conventions, SI units, checksum
+  algorithm, limits, legacy 1.0 rejection, and future Unity axis/yaw mapping.
+- `README.md`: export/build/serve instructions, optional JS test explanation,
+  and container preview commands. Package data includes viewer assets;
+  `.dockerignore` excludes local artifacts.
+
+No Unity adapter is implemented yet. The old `run_scripted.py` output remains
+a legacy 1.0 smoke record; it is deliberately rejected by the new 1.1 viewer.
+Replay checksums are integrity checks, not anti-cheat or authenticated training
+provenance. The viewer is a local tool, not a hardened public upload service.
+
+### Checks and real-run evidence
+
+All commands ran from the project root.
+
+- **Tests passed:** `OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 PYTHONDONTWRITEBYTECODE=1 make test`
+  ran 74 unittest cases, including the JS-runner case, with no skips here.
+- **JS checks passed:** `node --test tests/replay_frontend.test.cjs` ran 59
+  playback/validation/DOM-control tests. They use a DOM/canvas double, not a
+  real browser. On machines without Node, `make test` explicitly skips this
+  optional runner; Python/export checks still run offline.
+- **Syntax passed:** `node --check racing_event/assets/replay.js` and
+  `.venv/bin/python -m py_compile racing_event/trajectory.py racing_event/evaluation.py tools/export_replay.py tools/build_replay.py`.
+- **End-to-end saved-policy export passed:** `artifacts/replay/e2-stable.json`
+  contains 924 frames (initial + 923 steps), a `30.7666666667 s` finish, and the
+  unchanged E2 trajectory hash
+  `eac69718eeed370c7d23a393a6d4ce65f838704b8665408d634e160be909ee13`.
+- **Scripted export passed:** `artifacts/replay/scripted.json` contains 864
+  frames, an `863`-step / `28.7666666667 s` finish with zero off-track steps.
+- Both JSONs passed strict Python read-back. The generated E2 HTML also passed
+  the JS validator, exact final-pose checks, and embedded JS syntax compilation.
+- Preview HTML is `artifacts/replay/index.html` (508,279 bytes); the scripted
+  comparison is `artifacts/replay/scripted.html`. Artifacts are Git-ignored and
+  reproducible with the documented commands. No training sweep, browser, or
+  additional package installation was started for this session.
+- **HTTP smoke passed:** local preview returned HTTP 200 with embedded data at
+  `http://localhost:8765/`. Server PID `1176` in this session serves only
+  `artifacts/replay`, bound to loopback. It may not survive session/container
+  restarts; restart with the README's `http.server` command if needed.
+- **Not run:** real-browser screenshot/visual layout verification, Unity mesh
+  parity, and Docker image build. No browser or Unity tool is available in this
+  session. No dedicated lint/typecheck configuration exists.
+
+### Exact next action
+
+Open the local E2 and scripted previews in a real browser and review layout,
+playback controls, tick-zero pose, final result/event timing, and mobile sizing.
+Fix any visual issues before adding more UI. Then implement a small Unity
+read-only playback adapter using `docs/replay_contract.md` and run the geometry,
+forward-axis, timing, and schema-mismatch parity tests. Multi-ghost comparison
+and multi-episode training replays are separate later slices.
