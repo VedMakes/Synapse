@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Mapping
 
+import numpy as np
+
 
 SIGNAL_NAMES = (
     "progress",
@@ -39,7 +41,16 @@ class RewardConfig:
         unknown = set(self.weights) - set(SIGNAL_NAMES)
         if unknown:
             raise ValueError(f"unknown reward signals: {sorted(unknown)}")
-        object.__setattr__(self, "weights", {name: float(self.weights.get(name, 0.0)) for name in SIGNAL_NAMES})
+        normalized = {}
+        for name in SIGNAL_NAMES:
+            try:
+                value = float(self.weights.get(name, 0.0))
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(f"weight for {name!r} must be finite") from exc
+            if not np.isfinite(value):
+                raise ValueError(f"weight for {name!r} must be finite")
+            normalized[name] = value
+        object.__setattr__(self, "weights", normalized)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "RewardConfig":

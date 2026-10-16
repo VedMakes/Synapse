@@ -75,7 +75,7 @@ steering_command, throttle_brake, off_track, events, terminated, truncated
 No reset occurs within an evaluation replay. Future multi-episode training
 replays need explicit episode boundaries and must not interpolate teleports.
 
-## Unity adapter recipe (no Unity implementation yet)
+## Unity adapter recipe
 
 1. Validate the schema and track hash before displaying the replay. Build the
    track mesh from the embedded matching boundary points. Polylines close from
@@ -97,7 +97,11 @@ replays need explicit episode boundaries and must not interpolate teleports.
 
 Joint acceptance tests remain: compare known poses and forward axes, compare
 mesh boundary coordinates, check exact end time/events, and reject a mismatched
-version. A real Unity round-trip has not yet been run.
+version. The initial read-only adapter foundation is under `unity/` and targets
+Unity 2022.3.22f1 LTS with URP 14.0.8. It implements the DTO reader,
+structural/track-hash validation, visual clock, direct ghost transform mapping,
+and boundary-derived visual surface. A real Unity import, mesh round-trip, and
+scene screenshot have not yet been run.
 
 ## Storage, integrity, and memory
 

@@ -12,6 +12,12 @@
   const POLYLINES = ["centerline", "left_boundary", "right_boundary", "barrier_left", "barrier_right"];
   const TRACK_SCALARS = ["s", "heading", "curvature", "half_width_left", "half_width_right"];
   const FRAME_SCALARS = ["x", "y", "heading", "speed", "lateral_velocity", "yaw_rate", "steer", "steering_command", "throttle_brake"];
+  const EVENT_LABELS = Object.freeze({
+    off_track_start: "Off track",
+    off_track_end: "Back on track",
+    barrier_contact: "Barrier contact",
+    lap_complete: "Lap complete"
+  });
 
   function requireShape(condition, message) {
     if (!condition) throw new Error(message);
@@ -103,11 +109,12 @@
     return from + shortest * alpha;
   }
 
-  function sampleAtTime(data, time_s) {
+  function sampleAtTime(data, time_s, options) {
     const timing = timingAtTime(time_s, data.tick_hz, data.frames.length - 1);
     const frame = data.frames[timing.tick];
     const next = data.frames[timing.next_tick];
-    const alpha = timing.alpha;
+    const reducedMotion = Boolean(options && options.reduced_motion);
+    const alpha = reducedMotion ? 0 : timing.alpha;
     // Preserve every stored value at exact ticks (especially the final pose).
     // Telemetry/events are taken from frame, never blended or inferred.
     return {
@@ -116,6 +123,22 @@
       y: alpha === 0 ? frame.y : (1 - alpha) * frame.y + alpha * next.y,
       heading: alpha === 0 ? frame.heading : interpolateHeading(frame.heading, next.heading, alpha)
     };
+  }
+
+  function buildEventIndex(data) {
+    requireShape(isObject(data) && Array.isArray(data.frames) && finite(data.tick_hz) && data.tick_hz > 0, "Invalid replay event source.");
+    const events = [];
+    for (const frame of data.frames) {
+      if (!frame.events || frame.events.length === 0) continue;
+      const names = frame.events.slice();
+      events.push({
+        tick: frame.tick,
+        time_s: frame.tick / data.tick_hz,
+        events: names,
+        label: names.map(function (name) { return EVENT_LABELS[name] || name; }).join(" · ")
+      });
+    }
+    return events;
   }
 
   function createPlayback(tick_hz, last_tick) {
@@ -157,6 +180,11 @@
         playing = false;
         break;
       }
+      case "tick":
+        requireShape(Number.isSafeInteger(action.tick) && action.tick >= 0 && action.tick <= state.last_tick, "Invalid playback tick.");
+        time = action.tick / state.tick_hz;
+        playing = false;
+        break;
       case "speed":
         requireShape(finite(action.speed) && action.speed > 0, "Invalid playback speed.");
         speed = action.speed;
@@ -217,6 +245,8 @@
     const controls = doc.querySelectorAll("[data-control]");
     let raf = null;
     let observer = null;
+    let motionQuery = null;
+    let reducedMotion = false;
     let failed = false;
     function text(id, value) {
       const node = get(id);
@@ -228,6 +258,10 @@
       if (raf !== null) win.cancelAnimationFrame(raf);
       raf = null;
       if (observer) observer.disconnect();
+      if (motionQuery) {
+        if (typeof motionQuery.removeEventListener === "function") motionQuery.removeEventListener("change", onMotionChange);
+        else if (typeof motionQuery.removeListener === "function") motionQuery.removeListener(onMotionChange);
+      }
       for (const control of controls) control.disabled = true;
       const panel = get("replay-error");
       if (panel) panel.hidden = false;
@@ -253,10 +287,19 @@
       const bounds = replayBounds(data);
       const scrubber = get("scrubber");
       const centerline = get("show-centerline");
+      const eventIndex = buildEventIndex(data);
+      const eventMarkers = get("event-markers");
+      const previousEvent = get("previous-event");
+      const nextEvent = get("next-event");
       let state = createPlayback(data.tick_hz, data.frames.length - 1);
       let fit = null;
       let pixelRatio = 1;
       let lastTelemetryTick = -1;
+
+      if (typeof win.matchMedia === "function") {
+        motionQuery = win.matchMedia("(prefers-reduced-motion: reduce)");
+        reducedMotion = Boolean(motionQuery.matches);
+      }
 
       text("track-name", data.track.meta.display_name);
       text("participant-id", data.source.participant_id);
@@ -277,9 +320,33 @@
       text("total-ticks", state.last_tick);
       text("tick-hz", data.tick_hz);
       scrubber.max = String(state.duration_s);
+      text("event-count", eventIndex.length === 0 ? "No recorded events" : eventIndex.length === 1 ? "1 recorded event" : eventIndex.length + " recorded events");
+      text("event-status", eventIndex.length ? "Select a marker to inspect its exact tick." : "No recorded events.");
+      if (eventMarkers) {
+        eventMarkers.textContent = "";
+        if (eventIndex.length === 0) {
+          const empty = doc.createElement("span");
+          empty.className = "event-rail-empty";
+          empty.textContent = "No recorded events";
+          eventMarkers.appendChild(empty);
+        } else {
+          for (const entry of eventIndex) {
+            const marker = doc.createElement("button");
+            marker.type = "button";
+            marker.className = "event-marker";
+            marker.style.left = (state.last_tick === 0 ? 0 : entry.tick / state.last_tick * 100) + "%";
+            marker.textContent = "●";
+            marker.title = entry.label + " · tick " + entry.tick;
+            marker.setAttribute("aria-label", entry.label + ", tick " + entry.tick);
+            marker.setAttribute("aria-controls", "scrubber");
+            marker.addEventListener("click", function () { act({ type: "tick", tick: entry.tick }); });
+            eventMarkers.appendChild(marker);
+          }
+        }
+      }
       for (const control of controls) control.disabled = false;
       if (state.last_tick === 0) {
-        for (const id of ["play-pause", "restart", "next-tick", "scrubber", "playback-speed"]) get(id).disabled = true;
+        for (const id of ["play-pause", "restart", "next-tick", "scrubber", "playback-speed", "previous-event", "next-event"]) get(id).disabled = true;
       }
 
       function plot(ctx, method, x, y) {
@@ -385,17 +452,30 @@
         text("terminated-flag", "Terminated: " + (frame.terminated ? "yes" : "no"));
         text("truncated-flag", "Truncated: " + (frame.truncated ? "yes" : "no"));
         text("frame-events", frame.events.length ? frame.events.join(" · ") : "None recorded");
+        const atTick = eventIndex.find(function (entry) { return entry.tick === frame.tick; });
+        text("event-status", atTick ? atTick.label + " · exact tick " + atTick.tick : (eventIndex.length ? "Select a marker to inspect its exact tick." : "No recorded events."));
         text("canvas-description", "Full-track plan with equal axis scale and +Y up. Recorded tick " + frame.tick + ": x " + frame.x.toFixed(2) + " m, y " + frame.y.toFixed(2) + " m, heading " + frame.heading.toFixed(3) + " rad. The highlighted car nose points forward. Only position and heading are visually interpolated; telemetry uses completed ticks.");
+      }
+
+      function updateEventNavigation(tick) {
+        if (!previousEvent || !nextEvent) return;
+        const previous = eventIndex.findLast ? eventIndex.findLast(function (entry) { return entry.tick < tick; }) : eventIndex.slice().reverse().find(function (entry) { return entry.tick < tick; });
+        const next = eventIndex.find(function (entry) { return entry.tick > tick; });
+        previousEvent.disabled = !previous;
+        nextEvent.disabled = !next;
+        previousEvent.setAttribute("aria-label", previous ? "Previous event, tick " + previous.tick : "No previous event");
+        nextEvent.setAttribute("aria-label", next ? "Next event, tick " + next.tick : "No next event");
       }
 
       function render() {
         if (failed || !fit) return;
-        const sample = sampleAtTime(data, state.time_s);
+        const sample = sampleAtTime(data, state.time_s, { reduced_motion: reducedMotion });
         context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
         context.clearRect(0, 0, fit.width, fit.height);
         context.drawImage(background, 0, 0, fit.width, fit.height);
         drawCar(sample);
         updateTelemetry(sample);
+        updateEventNavigation(sample.tick);
         text("simulation-time", formatTime(sample.time_s));
         scrubber.value = String(sample.time_s);
         scrubber.setAttribute("aria-valuetext", formatTime(sample.time_s) + ", tick " + sample.tick + " of " + state.last_tick);
@@ -430,6 +510,51 @@
         } catch (error) { fail(error); }
       }
 
+      function onMotionChange(event) {
+        reducedMotion = Boolean(event.matches);
+        render();
+      }
+
+      function isEditableTarget(target) {
+        if (!target) return false;
+        const tag = typeof target.tagName === "string" ? target.tagName.toLowerCase() : "";
+        return tag === "input" || tag === "select" || tag === "textarea" || tag === "button" || Boolean(target.isContentEditable);
+      }
+
+      function handleGlobalKeydown(event) {
+        if (isEditableTarget(event.target)) return;
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          event.preventDefault();
+          const direction = event.key === "ArrowRight" ? 1 : -1;
+          if (event.shiftKey) {
+            act({ type: "seek", time_s: playbackTime(state, win.performance.now()) + direction });
+          } else {
+            const tick = timingAtTime(playbackTime(state, win.performance.now()), data.tick_hz, state.last_tick).tick;
+            act({ type: "tick", tick: clamp(tick + direction, 0, state.last_tick) });
+          }
+        } else if (event.key === "PageDown" || event.key === "PageUp") {
+          event.preventDefault();
+          act({ type: "seek", time_s: playbackTime(state, win.performance.now()) + (event.key === "PageUp" ? 10 : -10) });
+        } else if (event.key === " ") {
+          event.preventDefault();
+          act({ type: "toggle" });
+        } else if (event.key === "Home" || event.key === "End") {
+          event.preventDefault();
+          act({ type: "seek", time_s: event.key === "Home" ? 0 : state.duration_s });
+        } else if (event.key === "r" || event.key === "R") {
+          event.preventDefault();
+          act({ type: "restart" });
+        } else if (event.key === "[" || event.key === "]") {
+          event.preventDefault();
+          const speeds = [0.25, 0.5, 1, 2, 4];
+          const index = speeds.indexOf(state.speed);
+          const nextIndex = clamp(index + (event.key === "]" ? 1 : -1), 0, speeds.length - 1);
+          const speedControl = get("playback-speed");
+          speedControl.value = String(speeds[nextIndex]);
+          act({ type: "speed", speed: speeds[nextIndex] });
+        }
+      }
+
       function resize() {
         if (failed) return;
         try {
@@ -450,6 +575,16 @@
       get("play-pause").addEventListener("click", function () { act({ type: "toggle" }); });
       get("restart").addEventListener("click", function () { act({ type: "restart" }); });
       get("next-tick").addEventListener("click", function () { act({ type: "next" }); });
+      if (previousEvent) previousEvent.addEventListener("click", function () {
+        const tick = timingAtTime(playbackTime(state, win.performance.now()), data.tick_hz, state.last_tick).tick;
+        const entry = eventIndex.slice().reverse().find(function (candidate) { return candidate.tick < tick; });
+        if (entry) act({ type: "tick", tick: entry.tick });
+      });
+      if (nextEvent) nextEvent.addEventListener("click", function () {
+        const tick = timingAtTime(playbackTime(state, win.performance.now()), data.tick_hz, state.last_tick).tick;
+        const entry = eventIndex.find(function (candidate) { return candidate.tick > tick; });
+        if (entry) act({ type: "tick", tick: entry.tick });
+      });
       get("playback-speed").addEventListener("change", function (event) { act({ type: "speed", speed: Number(event.target.value) }); });
       scrubber.addEventListener("input", function () { act({ type: "seek", time_s: Number(scrubber.value) }); });
       scrubber.addEventListener("keydown", function (event) {
@@ -471,13 +606,18 @@
         observer = new win.ResizeObserver(resize);
         observer.observe(get("canvas-viewport"));
       }
+      if (motionQuery) {
+        if (typeof motionQuery.addEventListener === "function") motionQuery.addEventListener("change", onMotionChange);
+        else if (typeof motionQuery.addListener === "function") motionQuery.addListener(onMotionChange);
+      }
+      if (typeof doc.addEventListener === "function") doc.addEventListener("keydown", handleGlobalKeydown);
       win.addEventListener("resize", resize);
       resize();
     } catch (error) { fail(error); }
   }
 
   if (typeof module !== "undefined" && module.exports) {
-    module.exports = { validateReplay, timingAtTime, interpolateHeading, sampleAtTime, createPlayback, playbackTime, transitionPlayback, replayBounds, fitViewport, projectPoint, formatTime, bootReplay };
+    module.exports = { validateReplay, timingAtTime, interpolateHeading, sampleAtTime, buildEventIndex, createPlayback, playbackTime, transitionPlayback, replayBounds, fitViewport, projectPoint, formatTime, bootReplay };
   }
   if (typeof document !== "undefined" && typeof window !== "undefined") {
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", function () { bootReplay(document, window); }, { once: true });

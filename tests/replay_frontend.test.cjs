@@ -72,6 +72,17 @@ test("valid replay is accepted without copying or mutating data", function () {
   assert.equal(JSON.stringify(data), before);
 });
 
+test("event index preserves recorded order and exact tick times", function () {
+  const data = fixture();
+  data.frames[0].events = ["off_track_start", "off_track_end"];
+  const events = replay.buildEventIndex(data);
+  assert.deepEqual(events, [
+    { tick: 0, time_s: 0, events: ["off_track_start", "off_track_end"], label: "Off track · Back on track" },
+    { tick: 1, time_s: 1 / 30, events: ["off_track_start"], label: "Off track" },
+    { tick: 3, time_s: 0.1, events: ["barrier_contact"], label: "Barrier contact" }
+  ]);
+});
+
 const invalidCases = [
   ["missing version", d => { delete d.schema_version; }],
   ["old version", d => { d.schema_version = "1.0"; }],
@@ -152,6 +163,18 @@ test("interpolates only pose and follows shortest heading across the wrap", func
   assert.equal(completed.frame, data.frames[1]);
   assert.equal(completed.frame.off_track, true);
   assert.deepEqual(completed.frame.events, ["off_track_start"]);
+});
+
+test("reduced motion snaps only the visual pose and keeps completed telemetry exact", function () {
+  const data = fixture();
+  const normal = replay.sampleAtTime(data, 1 / 60);
+  const reduced = replay.sampleAtTime(data, 1 / 60, { reduced_motion: true });
+  assert.equal(reduced.tick, normal.tick);
+  assert.equal(reduced.frame, normal.frame);
+  assert.equal(reduced.alpha, 0);
+  assert.equal(reduced.x, data.frames[0].x);
+  assert.equal(reduced.y, data.frames[0].y);
+  assert.equal(reduced.heading, data.frames[0].heading);
 });
 
 test("clamps and preserves all exact stored endpoints, including unwrapped headings", function () {
@@ -302,6 +325,14 @@ test("playback controls reject invalid inputs and clamp seeking to the recording
   assert.equal(state.time_s, 0);
 });
 
+test("exact tick playback action pauses at the requested event frame", function () {
+  let state = replay.transitionPlayback(replay.createPlayback(30, 3), { type: "play" }, 0);
+  state = replay.transitionPlayback(state, { type: "tick", tick: 2 }, 100);
+  assert.equal(state.time_s, 2 / 30);
+  assert.equal(state.playing, false);
+  assert.throws(() => replay.transitionPlayback(state, { type: "tick", tick: 4 }, 100));
+});
+
 test("track fit preserves aspect ratio, fits every sample, and inverts screen Y", function () {
   const data = fixture();
   data.frames[3].x = 80;
@@ -335,10 +366,10 @@ test("simulation-clock formatting carries across seconds and minutes", function 
 
 // Small DOM/canvas boundary double: tests run real validation, drawing and
 // control handlers with a controlled RAF clock. No browser or packages needed.
-function harness(embedded) {
+function harness(embedded, reducedMotion = false) {
   const elements = new Map();
   const backgrounds = [];
-  const controlIds = ["show-centerline", "play-pause", "restart", "next-tick", "scrubber", "playback-speed"];
+  const controlIds = ["show-centerline", "play-pause", "restart", "next-tick", "scrubber", "playback-speed", "previous-event", "next-event"];
   function makeContext() {
     const context = { calls: [] };
     for (const method of ["setTransform", "clearRect", "beginPath", "moveTo", "lineTo", "closePath", "setLineDash", "stroke", "fill", "save", "translate", "arc", "rotate", "fillRect", "strokeRect", "restore", "drawImage"]) {
@@ -346,11 +377,13 @@ function harness(embedded) {
     }
     return context;
   }
-  function makeElement(id) {
+  function makeElement(id, tagName = "div") {
     const handlers = new Map();
     return {
-      id, textContent: "", dataset: {}, style: {}, attributes: {}, value: "", disabled: false, hidden: false, checked: true,
+      id, tagName: tagName.toUpperCase(), textContent: "", dataset: {}, style: {}, attributes: {}, value: "", disabled: false, hidden: false, checked: true, children: [],
+      className: "", title: "", type: "", isContentEditable: false,
       set innerHTML(_) { throw new Error("Source strings must never be inserted as HTML"); },
+      appendChild(child) { this.children.push(child); return child; },
       setAttribute(name, value) { this.attributes[name] = value; },
       addEventListener(type, handler) {
         if (!handlers.has(type)) handlers.set(type, []);
@@ -373,16 +406,23 @@ function harness(embedded) {
   }
   const context = makeContext();
   elements.get("track-canvas").getContext = () => context;
+  const documentHandlers = new Map();
   const document = {
     getElementById: id => elements.get(id) || null,
     querySelectorAll: () => controlIds.map(id => elements.get(id)),
     createElement(tag) {
-      assert.equal(tag, "canvas");
-      const canvas = makeElement("");
-      const ctx = makeContext();
-      canvas.getContext = () => ctx;
-      backgrounds.push(ctx);
-      return canvas;
+      if (tag === "canvas") {
+        const canvas = makeElement("", "canvas");
+        const ctx = makeContext();
+        canvas.getContext = () => ctx;
+        backgrounds.push(ctx);
+        return canvas;
+      }
+      return makeElement("", tag);
+    },
+    addEventListener(type, handler) {
+      if (!documentHandlers.has(type)) documentHandlers.set(type, []);
+      documentHandlers.get(type).push(handler);
     }
   };
   let now = 0;
@@ -393,7 +433,8 @@ function harness(embedded) {
     performance: { now: () => now },
     addEventListener() {},
     requestAnimationFrame(callback) { callbacks.set(++nextId, callback); return nextId; },
-    cancelAnimationFrame(id) { callbacks.delete(id); }
+    cancelAnimationFrame(id) { callbacks.delete(id); },
+    matchMedia() { return { matches: reducedMotion, addEventListener() {}, removeEventListener() {} }; }
   };
   replay.bootReplay(document, window);
   return {
@@ -405,7 +446,11 @@ function harness(embedded) {
       callbacks.clear();
       current.forEach(callback => callback(now));
     },
-    setNow(time) { now = time; }
+    setNow(time) { now = time; },
+    emitKey(key, extra = {}) {
+      const event = Object.assign({ key, target: { tagName: "body", isContentEditable: false }, shiftKey: false, preventDefault() {} }, extra);
+      for (const handler of documentHandlers.get("keydown") || []) handler(event);
+    }
   };
 }
 
@@ -433,7 +478,8 @@ test("DOM boot displays source strings as text and keeps the Python result autho
   assert.equal(app.get("speed-kmh").textContent, "36.0");
   assert.equal(app.get("playback-status").textContent, "Paused");
   assert.equal(app.pending(), 0, "does not autoplay");
-  assert.ok(app.controls.every(control => !control.disabled));
+  assert.ok(app.controls.filter(control => control.id !== "previous-event").every(control => !control.disabled));
+  assert.equal(app.get("previous-event").disabled, true);
   app.get("play-pause").emit("click");
   app.frameAt(200);
   assert.equal(app.get("lap-time").textContent, "7.125 s");
@@ -516,6 +562,59 @@ test("DOM controls keep seeking anchored while playing and support speed, pause,
   assert.ok(!redrawn.some(call => call[0] === "setLineDash" && String(call[1]) === "3,7"));
 });
 
+test("event markers jump to exact ticks and navigate without changing the recording", function () {
+  const data = fixture();
+  const before = JSON.stringify(data);
+  const app = harness(data);
+  const markers = app.get("event-markers").children;
+  assert.equal(markers.length, 2);
+  assert.equal(markers[0].style.left, (1 / 3 * 100) + "%");
+  assert.equal(markers[1].style.left, "100%");
+  assert.equal(app.get("next-event").disabled, false);
+  markers[0].emit("click");
+  assert.equal(app.get("current-tick").textContent, "1");
+  assert.equal(app.get("event-status").textContent, "Off track · exact tick 1");
+  assert.equal(app.get("playback-status").textContent, "Paused");
+  assert.equal(app.get("previous-event").disabled, true);
+  app.get("next-event").emit("click");
+  assert.equal(app.get("current-tick").textContent, "3");
+  assert.equal(app.get("next-event").disabled, true);
+  app.get("previous-event").emit("click");
+  assert.equal(app.get("current-tick").textContent, "1");
+  assert.equal(JSON.stringify(data), before);
+});
+
+test("global keyboard shortcuts are available without stealing control focus", function () {
+  const app = harness(fixture());
+  let prevented = false;
+  app.emitKey("ArrowRight", { preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(app.get("current-tick").textContent, "1");
+  app.emitKey("ArrowLeft", { shiftKey: true });
+  assert.equal(app.get("current-tick").textContent, "0");
+  app.emitKey("[", { target: { tagName: "body", isContentEditable: false } });
+  assert.equal(app.get("playback-speed").value, "0.5");
+  const before = app.get("current-tick").textContent;
+  app.emitKey("ArrowRight", { target: { tagName: "input", isContentEditable: false } });
+  assert.equal(app.get("current-tick").textContent, before);
+  app.get("event-markers").children[0].emit("click");
+  assert.equal(app.get("current-tick").textContent, "1");
+});
+
+test("reduced motion snaps the car while retaining exact tick telemetry", function () {
+  const data = fixture();
+  const app = harness(data, true);
+  app.get("play-pause").emit("click");
+  app.frameAt(1000 / 60);
+  const fit = replay.fitViewport(replay.replayBounds(data), 960, 500);
+  const expected = replay.projectPoint(fit, data.frames[0].x, data.frames[0].y);
+  const translated = app.context.calls.filter(call => call[0] === "translate").at(-1);
+  near(translated[1], expected.x);
+  near(translated[2], expected.y);
+  assert.equal(app.get("current-tick").textContent, "0");
+  assert.equal(app.get("speed-ms").textContent, "10.00");
+});
+
 test("DOM malformed/missing data shows a visible error and disables controls before drawing", function () {
   const wrongVersion = fixture();
   wrongVersion.schema_version = "1.0";
@@ -541,5 +640,7 @@ test("DOM singleton recordings display their state with idle transport controls"
   assert.equal(app.get("play-pause").disabled, true);
   assert.equal(app.get("scrubber").disabled, true);
   assert.equal(app.get("show-centerline").disabled, false);
+  assert.equal(app.get("event-markers").children[0].textContent, "No recorded events");
+  assert.equal(app.get("event-count").textContent, "No recorded events");
   assert.equal(app.pending(), 0);
 });

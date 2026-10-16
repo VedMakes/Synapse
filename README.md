@@ -16,7 +16,8 @@ The current slice provides:
 - A validated, streaming replay export and dependency-free read-only browser
   preview, with a documented future Unity adapter contract.
 
-Python is authoritative. Unity is not part of this slice and will consume recorded state later.
+Python is authoritative. Unity has a read-only renderer foundation under
+`unity/`; it does not simulate or score cars.
 
 ## Explicit working decisions
 
@@ -30,6 +31,35 @@ These are provisional implementation decisions based on the handoff and the late
 - Training uses a configurable maximum of `n` runs, with at most `k` environment steps in each run. The budget state is persistent and tamper-evident by hash, but it is not a cumulative-week budget.
 - The provisional simulation rate is 30 Hz.
 - The event date is recorded as the 31st and the environment-release target as the 20th. Month/year still need to be recorded before public scheduling.
+
+## Participant training prototype
+
+The first minimal participant-facing workflow is available as a bounded local
+CLI. It is a delivery prototype, not a frozen event launcher or final budget
+rule:
+
+```bash
+.venv/bin/python tools/build_training_manifest.py
+.venv/bin/python tools/train_participant.py \
+  --reward examples/baseline_reward.json \
+  --steps 2048 --budget-steps 10000 \
+  --output-dir participant_run
+```
+
+It loads all public training maps, uses the fixed two-layer 64/64 PPO model,
+prints progress after each bounded rollout update, persists a local transition
+counter, and writes `training_report.md`, `training_metrics.jsonl`, policy
+artifacts, and the training contract under `participant_run/`. Run the same
+command again with the same output directory to resume the local counter.
+The prototype persists policy weights and observation normalization but resets
+the optimizer on process restart; this is recorded as an open release decision.
+
+The current onboarding budget example is 10,000 accepted environment
+transitions. It is intentionally not the scored event budget. The recommended
+fairness direction is a cumulative count of active-lane transitions, with
+vector lanes and repeated frames charged individually, but the exact budget
+and enforcement model remain open. See `docs/participant_guide.md` and the
+research report `reports/Participant delivery options.md`.
 
 ## Setup
 
@@ -195,6 +225,17 @@ The browser interpolates **only the recorded pose**, never physics. Neither
 browser nor future Unity may compute contacts, resets, rewards, progress,
 finishes, or lap times. Private held-out geometry must never be exported into
 a public preview. Checksums are integrity checks, not anti-cheat authentication.
+
+### Unity renderer foundation
+
+The read-only Unity adapter foundation is under `unity/` and targets pinned
+Unity `2022.3.22f1` LTS with URP `14.0.8`. It validates replay schema `1.1`,
+maps Python coordinates and headings using the same contract, applies recorded
+poses directly, and builds visual track geometry from the embedded boundaries.
+It contains no vehicle physics, collision, lap timing, reward, progress, or
+finish-line logic. `GhostPresentationConfig` keeps simultaneous versus
+staggered reveal configurable without changing replay data. See
+`docs/unity_renderer_adapter.md` for the handoff and joint acceptance tests.
 
 ### Layer checks and container preview
 

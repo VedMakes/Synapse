@@ -1,0 +1,17 @@
+{
+  "release_id": "local-participant-prototype",
+  "tracks": "tracks/train",
+  "simulation_config": "config/simulation.json",
+  "reward_config": "examples/baseline_reward.json",
+  "budget_steps": 10000,
+  "n_envs": 4,
+  "rollout_length": 64,
+  "seed": 17,
+  "policy": {
+    "format": "racing_event_fixed_mlp",
+    "hidden_sizes": [64, 64],
+    "activation": "tanh",
+    "observation_size": 23,
+    "action_size": 2
+  }
+}

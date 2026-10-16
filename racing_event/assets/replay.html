@@ -76,6 +76,11 @@
       </div>
       <div class="timeline-heading"><label for="scrubber">Simulation time <strong id="simulation-time">—</strong><span class="time-total"> / <span id="duration">—</span></span></label><span class="tick-readout">Tick <strong id="current-tick">—</strong> / <span id="total-ticks">—</span> <span aria-hidden="true">·</span> <span id="tick-hz">—</span> Hz</span></div>
       <input id="scrubber" class="scrubber" data-control type="range" min="0" max="0" step="any" value="0" aria-describedby="scrubber-help" disabled>
+      <div class="event-rail" aria-label="Recorded event timeline">
+        <div class="event-rail-heading"><span>Recorded events</span><span id="event-count">—</span></div>
+        <div id="event-markers" class="event-markers" role="list" aria-label="Recorded event markers"></div>
+        <div class="event-nav"><span id="event-status" class="event-status" role="status" aria-live="polite">Loading event markers</span><span class="event-nav-buttons"><button id="previous-event" data-control type="button" disabled>‹ Previous event</button><button id="next-event" data-control type="button" disabled>Next event ›</button></span></div>
+      </div>
       <div class="transport-controls">
         <div class="buttons">
           <button id="play-pause" class="primary-button" data-control type="button" aria-pressed="false" disabled><span id="play-icon" aria-hidden="true">▶</span> <span id="play-label">Play</span></button>
@@ -85,6 +90,7 @@
         <label class="speed-control" for="playback-speed">Playback speed <select id="playback-speed" data-control disabled><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option><option value="4">4×</option></select></label>
       </div>
       <p id="scrubber-help" class="panel-note">Drag or use the arrow keys to seek. Next tick pauses playback; at the end, it returns to tick 0. Recordings stop at their final frame.</p>
+      <details id="keyboard-help" class="keyboard-help"><summary>Keyboard help</summary><p><kbd>Space</kbd> play or pause · <kbd>←</kbd>/<kbd>→</kbd> one tick · <kbd>Shift</kbd> + arrow one second · <kbd>Page Up</kbd>/<kbd>Page Down</kbd> ten seconds · <kbd>Home</kbd>/<kbd>End</kbd> endpoints · <kbd>[</kbd>/<kbd>]</kbd> playback speed · <kbd>R</kbd> restart.</p></details>
     </section>
 
     <footer class="replay-footer">

@@ -1366,3 +1366,222 @@ container. Next, implement the lowest-risk viewer-only QoL slice: an event-marke
 rail with exact-tick jumps, then keyboard help/reduced-motion behavior. Keep
 Unity read-only and defer camera modes, multi-ghost comparison, and multi-episode
 training replays until the browser layer is stable.
+
+## 27. SESSION HANDOFF (2026-10-17, UI/UNITY FOUNDATION)
+
+### Goal and result
+
+The viewer-only QoL slice and the first Unity renderer handoff foundation are
+implemented. Python simulation and replay schema `1.1` remain unchanged. The
+renderer work reads recorded frames and events only; it does not add a second
+physics or scoring authority.
+
+The human answered the renderer choices for this slice:
+
+- Unity baseline: **Unity 2022.3.22f1 LTS with URP 14.0.8**.
+- Ghost presentation: **configurable**. Do not lock simultaneous versus
+  staggered reveal in the replay schema.
+
+### Implemented files
+
+- `racing_event/assets/replay.js`
+  - Adds an event index from recorded frame events, exact-tick marker jumps,
+    previous/next event navigation, and event status text.
+  - Adds document keyboard shortcuts while preserving native input/button
+    focus: play/pause, exact one-tick arrows, one-second Shift arrows, ten-second
+    Page Up/Page Down, endpoints, restart, and playback-speed brackets.
+  - Adds `prefers-reduced-motion` handling. Reduced motion snaps only the visual
+    pose; recorded telemetry and event ticks remain unchanged.
+- `racing_event/assets/replay.html` and `replay.css`
+  - Add the accessible event rail, navigation controls, empty-event state, and
+    keyboard-help disclosure with responsive/reduced-motion styling.
+- `tests/replay_frontend.test.cjs`
+  - Adds marker-index, exact-tick action, event navigation, keyboard focus,
+    reduced-motion, and empty-event UI coverage.
+- `unity/`
+  - Pins the Unity 2022.3.22f1 project baseline, URP package, Newtonsoft JSON
+    package, and Unity Test Framework lock entries.
+  - Adds strict replay DTOs and schema/finite/event/result/track-hash checks in
+    `ReplayReader.cs`.
+  - Adds `ReplayClock.cs` for fixed-tick visual timing, shortest-angle heading,
+    exact ticks, no extrapolation, and the Python-to-Unity yaw mapping.
+  - Adds `ReplayGhostController.cs` for direct visual transform application,
+    recorded event callbacks, and no vehicle physics.
+  - Adds `TrackRenderer.cs` for boundary-derived visual surface geometry with no
+    MeshCollider.
+  - Adds `GhostPresentationConfig.cs` for renderer-only visual settings and
+    configurable simultaneous/staggered reveal.
+  - Adds initial Unity EditMode tests under
+    `Assets/RacingEvent/Tests/Editor/ReplayContractTests.cs`.
+- `docs/unity_renderer_adapter.md`, `docs/replay_contract.md`, and `README.md`
+  - Document the selected Unity target, coordinate/yaw mapping, authority
+    boundary, memory-safe replay behavior, presentation configuration, and
+    joint acceptance tests.
+
+### Checks and evidence
+
+All commands ran from `/home/redacted/Documents/RL-ENV`.
+
+- Handoff-advised baseline before edits: `make test` passed 77 Python unittest
+  cases; direct `node --test tests/replay_frontend.test.cjs` passed 59 cases;
+  Python compile and `git diff --check` passed.
+- Final Python suite: **passed** — `make test`, 77 Python cases. Its optional
+  Node integration also passed.
+- Final frontend suite: **passed** — `node --check racing_event/assets/replay.js`
+  and `node --test tests/replay_frontend.test.cjs`, 65 cases.
+- Replay bundling: **passed** — project `.venv/bin/python` rebuilt both
+  `artifacts/replay/index.html` and `artifacts/replay/scripted.html` from the
+  existing ignored fixtures. No new large artifact was committed.
+- Python compile and diff checks: **passed** —
+  `.venv/bin/python -m py_compile racing_event/*.py tools/*.py tests/*.py`,
+  `node --check racing_event/assets/replay.js`, and `git diff --check`.
+- Unity package metadata: **passed** — both package JSON files parse locally.
+- Unity EditMode tests, Unity import, real-browser screenshot/layout review,
+  and Unity mesh round-trip: **not run** because no Unity editor or browser
+  binary is installed in this container.
+- No training sweep, E3/E6 experiment, Docker build, or large-memory process
+  was started in this slice. Replay generation used the existing bounded tools.
+
+### Known limits and exact next action
+
+- The browser viewer remains a local checked preview. Its hashes are not
+  authentication, and the current frontend shape validator remains intentionally
+  weaker than Python's authoritative validator.
+- The Unity adapter is source-level foundation only. It has not yet been
+  compiled or opened by Unity here. The C# track-hash canonicalization and mesh
+  vertices need a real Unity round-trip against a known Python replay.
+- Schema `1.1` still represents one replay stream. Do not add multiple ghosts
+  by silently extending the frame format. Define a versioned replay-group
+  manifest after the single-ghost path is proven.
+
+1. On a machine with Unity 2022.3.22f1, open `unity/`, run the EditMode tests,
+   import `artifacts/replay/scripted.json` as a TextAsset, and perform the
+   coordinate/yaw, final-frame, event-tick, and boundary-mesh checks in
+   `docs/unity_renderer_adapter.md`.
+2. Open the rebuilt local replay in a real browser and review the event rail,
+   keyboard help, reduced-motion behavior, exact final result, and mobile
+   layout. Keep camera modes and multi-ghost playback deferred until this pass
+   is accepted.
+
+## 28. SESSION HANDOFF (2026-10-17, PARTICIPANT DELIVERY FOUNDATION)
+
+### Goal and result
+
+The next delivery question was researched and a small participant workflow was
+implemented without freezing the major event rules. The current recommendation
+is a hybrid release:
+
+- public immutable participant source/release as the learning interface;
+- versioned wheel plus offline wheelhouse as the default installation path;
+- optional Docker/Dev Container for advanced users and organizer CI;
+- model-only server-side scoring as the ordinary leaderboard boundary once the
+  ONNX contract exists; and
+- private held-out tracks, scoring code, and evaluator infrastructure outside
+  the participant release.
+
+Standalone executables remain optional convenience artifacts for launchers,
+viewers, or validators, not the canonical RL environment or scoring boundary.
+
+The full research report is `reports/Participant delivery options.md`. Major
+research notes are in `research_notes/Participant delivery options/`:
+`packaging.md`, `fairness.md`, `maps.md`, and `current_state.md`.
+
+### Implemented minor delivery ideas
+
+- `tools/train_participant.py`
+  - Adds the first participant-facing local training CLI.
+  - Loads all three current public training maps instead of the old single-map
+    E2 fixture.
+  - Uses the existing fixed 64/64 PPO model, declarative reward JSON, vector
+    environment, rollout collector, and authoritative budget boundary.
+  - Persists a one-run local budget, policy artifact, unfrozen normalizer,
+    training contract, release/config/reward/map identities, JSONL metrics, and
+    a human-readable Markdown training report.
+  - Charges active lanes through the existing transition counter and keeps each
+    rollout bounded. It does not retain a full multi-million-step budget in
+    memory.
+  - Resumes the local counter and policy on a later invocation. Optimizer state
+    is intentionally not persisted yet and is called out as an open decision.
+- `tools/build_training_manifest.py` and `tracks/train_manifest.json`
+  - Validate every public training map and record map ID, canonical content
+    hash, delivered-file SHA-256, units, split, and validator identity.
+  - The manifest lives beside `tracks/train/`, not inside it, so existing map
+    fixture discovery cannot mistake the manifest for geometry.
+- `racing_event/reward.py` and `tests/test_reward.py`
+  - Reject non-finite and non-numeric participant reward weights before training.
+- `tests/test_participant_training.py`
+  - Covers public-manifest contents and persistent-budget runner resume.
+- `docs/participant_guide.md`, `examples/participant_training.json`, `README.md`,
+  `Makefile`, and `.gitignore`
+  - Document the provisional first-run path, bounded terminal UI, output files,
+    map preparation boundary, fairness draft, and smoke commands.
+
+### Research conclusions and map plan
+
+- Use a curated public participant snapshot/release, not a partial commit that
+  assumes Git history is private. A later deletion does not repair leaked
+  branches, tags, releases, CI artifacts, Docker layers, or local clones.
+- Keep the current canonical JSON geometry. Use original/procedural or broadly
+  inspired fictional maps, not copied game assets or exact recognizable circuit
+  reproductions without rights review.
+- Treat the three current maps as development fixtures, not final event maps.
+  The launch candidate is 3–5 public route-family-balanced maps, 1–2 organizer
+  development holdouts, and 2–3 private final maps, selected by equal-budget
+  map-count, variety, difficulty-parity, and generalization experiments.
+- Public and private maps need route-family splitting, canonical plus delivered
+  hashes, geometry/physics/determinism/difficulty/secrecy validation gates, and
+  a final participant-access red-team.
+- Fairness direction: one cumulative budget of active environment transitions;
+  vector lanes and repeated/skipped frames count individually; resets and
+  optimizer updates do not. The exact scored number and enforcement strength
+  remain open. A local hash chain is tamper-evident, not proof of provenance.
+- Recommended v1 model direction: fixed 23-value observation, two actions, two
+  64-unit `tanh` layers, frozen preprocessing at evaluation, no recurrence,
+  frame stacking, external lookup, filesystem, network, subprocess, or dynamic
+  loading. A bounded architecture division can be considered later.
+
+### Checks and real-run evidence
+
+All commands ran from `/home/redacted/Documents/RL-ENV`.
+
+- **Passed:** `make participant-maps`; validated all 3 public maps and wrote
+  `tracks/train_manifest.json`.
+- **Passed:** `make participant-smoke`; trained 256 transitions using 4 lanes,
+  wrote `participant_run/`, and printed bounded progress. A second identical
+  invocation resumed the same state and reached 512/10,000 local transitions.
+  `participant_run/` is ignored and is not a repository deliverable.
+- **Passed:** focused participant tests; 2 tests cover manifest validation and
+  resume accounting.
+- **Passed:** `make test`; 81 Python tests, including the Node frontend runner.
+  A temporary first attempt failed because the manifest was initially placed
+  inside `tracks/train/` and existing fixture discovery treated it as a map;
+  moving it to `tracks/train_manifest.json` fixed the issue before the final
+  run.
+- **Passed:** direct Node frontend suite; 65 tests. `node --check` passed.
+- **Passed:** Python compilation for package/tools/tests and `git diff --check`.
+- **Not run:** Docker build, offline wheelhouse rehearsal, ONNX export/runtime,
+  Unity import, real-browser review, private evaluator, final map experiments,
+  or a large budget training sweep. No memory-heavy sweep was started.
+
+### Major decisions for discussion before release work
+
+1. Public repository versus curated participant release, and supported native
+   platforms.
+2. Cumulative budget enforcement: local honor system, signed launcher/service,
+   or organizer retraining.
+3. Exact scored budget and whether optimizer/checkpoint state is part of the
+   participant resume contract.
+4. Fixed architecture versus a bounded architecture division.
+5. ONNX operator/opset/runtime contract and model validator.
+6. Final public/private map count, route families, difficulty tolerance,
+   evaluation starts/retries, ranking, DNF handling, and artifact rights.
+
+### Exact next action
+
+Before calling the participant path delivery-ready, build a clean release
+candidate from a separate public snapshot and test it from a fresh machine with
+network disabled. In parallel, prepare the map experiment harness and generate
+candidate route-family-balanced maps, while keeping final geometry outside the
+participant-visible repository. After the event decisions above are approved,
+implement the ONNX export/validator and private evaluation boundary; do not
+present the current `.pt` prototype artifact as the final submission format.
