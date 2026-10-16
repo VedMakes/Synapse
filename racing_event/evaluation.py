@@ -81,7 +81,7 @@ def validate_evaluation_contract(
         raise ValueError("saved track IDs do not match the environment")
     if contract.track_hashes != tuple(track.content_hash for track in env.tracks):
         raise ValueError("saved track hashes do not match the environment")
-    if contract.action_distribution != "tanh_normal":
+    if contract.action_distribution not in {"participant_defined", "tanh_normal"}:
         raise ValueError("saved contract uses an unsupported action distribution")
     if not contract.deterministic_evaluation or contract.evaluation_spawn != "fixed_start_line_standing_zero_noise":
         raise ValueError("saved contract does not describe deterministic evaluation")

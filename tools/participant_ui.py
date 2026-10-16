@@ -1,7 +1,7 @@
-"""Serve a dependency-free local web UI for the participant trainer.
+"""Serve a dependency-free local web UI for a participant-owned trainer.
 
-The UI is a thin Python controller around ``tools/train_participant.py``. It
-does not implement a second trainer, environment, reward calculation, or
+The UI is a thin Python controller around the participant launcher. It does
+not implement a second trainer, model, environment, reward calculation, or
 budget. Bind it to loopback only; the browser is a local presentation layer.
 """
 
@@ -50,7 +50,7 @@ def _ready_python() -> Path:
             continue
         try:
             result = subprocess.run(
-                [str(candidate), "-c", "import numpy, torch"],
+                [str(candidate), "-c", "import numpy"],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -63,9 +63,9 @@ def _ready_python() -> Path:
         if result.returncode == 0:
             return candidate
         detail = (result.stderr or result.stdout).strip().splitlines()
-        checked.append(f"{candidate}: {detail[-1] if detail else 'numpy/torch import failed'}")
+        checked.append(f"{candidate}: {detail[-1] if detail else 'numpy import failed'}")
     raise ValueError(
-        "SYNAPSE Python dependencies are not ready. Run "
+        "SYNAPSE environment dependencies are not ready. Run "
         f"'{sys.executable} tools/setup_participant.py', then start the UI again. "
         + " | ".join(checked)
     )
@@ -105,6 +105,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
             raise ValueError(f"{name} must be a positive integer")
         return parsed
 
+    trainer = _workspace_path(text("trainer", "examples/participant_train.py"), label="trainer")
     reward = _workspace_path(text("reward", "examples/baseline_reward.json"), label="reward")
     config = _workspace_path(text("config", "config/simulation.json"), label="config")
     track_dir = _workspace_path(text("track_dir", "tracks/train"), label="track_dir")
@@ -113,6 +114,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     return [
         str(python),
         str(ROOT / "tools" / "train_participant.py"),
+        "--trainer", str(trainer),
         "--reward", str(reward),
         "--config", str(config),
         "--track-dir", str(track_dir),
@@ -244,13 +246,16 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
     metadata = output_dir / "policy.json"
     contract = output_dir / "training_contract.json"
     if not all(path.exists() for path in (weights, metadata, contract)):
-        raise ValueError("train a policy first; policy.pt, policy.json, and training_contract.json are required")
+        raise ValueError(
+            "the bundled reference starter must produce policy.pt, policy.json, and "
+            "training_contract.json before its replay can be built"
+        )
     python = _ready_python()
     replay_dir = output_dir / "replays"
     replay_dir.mkdir(parents=True, exist_ok=True)
     replay_path = replay_dir / f"{map_id}.json"
     html_path = replay_dir / f"{map_id}.html"
-    participant_id = f"SYNAPSE-best-{map_id}"
+    participant_id = f"SYNAPSE-reference-{map_id}"
     contract_payload = json.loads(contract.read_text(encoding="utf-8"))
     contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
     temporary_contract: Path | None = None
@@ -364,13 +369,14 @@ PAGE = r'''<!doctype html>
 <body>
   <main class="shell">
     <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> LOCAL / PYTHON AUTHORITATIVE</div></header>
-    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose a reward configuration, start or resume a bounded local run, and watch the same metrics that will help you understand the agent. The browser is only a control surface. Python owns the environment, transitions, and budget.</p></section>
+    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose your own trainer and reward implementation, start or resume a bounded local run, and watch the metrics that help you understand the agent. SYNAPSE owns the environment boundary; your code owns the model, algorithm, and reward.</p></section>
     <section class="grid">
       <section class="panel">
-        <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">release prototype</span></div>
+        <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
         <div class="section">
           <div class="form-grid">
-            <label class="full">Reward configuration<input id="reward" value="examples/baseline_reward.json" spellcheck="false"></label>
+            <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
+            <label class="full">Your reward input (optional for your script)<input id="reward" value="examples/baseline_reward.json" spellcheck="false"></label>
             <label>Training maps<input id="track-dir" value="tracks/train" spellcheck="false"></label>
             <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="2048"></label>
@@ -379,18 +385,19 @@ PAGE = r'''<!doctype html>
             <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="64"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
           </div>
-          <div class="actions"><button id="start" class="primary">Start / resume SYNAPSE training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
-          <p class="hint">If NumPy or PyTorch is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
+          <div class="actions"><button id="start" class="primary">Start / resume participant training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
+          <p class="hint">The trainer script is yours to replace. If NumPy is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
         </div>
       </section>
       <aside class="panel">
-        <div class="panel-head"><h2>02 · Fixed contract</h2></div>
+        <div class="panel-head"><h2>02 · SYNAPSE contract</h2></div>
         <div class="section contract">
           <div class="contract-item"><strong>23-value observation</strong><span>Track-relative float32 state. No track ID or absolute progress.</span></div>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
-          <div class="contract-item"><strong>Fixed PPO policy</strong><span>Two tanh layers, 64 units each. Reward weights are the experiment surface.</span></div>
+          <div class="contract-item"><strong>Your model and reward</strong><span>Architecture, algorithm, weights, preprocessing, and reward code belong to your trainer.</span></div>
+          <div class="contract-item"><strong>Raw transition signals</strong><span>SYNAPSE supplies observations, bounded actions, raw signals, termination, and track identity.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
-          <div class="watch"><label for="watch-map">Watch best run for map:</label><select id="watch-map"><option>Loading SYNAPSE maps…</option></select><button id="watch">Build / watch saved best run</button><div id="watch-result" class="watch-result">After training, this evaluates the current best saved policy from the fixed start and opens its read-only replay.</div></div>
+          <div class="watch"><label for="watch-map">Watch reference artifact for map:</label><select id="watch-map"><option>Loading SYNAPSE maps…</option></select><button id="watch">Build / watch reference replay</button><div id="watch-result" class="watch-result">The bundled starter can build a deterministic replay from its reference artifact. A generic participant artifact exporter is a separate event boundary.</div></div>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
         </div>
       </aside>
@@ -408,9 +415,9 @@ PAGE = r'''<!doctype html>
   </main>
   <script>
     const $ = id => document.getElementById(id);
-    const fields = ["reward", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed"];
+    const fields = ["trainer", "reward", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed"];
     const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", completed: "Training completed", failed: "Training failed" };
-    function formData() { return { reward: $("reward").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value }; }
+    function formData() { return { trainer: $("trainer").value, reward: $("reward").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value }; }
     function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
     function render(data) {
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);

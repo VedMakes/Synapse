@@ -10,7 +10,7 @@ import numpy as np
 
 from .config import SimulationConfig
 from .physics import CarState, step_car
-from .reward import RewardConfig
+from .reward import RewardConfig, SIGNAL_NAMES
 from .signals import compute_signals
 from .track import TrackGeometry
 from .observation import TrainingContract, build_observation_schema
@@ -21,19 +21,32 @@ def _wrap_angle(angle: float) -> float:
     return (angle + math.pi) % (2.0 * math.pi) - math.pi
 
 
+_DEFAULT_REWARD = object()
+
+
 class RacingEnv:
-    """A deterministic environment with reset/step semantics.
+    """A deterministic environment with reset/step_raw semantics.
 
     Observation length is fixed at ``10 + len(rays) + len(lookaheads)``:
     self state (4), track relation (2), controls (3), raycasts, lookaheads,
     and local width (1). All values are normalized or clipped.
     """
 
-    def __init__(self, track: TrackGeometry, config: SimulationConfig, reward: RewardConfig | None = None):
+    def __init__(
+        self,
+        track: TrackGeometry,
+        config: SimulationConfig,
+        reward: RewardConfig | None | object = _DEFAULT_REWARD,
+    ):
         config.validate()
         self.track = track
         self.config = config
-        self.reward_config = reward or RewardConfig()
+        # Omitting ``reward`` preserves the old scalar API for the reference
+        # baseline. Passing ``reward=None`` creates an environment-only
+        # instance; participants then use ``step_raw`` and own the reward.
+        self.reward_config = RewardConfig() if reward is _DEFAULT_REWARD else reward
+        if self.reward_config is not None and not isinstance(self.reward_config, RewardConfig):
+            raise TypeError("reward must be a RewardConfig or None")
         self.observation_schema = build_observation_schema(config)
         self.training_contract = TrainingContract.for_config(
             config,
@@ -118,7 +131,7 @@ class RacingEnv:
         info = {
             "track_id": self.track.track_id,
             "spawn_s": self.previous_s,
-            "signals": {name: 0.0 for name in self.reward_config.weights},
+            "signals": {name: 0.0 for name in SIGNAL_NAMES},
             "evaluation": bool(evaluation),
             "sector_index": self.sector_index,
             "sector_count": DEFAULT_SECTOR_COUNT,
@@ -200,7 +213,7 @@ class RacingEnv:
             stuck=stuck,
             lap_complete=lap_complete,
         )
-        reward = self.reward_config.calculate(signals)
+        reward = 0.0 if self.reward_config is None else self.reward_config.calculate(signals)
         observation = self._observation()
         info = {
             "track_id": self.track.track_id,
@@ -224,6 +237,19 @@ class RacingEnv:
         self.previous_s = projection.s
         self.last_info = info
         return observation, reward, terminated, truncated, info
+
+    def step_raw(
+        self, action: np.ndarray | list[float] | tuple[float, float]
+    ) -> tuple[np.ndarray, bool, bool, dict[str, Any]]:
+        """Advance one transition and return raw signals without reward.
+
+        ``step`` remains available as a compatibility adapter for the local
+        reference baseline. Participant training should use this method and
+        calculate reward outside the SYNAPSE-owned environment.
+        """
+
+        observation, _legacy_reward, terminated, truncated, info = self.step(action)
+        return observation, terminated, truncated, info
 
     def _observation(self) -> np.ndarray:
         position = np.array([self.state.x, self.state.y], dtype=np.float64)

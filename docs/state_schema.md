@@ -56,9 +56,10 @@ deterministic evaluation policy mode, fixed-start spawn rule, and optional
 `RunningObservationNormalizer` statistics. Evaluation loads this artifact,
 uses the policy mean action, and does not update normalization statistics.
 
-## Fixed PPO model artifact
+## Optional reference PPO artifact
 
-The first trainer slice uses `racing_event.ppo.FixedMLPActorCritic`:
+The repository includes `racing_event.ppo.FixedMLPActorCritic` only as an
+inspectable reference starter:
 
 - two hidden layers of 64 units with `tanh` activation;
 - a two-action tanh-squashed Gaussian policy;
@@ -69,7 +70,7 @@ The first trainer slice uses `racing_event.ppo.FixedMLPActorCritic`:
   starts do not collapse into the zero-speed stuck termination. The value is
   stored in the model metadata.
 
-`FixedMLPActorCritic.save_artifact` writes a state dictionary to `policy.pt`
+`FixedMLPActorCritic.save_artifact` writes a reference state dictionary to `policy.pt`
 and architecture metadata to a separate JSON file. The loader uses
 `torch.load(..., weights_only=True)` and rejects schema, distribution,
 architecture, tensor-key, tensor-shape, and non-finite-value mismatches. The
@@ -80,7 +81,16 @@ frozen observation normalizer and environment hashes.
 terminated transitions from truncated transitions for value bootstrapping and
 never carries GAE across a lane reset. Its output records policy loss, value
 loss, entropy, approximate KL, clip fraction, explained variance, and update
-throughput.
+throughput. Participants are not required to use this model, optimizer,
+algorithm, or artifact format.
+
+## Participant-owned reward
+
+`VectorizedRacingEnv.step_raw` exposes the next observation, termination flags,
+and raw signal mapping without applying a reward. A participant trainer may
+implement any finite reward function over copies of the observation, action,
+signals, and transition outcome. `RewardConfig` is only the reference weighted
+signal adapter used by the bundled baseline.
 
 ## Deterministic evaluation
 

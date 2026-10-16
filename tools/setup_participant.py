@@ -24,7 +24,13 @@ REQUIREMENTS = ROOT / "requirements.lock"
 def _python_has_dependencies(python: Path) -> tuple[bool, str]:
     try:
         result = subprocess.run(
-            [str(python), "-c", "import numpy, torch; print(f'numpy={numpy.__version__} torch={torch.__version__}')"],
+            [
+                str(python),
+                "-c",
+                "import importlib.util, numpy; "
+                "torch = importlib.util.find_spec('torch'); "
+                "print(f'numpy={numpy.__version__} optional_torch={torch is not None}')",
+            ],
             cwd=ROOT,
             text=True,
             capture_output=True,
@@ -53,7 +59,7 @@ def setup_environment() -> str:
     builder.create(VENV_DIR)
     if not VENV_PYTHON.exists():
         raise RuntimeError(f"virtual environment did not create {VENV_PYTHON}")
-    print("Installing pinned SYNAPSE dependencies ...")
+    print("Installing pinned SYNAPSE environment and reference dependencies ...")
     subprocess.run(
         [str(VENV_PYTHON), "-m", "pip", "install", "--requirement", str(REQUIREMENTS)],
         cwd=ROOT,

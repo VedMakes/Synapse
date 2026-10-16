@@ -65,7 +65,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     policy_group = parser.add_mutually_exclusive_group(required=True)
     policy_group.add_argument("--scripted", action="store_true", help="smoke controller, not a trained policy")
-    policy_group.add_argument("--weights", type=Path, help="saved fixed-PPO state dictionary")
+    policy_group.add_argument("--weights", type=Path, help="saved reference-PPO state dictionary")
     parser.add_argument("--metadata", type=Path)
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--track", type=Path, default=Path("tracks/train/synthetic_oval.json"))

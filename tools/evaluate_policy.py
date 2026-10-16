@@ -1,4 +1,4 @@
-"""Evaluate a saved fixed PPO artifact with deterministic mean actions.
+"""Evaluate the optional saved reference PPO artifact with deterministic mean actions.
 
 The evaluator uses one environment lane and streams a transition digest.  It
 therefore reports reproducible outcomes without retaining a trajectory in

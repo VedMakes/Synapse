@@ -7,9 +7,9 @@ The current prototype proves the parts that should be stable before a trainer or
 1. Track geometry is loaded from versioned JSON.
 2. The loader checks arclength, sample spacing, nesting, edge placement, and a SHA-256 content hash.
 3. `TrackGeometry` owns projection, raycasts, and rectangle-footprint edge checks.
-4. `RacingEnv` exposes `reset(seed)` and `step(action)` with two continuous actions.
+4. `RacingEnv` exposes `reset(seed)` and `step_raw(action)` with two continuous actions; `step(action)` remains a legacy reference-reward adapter.
 5. Physics uses a fixed timestep and a deterministic kinematic model.
-6. Raw reward signals are returned in `info["signals"]` and can be weighted with the declarative `RewardConfig`.
+6. Raw transition signals are returned in `info["signals"]`; participant code may apply any reward function, while `RewardConfig` remains an optional reference adapter.
 7. `RunBudget` persists `n` logical runs with at most `k` environment transitions per run.
 8. The scripted tool writes the versioned trajectory shape intended for later Unity playback.
 9. Rollout diagnostics expose spawn-relative sector coverage, positive off-track
@@ -29,7 +29,7 @@ The current prototype proves the parts that should be stable before a trainer or
 - Observation: 23 `float32` values for the default configuration.
 - Action: two values in `[-1, 1]`: steering and throttle/brake.
 - Positive longitudinal action is throttle. Negative action is braking.
-- Python owns physics, termination, rewards, progress, and lap time.
+- SYNAPSE owns physics, termination, raw signals, progress, and lap time. Participants own reward calculation during training.
 - Runoff is soft off-track state with reduced grip. Barrier contact terminates.
 - The provisional tick rate is 30 Hz.
 

@@ -2,16 +2,20 @@
   "release_id": "synapse-local-participant-prototype",
   "tracks": "tracks/train",
   "simulation_config": "config/simulation.json",
-  "reward_config": "examples/baseline_reward.json",
+  "trainer": "examples/participant_train.py",
+  "reward_input": "examples/baseline_reward.json",
   "budget_steps": 10000,
   "n_envs": 4,
   "rollout_length": 64,
   "seed": 17,
-  "policy": {
-    "format": "racing_event_fixed_mlp",
-    "hidden_sizes": [64, 64],
-    "activation": "tanh",
+  "participant_ownership": {
+    "model": "participant-defined architecture, algorithm, preprocessing, and weights",
+    "reward": "participant-defined function or weighted-signal adapter",
+    "reference_starter": "examples/participant_train.py"
+  },
+  "environment_contract": {
     "observation_size": 23,
-    "action_size": 2
+    "action_size": 2,
+    "raw_signal_source": "racing_event.VectorizedRacingEnv.step_raw"
   }
 }

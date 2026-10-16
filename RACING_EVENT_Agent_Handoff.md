@@ -26,7 +26,10 @@ A college tech-fest event where participants train their own reinforcement learn
 - Two student clubs run it together. **AIC** (AI Club) owns the Python simulation, the RL training pipeline, fairness rules, and tournament infrastructure. **VECTOR** (game development club) owns the Unity project: track and car visuals, ghost playback, camera, UI, audio, and show presentation. Both clubs sit under the college Technical Board.
 - Format is **Trackmania-style ghosts**: cars never collide or interact. A "ghost" is a recorded run of one agent, drawn alongside the others on the same track. The race is a comparison of lap times with a head-to-head visual.
 - Participants get about **one week** to train on a small set of **training tracks**. The final race uses **held-out tracks** that nobody has seen (a train-test split).
-- Participants control the **reward function** (and possibly a bounded model architecture). Everything else is fixed and identical for everyone: algorithm, hyperparameters, environment, budget.
+- Participants build and control the **complete training program**: reward
+  function, model architecture, algorithm, hyperparameters, preprocessing, and
+  weights. SYNAPSE fixes only the environment/evaluation boundary and the
+  event rules that are explicitly frozen.
 - Training is **headless Python** (fast, no renderer). The live show attaches a **Unity renderer** to the same Python simulation or to recorded trajectories. Unity never simulates.
 
 Why this design: the event must feel fair, be cheap to run, teach reward design and generalization, and be fun to watch.
@@ -37,9 +40,10 @@ Why this design: the event must feel fair, be cheap to run, teach reward design 
 
 | Area | Owner | Notes |
 |---|---|---|
-| Python simulation, physics, observations, rewards, termination | AIC | Single source of truth for all game logic |
-| Training script, PPO, step-budget enforcement, logging | AIC | Frozen before the training window opens |
-| Reward interface and architecture bounds | AIC | Participants edit only these |
+| Python simulation, physics, observations, raw signals, termination | AIC | Single source of truth for environment behavior |
+| Participant training script, model, algorithm, reward, checkpoints | Participants | Participants own and replace these locally |
+| Evaluation runner, submission validation, step-budget policy | AIC | Runs on shared hardware at tournament time |
+| Environment contract and participant integration boundary | AIC | Participants cannot alter the environment during evaluation |
 | Track data pipeline (centerline, width, boundaries) | AIC | Exports one geometry file per track |
 | Submission, hash check, evaluation runner | AIC | Runs on shared hardware at tournament time |
 | Unity project, track mesh, car models, effects, camera, UI | VECTOR | Reads state or trajectory data only |
@@ -58,9 +62,15 @@ Why this design: the event must feel fair, be cheap to run, teach reward design 
 
 **P4. Fairness is by environment steps, not hours.** The budget is a count of simulated steps, so hardware speed does not decide the result.
 
-**P5. Reward function is the free variable.** Algorithm, hyperparameters, observation, action space, and tracks are fixed.
+**P5. Participants own the model and training code.** SYNAPSE fixes the
+environment observation/action boundary, raw signal schema, track release, and
+evaluation behavior; it does not prescribe a model, algorithm, hyperparameters,
+or participant reward implementation.
 
-**P6. Let bad reward functions fail visibly.** Do not over-guard. Reward hacking is part of the lesson. Guard only against exploits that break the competition (editing the environment, exceeding the budget, leaking held-out tracks).
+**P6. Let participant code fail visibly.** Do not silently substitute a
+SYNAPSE-owned model or reward. Guard only against exploits that break the
+competition (editing the environment, exceeding the budget, leaking held-out
+tracks, or submitting an invalid artifact).
 
 **P7. Track geometry is data, not code.** One geometry file per track feeds both Python and Unity. Unity builds its mesh from that file.
 
@@ -82,15 +92,16 @@ Why this design: the event must feel fair, be cheap to run, teach reward design 
 | L8 | Participants **can edit their reward function** during training. |
 | L9 | Training happens on **participants' own machines**. Evaluation runs on **shared hardware**. |
 | L10 | Compact **state-vector observations** (not pixels). |
+| L11 | Participants own the complete model/training/reward implementation. SYNAPSE owns the environment, raw transition signals, evaluation, and scoring boundary. |
 
 ### 4.2 RECOMMENDED (proposed, not contested)
 
 | ID | Recommendation |
 |---|---|
-| R1 | Algorithm: **PPO**, fixed. |
+| R1 | PPO is an **optional inspectable reference baseline**, not a participant requirement. |
 | R2 | Observation: raycasts + lookahead curvature + self-state (Section 6.4). |
 | R3 | Action: continuous steering and a single throttle/brake axis (Section 6.5). |
-| R4 | Reward DSL with the signals in Section 6.6, including the speed, curvature-matched speed, and steering smoothness additions. |
+| R4 | Publish raw signals in Section 6.6; a weighted DSL may be provided as an optional starter, while participant reward code remains free. |
 | R5 | **Randomized spawn along the centerline** every episode. Progress reward is a per-tick delta, never absolute track position. |
 | R6 | **Soft penalty** for leaving the drivable surface, **hard termination** on barrier contact. |
 | R7 | Car-to-track-width starting point: track width = 4 to 5 times car width. `[TUNE]` |
@@ -111,13 +122,11 @@ Why this design: the event must feel fair, be cheap to run, teach reward design 
 | O3 | Number and identity of **held-out race tracks** K. | Hypothesis K = 2 or 3. |
 | O4 | Step budget: **cumulative across the week** or **fixed per run, unlimited runs**? | The previous assistant asked and got no answer. Default to cumulative if forced to choose, because it is the stronger fairness guarantee. |
 | O5 | Exact **step budget number**. | Set from Experiment E1 and E2, not by feel. |
-| O6 | **Model architecture** freedom: fixed, or bounded choice (width and depth)? | If bounded, state the allowed set. |
 | O7 | Is a **per-decision latency limit** enforced at tournament time? | For a small MLP the latency is tiny. Recommend dropping it for racing unless the human wants the capacity-vs-latency lesson. |
 | O8 | **Ranking rule**: total time across K tracks, best single track, or points per track? How are DNFs scored? | Recommendation in Section 10.4. |
 | O9 | **Simulation tick rate.** | Recommend 30 Hz as default, 60 Hz if feel demands it. `[TUNE]` |
 | O10 | Ghost presentation: **simultaneous** or **staggered reveal**. | VECTOR's call. No upstream effect. |
 | O11 | **Team size**, prizes, budget, merch for this event. | The proposal doc for this event does not exist yet. |
-| O12 | Is the **raw Python reward function** escape hatch allowed, or only the weighted-signal DSL? | Juniors are in the audience. Recommend DSL by default, raw function as an opt-in advanced mode. |
 | O13 | Whether to make the **hard-crash vs soft-off-track** split exact as in Section 6.7. | Recommended, but confirm. |
 | O14 | Which **real circuits** to draw from, and how closely to follow their layouts. | See Section 7 and Section 15. |
 | O15 | Whether the final show runs agents **live** on stage or plays **recorded** runs. | Recommend recorded (R11). Live is possible with the same code. |
@@ -128,18 +137,22 @@ Why this design: the event must feel fair, be cheap to run, teach reward design 
 
 ### 5.1 Two processes
 
-- **Simulation process (Python).** Holds all state. Runs physics, observations, rewards, termination, scoring, and policy inference.
+- **Simulation process (Python).** Holds all environment state. Runs physics,
+  observations, raw signals, termination, and physical scoring. Participant
+  training code owns reward calculation and policy inference locally.
 - **Render process (Unity).** Holds no rules. Receives state or trajectory data and draws it.
 
 ### 5.2 Three run modes
 
 | Mode | Renderer attached | Where | Purpose |
 |---|---|---|---|
-| Training | No | Participant machine | Fast headless PPO. |
+| Training | No | Participant machine | Fast headless participant-owned training. |
 | Evaluation | No | Shared AIC machine | Run submitted policies on held-out tracks, produce scores and trajectories. |
 | Presentation | Yes (Unity) | Show machine | Play back ghosts from recorded trajectories, or stream live state from Python. |
 
-The same simulation code runs in all three. Only the attached consumer changes.
+The same environment code runs in all three. Participant training code is not
+loaded by the organizer evaluator; only a validated policy artifact is used
+for scoring.
 
 ### 5.3 Transport (presentation mode)
 
@@ -158,7 +171,7 @@ Python ticks at a fixed rate. Unity may render faster and interpolate position a
 
 ### 6.1 Overview
 
-- Gymnasium-style API (`reset`, `step`), batched over `n_envs` in numpy for throughput.
+- Gymnasium-style API (`reset`, `step_raw`), batched over `n_envs` in numpy for throughput. A legacy weighted-reward `step` adapter may remain for the reference baseline.
 - Observation: float32 vector, fixed length and order.
 - Action: 2 continuous values.
 - Episode: one lap from a random spawn point, on a randomly chosen training track.
@@ -340,17 +353,19 @@ Too few tracks leads to memorization. Too many dilutes a fixed step budget. Star
 
 ## 8. TRAINING PIPELINE
 
-### 8.1 Fixed components (participants cannot change)
+### 8.1 Environment-owned components
 
-- Environment package (physics, observation, action, termination, training tracks).
-- PPO implementation and **all hyperparameters**.
-- Parallelism settings (`n_envs`, rollout length).
-- Track sampling rule.
-- Logging and budget enforcement.
+- Environment package (physics, observation, action, termination, raw signals, and training tracks).
+- Track sampling/evaluation rules and public/private map separation.
+- Submission validation, physical scoring, and organizer-side budget policy.
 
-Candidate PPO implementations: a single-file CleanRL-style PPO or Stable-Baselines3. Verify their licenses (both are believed to be permissive). Single-file is easier to audit and freeze.
+Participants own and may replace the model architecture, policy distribution,
+optimizer, algorithm, hyperparameters, preprocessing, checkpoints, and reward
+function. The repository's PPO implementation and 64/64 MLP are an optional
+reference starter only. The organizer evaluator must not import participant
+training code or execute participant reward code.
 
-### 8.2 Starting hyperparameters (`[TUNE]`, validate then freeze)
+### 8.2 Reference baseline hyperparameters (`[TUNE]`, not participant rules)
 
 | Parameter | Starting value |
 |---|---|
@@ -388,12 +403,11 @@ Important: **observation normalization statistics are part of the policy.** Save
 
 1. Clone the repository and check out the tagged release.
 2. Install pinned dependencies (lockfile). Offer a Colab or setup-script fallback.
-3. Edit `reward.yaml` (or the advanced function if allowed).
-4. Optionally choose an architecture from the allowed set (pending O6).
-5. Run `train.py`. It trains headless until the budget or until the participant stops it.
-6. View a **replay**: a lightweight viewer (matplotlib, pygame, or a simple HTML canvas) that renders a saved trajectory on the training tracks. This is required so participants can see why their car behaves as it does. It does not need Unity.
-7. Edit the reward and continue, spending from the same budget.
-8. Submit: policy weights, observation normalization stats, final reward file, architecture config, training log, and environment hash.
+3. Write or replace the participant-owned trainer, model, preprocessing, and reward function.
+4. Run the participant trainer headlessly until the agreed budget or until the participant stops it.
+5. View a **replay**: a lightweight viewer (matplotlib, pygame, or a simple HTML canvas) that renders a saved trajectory on the training tracks. This is required so participants can see why their car behaves as it does. It does not need Unity.
+6. Change any participant-owned training component and continue, spending from the same budget.
+7. Submit the validated model artifact, participant preprocessing metadata, training log, and environment hash. Reward code is for training provenance/audit only and is not executed by scoring.
 
 Recommend a short supervised kickoff session so setup problems do not eat the first days.
 
@@ -407,10 +421,10 @@ Per run, log at minimum: step count, wall time, mean episode return, **each rewa
 
 Submission package:
 
-- Policy weights in a safe format (R10). **Never load untrusted pickle files.** Use safetensors or `torch.load(weights_only=True)`, and reject anything else.
-- Observation normalization stats.
-- Architecture config.
-- Final reward config.
+- Participant model artifact in a safe validated format. **Never load untrusted pickle files.**
+- Any participant-owned preprocessing needed by the artifact.
+- Artifact/architecture metadata declared by the participant and checked by the validator.
+- Optional reward-function/source hash for audit only; scoring never executes it.
 - Training log with step counts.
 - Environment content hash.
 
@@ -419,7 +433,8 @@ AIC verifies:
 1. Environment hash matches the tagged release (hash all environment files, the track data, and the config).
 2. Step count in the log does not exceed the budget and the log is internally consistent.
 3. Weights load and produce actions on a smoke test within the tournament runner.
-4. Architecture is inside the allowed set.
+4. Artifact graph/runtime behavior satisfies the published validator and
+   action/output contract; model architecture itself is participant-owned.
 
 A submission failing any check is rejected, and the participant gets a reason and a chance to fix a packaging problem before the deadline. Define who owns tournament-day edge cases (corrupt file, late submission). Placeholder owner: AIC.
 
@@ -1743,10 +1758,74 @@ historical checkpoint ranking is not implemented yet.
 - Real browser screenshot: **not run** — no browser binary is installed in the
   container. The local server is running for desktop-browser inspection.
 
+## 25. SESSION HANDOFF (2026-10-17, PARTICIPANT OWNERSHIP CORRECTION)
+
+### Human correction
+
+The previous participant workflow was architecturally wrong because it made the
+organizer's fixed PPO model and reward weights look like the participant
+contract. The authoritative boundary is now:
+
+- Participants own the complete training program: model architecture, policy
+  distribution, algorithm, hyperparameters, preprocessing, checkpoints,
+  weights, and reward function/weights.
+- SYNAPSE owns only the environment/evaluation boundary: physics, observations,
+  action semantics, raw signals, termination, tracks, artifact validation, and
+  physical scoring.
+- SYNAPSE must not silently choose PPO, a network shape, or a reward format for
+  participants. The repository's fixed PPO path is an optional reference
+  starter only.
+- Participant reward code runs locally during training and is not executed by
+  the organizer evaluator or serialized into public replays.
+
+### Implemented in this correction
+
+- `racing_event/env.py` and `racing_event/vector_env.py`
+  - Preserve the old weighted-reward `step` adapter for compatibility.
+  - Add `step_raw`, which exposes observations, raw signals, and terminal flags
+    for participant-owned reward calculation.
+  - Accept `reward=None` to create an environment-only instance.
+- `racing_event/reward.py`
+  - Adds the `RewardFunction` callback boundary and finite, lane-by-lane
+    `evaluate_reward_function` helper.
+- `racing_event/rollout.py`
+  - Accepts a participant reward callback and applies it outside the
+    environment while keeping bounded transition batches and budget accounting.
+- `tools/run_reference_baseline.py`
+  - Renames the former fixed participant runner as an optional reference
+    baseline.
+- `tools/train_participant.py`
+  - Becomes a workspace-safe launcher for an arbitrary participant-owned
+    trainer script.
+- `examples/participant_train.py`
+  - Is an explicitly replaceable reference starter, not a required model.
+- `tools/participant_ui.py`
+  - Launches the participant trainer path, labels the environment-only
+    contract, and removes fixed-PPO participant claims.
+- README, participant guide, state schema, replay contract, examples, and this
+  handoff now state the corrected ownership boundary.
+
+### Remaining work
+
+- Define and implement the final model artifact/submission validator, including
+  the supported runtime/operator boundary and generic replay exporter.
+- Separate participant/reference dependencies from the environment runtime if
+  the public release should not install PyTorch by default.
+- Replace or update historical fixed-PPO prose in research reports only when
+  it is presented as current event policy; historical experiment reports may
+  retain their measured fixed-baseline description.
+
+### Required verification
+
+Run `make test`, the direct Node replay suite, Python compilation, the launcher
+smoke, and the UI HTTP smoke before committing this correction. Do not claim
+the generic participant artifact path is complete until its evaluator and
+replay tests exist.
+
 ### Exact next action
 
-Open `http://127.0.0.1:8766/` in a desktop browser, run the setup action only if
-needed, train a tiny 256-transition slice, and inspect the selected-map replay.
-Then commit this SYNAPSE branding/setup/replay follow-up and decide whether the
-clean public participant repository should include the dashboard by default or
-ship it as an optional convenience over the CLI.
+Implement the generic participant artifact/evaluation boundary without adding
+organizer-owned model or reward assumptions. Then rerun the required checks,
+review the clean diff, and commit this ownership correction. Keep the optional
+reference PPO/replay path clearly labeled as a starter until the generic
+artifact exporter and validator exist.

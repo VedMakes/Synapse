@@ -3,8 +3,9 @@
 ## Authority and scope
 
 Replay schema **1.1** (`kind: racing_event_replay`) is the first validated UI
-boundary. Python owns simulation, collisions, progress, rewards, termination,
-and results. A browser or Unity reads poses and events. Playback controls
+boundary. Python owns simulation, collisions, progress, termination, and
+physical results. Participant reward code is a training concern and is not
+executed or serialized by the replay exporter. A browser or Unity reads poses and events. Playback controls
 change only a visual clock; there is no renderer-to-simulation control channel.
 
 The old `tools/run_scripted.py` output is a **legacy 1.0 smoke recording**, not

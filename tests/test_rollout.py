@@ -100,6 +100,31 @@ class RolloutCollectorTests(unittest.TestCase):
             collector.collect(1)
         self.assertEqual(self.budget.status(self.run_id)["used_steps"], 0)
 
+    def test_participant_reward_runs_outside_environment(self) -> None:
+        env = VectorizedRacingEnv(TRACK, CONFIG, reward=None, n_envs=2)
+        calls: list[tuple[dict[str, float], bool, bool]] = []
+
+        def participant_reward(observation, action, signals, terminated, truncated):
+            observation[0] = 999.0
+            action[0] = 999.0
+            calls.append((signals, terminated, truncated))
+            return 2.5
+
+        collector = RolloutCollector(
+            env,
+            ZeroPolicy(),
+            self.budget,
+            self.run_id,
+            reward_function=participant_reward,
+            seed=7,
+        )
+        result = collector.collect(3)
+
+        self.assertIsNone(env.reward_config)
+        self.assertEqual(len(calls), 3)
+        np.testing.assert_allclose(result.batch.rewards[result.batch.active_mask], 2.5)
+        self.assertEqual(set(calls[0][0]), {"progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"})
+
     def test_crash_reset_is_random_new_episode_and_budget_keeps_counting(self) -> None:
         class CrashProbe(VectorizedRacingEnv):
             def __init__(self):

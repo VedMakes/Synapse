@@ -10,7 +10,7 @@ from .observation import (
     build_observation_schema,
 )
 from .ppo import FixedMLPActorCritic, PPOTrainer, PPOUpdateMetrics, compute_masked_gae
-from .reward import RewardConfig
+from .reward import RewardConfig, RewardFunction, evaluate_reward_function
 from .rollout import PPOHyperparameters, RolloutBatch, RolloutCollector, RolloutResult
 from .track import TrackGeometry
 from .vector_env import RacingVectorEnv, VectorizedRacingEnv
@@ -23,6 +23,8 @@ __all__ = [
     "RacingEnv",
     "RacingVectorEnv",
     "RewardConfig",
+    "RewardFunction",
+    "evaluate_reward_function",
     "PPOHyperparameters",
     "RolloutBatch",
     "RolloutCollector",

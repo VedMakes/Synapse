@@ -7,12 +7,13 @@ The current slice provides:
 - A deterministic, track-relative racing environment.
 - A validated geometry-file format and three original synthetic development tracks.
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
-- The participant-facing reward signal DSL.
+- A participant-owned reward boundary over published raw transition signals.
 - A persistent `n` runs by `k` steps-per-run budget.
 - A scripted-run tool that writes a trajectory-like JSON record for later replay and Unity integration.
 - A versioned state/action contract, serializable observation normalizer, and a batched NumPy environment for headless training.
-- A fixed two-layer PyTorch actor-critic, masked GAE, clipped PPO update, safe
-  state-dictionary artifact format, and a measured baseline convergence tool.
+- An optional fixed two-layer PyTorch reference baseline, masked GAE, clipped
+  PPO update, safe state-dictionary artifact format, and a measured baseline
+  convergence tool.
 - A validated, streaming replay export and dependency-free read-only browser
   preview, with a documented future Unity adapter contract.
 
@@ -26,19 +27,24 @@ These are provisional implementation decisions based on the handoff and the late
 - Three training tracks are the intended first event target. Three synthetic development tracks are present; E2 currently uses the oval only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
 - Evaluation submissions will use ONNX. The model input/output contract is not implemented yet.
-- Participant architecture freedom remains subject to the future tournament contract. The local PPO baseline currently uses one fixed MLP; it is not the final architecture submission validator.
-- The reward interface is declarative signals and weights only. A raw Python reward escape hatch is intentionally deferred because it weakens reproducibility and sandboxing.
+- Participants own their model architecture, algorithm, preprocessing, weights,
+  and reward function. The local PPO baseline is only an optional starter, not
+  the event contract.
+- SYNAPSE publishes raw transition signals. Participants may implement reward
+  weights or arbitrary local reward code in their own trainer; scoring never
+  executes participant reward code.
 - Training uses a configurable maximum of `n` runs, with at most `k` environment steps in each run. The budget state is persistent and tamper-evident by hash, but it is not a cumulative-week budget.
 - The provisional simulation rate is 30 Hz.
 - The event date is recorded as the 31st and the environment-release target as the 20th. Month/year still need to be recorded before public scheduling.
 
-## Participant training prototype
+## Participant training launcher
 
-The first minimal participant-facing workflow is available as a bounded local
-CLI. It is a delivery prototype, not a frozen event launcher or final budget
-rule:
+The first minimal participant-facing workflow is a bounded local launcher. It
+does not construct a model or reward function; it runs the participant trainer
+you select. It is a delivery prototype, not a frozen event launcher or final
+budget rule:
 
-First prepare the project environment. This keeps NumPy, PyTorch, and all
+First prepare the project environment. This keeps the SYNAPSE environment
 dependencies inside `.venv`:
 
 ```bash
@@ -51,18 +57,17 @@ Python** button.
 ```bash
 .venv/bin/python tools/build_training_manifest.py
 .venv/bin/python tools/train_participant.py \
+  --trainer examples/participant_train.py \
   --reward examples/baseline_reward.json \
   --steps 2048 --budget-steps 10000 \
   --output-dir participant_run
 ```
 
-It loads all public training maps, uses the fixed two-layer 64/64 PPO model,
-prints progress after each bounded rollout update, persists a local transition
-counter, and writes `training_report.md`, `training_metrics.jsonl`, policy
-artifacts, and the training contract under `participant_run/`. Run the same
-command again with the same output directory to resume the local counter.
-The prototype persists policy weights and observation normalization but resets
-the optimizer on process restart; this is recorded as an open release decision.
+The launcher forwards the published environment inputs to the trainer script
+you select. `examples/participant_train.py` is only a runnable reference
+starter; replace it with your own script to choose the model, algorithm,
+preprocessing, weights, and reward implementation. Run the same command again
+with the same output directory if your trainer supports resuming.
 
 The current onboarding budget example is 10,000 accepted environment
 transitions. It is intentionally not the scored event budget. The recommended
@@ -78,10 +83,11 @@ For a simple browser dashboard around the same CLI, run:
 ```
 
 Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
-library, binds to loopback, launches the existing CLI, and polls its bounded
-progress output. It does not implement a second environment or budget. After a
-policy is saved, use **Watch best run for map** to open a deterministic replay
-for one public map.
+library, binds to loopback, launches the participant-owned trainer through the
+launcher, and polls its bounded progress output. It does not implement a
+second model, reward function, environment, or budget. The bundled starter can
+also produce a reference replay for one public map; generic participant
+artifact replay is a separate submission boundary.
 
 ## Setup
 
@@ -113,9 +119,10 @@ make test
 ## Batched engine and contract
 
 `VectorizedRacingEnv` accepts an `(n_envs, 2)` action array and returns a
-fixed-size float32 observation for each environment, vector rewards, signals,
-events, and termination/truncation flags. The physics transition is batched
-with NumPy while track geometry remains the shared Python authority. Use
+fixed-size float32 observation for each environment, raw signals, events, and
+termination/truncation flags through `step_raw`. The legacy `step` method also
+returns reference weighted rewards for compatibility. The physics transition
+is batched with NumPy while track geometry remains the shared Python authority. Use
 `evaluation=True` on reset for a fixed start-line standing start with zero
 spawn noise.
 
@@ -132,11 +139,12 @@ storage, ranking, and Unity playback remain separate milestones.
 
 ## Trainer boundary
 
-`RolloutCollector` in `racing_event/rollout.py` is the environment-transition
-boundary. It accepts a batched policy callable, reserves the persistent
+`RolloutCollector` in `racing_event/rollout.py` is a reusable transition
+adapter, not the participant's model or algorithm. It accepts a batched policy
+callable and an optional participant-owned reward callback, reserves the persistent
 `RunBudget` in individual environment-transition units, uses a partial active
 mask for a final batch, and resets only lanes that ended.
-`RolloutMetrics` records raw and weighted reward signals, episode outcomes,
+`RolloutMetrics` records raw signals and optional reference weighted terms, episode outcomes,
 speed, off-track rate, action saturation, action smoothness, policy-invisible
 sector coverage, positive off-track progress, boundary excess, and per-track
 statistics. The diagnostic fields do not enter observations, rewards,
@@ -146,7 +154,7 @@ The collector can update a `RunningObservationNormalizer` during training. Save
 that normalizer with `TrainingContract.save`; freeze it before evaluation so
 evaluation does not change the artifact.
 
-`FixedMLPActorCritic` in `racing_event/ppo.py` is the fixed trainer model. It
+`FixedMLPActorCritic` in `racing_event/ppo.py` is an optional reference model. It
 has two 64-unit tanh layers, a two-dimensional tanh-squashed Gaussian policy,
 and a scalar value head. Its initial output bias is `[0.0, 0.5]`, giving the
 longitudinal action a small throttle prior at standing starts. The bias is
@@ -154,7 +162,7 @@ stored in the artifact metadata. `PPOTrainer.update` computes masked GAE and per
 the configured full-batch clipped PPO epochs. Terminations do not bootstrap;
 truncations bootstrap but do not carry GAE across the reset boundary.
 
-Model weights are saved as a state dictionary with
+Reference weights are saved as a state dictionary with
 `FixedMLPActorCritic.save_artifact`; loading uses `weights_only=True` and
 validates the JSON architecture metadata. The provisional PPO values are
 available from `PPOHyperparameters.to_dict()`. They are not public event

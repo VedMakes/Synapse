@@ -19,18 +19,22 @@ from .config import SimulationConfig
 from .env import _wrap_angle
 from .observation import ObservationSchema, TrainingContract, build_observation_schema
 from .physics import CarStateBatch, step_car_batch
-from .reward import RewardConfig
+from .reward import RewardConfig, SIGNAL_NAMES
 from .signals import compute_signals
 from .track import EdgeStatus, Projection, TrackGeometry
 from .telemetry import DEFAULT_SECTOR_COUNT, sector_bit, sector_coverage_count, sector_index
 
 
+_DEFAULT_REWARD = object()
+
+
 class VectorizedRacingEnv:
     """A fixed-size batch of independent racing environments.
 
-    ``reset`` returns ``(n_envs, observation_size)`` observations.  ``step``
-    accepts an ``(n_envs, 2)`` action array and returns vector rewards and
-    termination flags.  Tracks can be supplied as a pool; each environment
+    ``reset`` returns ``(n_envs, observation_size)`` observations.  ``step_raw``
+    accepts an ``(n_envs, 2)`` action array and returns raw signals and
+    termination flags; the legacy ``step`` additionally returns reference
+    weighted rewards. Tracks can be supplied as a pool; each environment
     samples one track at reset and keeps it until the next reset.  A reset can
     target selected lanes, and a step can advance only lanes selected by a
     boolean mask.  Explicit spawn arguments remain scalar or full-batch
@@ -42,7 +46,7 @@ class VectorizedRacingEnv:
         self,
         tracks: TrackGeometry | Sequence[TrackGeometry],
         config: SimulationConfig,
-        reward: RewardConfig | None = None,
+        reward: RewardConfig | None | object = _DEFAULT_REWARD,
         *,
         n_envs: int,
     ):
@@ -57,7 +61,12 @@ class VectorizedRacingEnv:
             raise ValueError("tracks must contain at least one TrackGeometry")
         self.tracks = track_list
         self.config = config
-        self.reward_config = reward or RewardConfig()
+        # Omitting ``reward`` preserves the old vector ``step`` API for the
+        # reference baseline. Passing ``reward=None`` exposes raw signals so
+        # participant code can own reward calculation.
+        self.reward_config = RewardConfig() if reward is _DEFAULT_REWARD else reward
+        if self.reward_config is not None and not isinstance(self.reward_config, RewardConfig):
+            raise TypeError("reward must be a RewardConfig or None")
         self.n_envs = int(n_envs)
         self.observation_schema: ObservationSchema = build_observation_schema(config)
         self.training_contract = TrainingContract.for_config(
@@ -193,7 +202,7 @@ class VectorizedRacingEnv:
             info = {
                 "track_id": tuple(self.tracks[int(index)].track_id for index in self.track_indices),
                 "spawn_s": self.previous_s.copy(),
-                "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights},
+                "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in SIGNAL_NAMES},
                 "evaluation": bool(evaluation),
                 "sector_index": self.sector_index.copy(),
                 "sector_count": DEFAULT_SECTOR_COUNT,
@@ -303,7 +312,7 @@ class VectorizedRacingEnv:
         info = {
             "track_id": tuple(self.tracks[int(index)].track_id for index in self.track_indices),
             "spawn_s": self.previous_s.copy(),
-            "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights},
+            "signals": {name: np.zeros(self.n_envs, dtype=np.float64) for name in SIGNAL_NAMES},
             "evaluation": bool(evaluation),
             "sector_index": self.sector_index.copy(),
             "sector_count": DEFAULT_SECTOR_COUNT,
@@ -440,7 +449,7 @@ class VectorizedRacingEnv:
             self.sector_index[active_indices] = sector_indices_active
             self.sector_coverage_mask[active_indices] |= coverage_bits
 
-        signals: dict[str, np.ndarray] = {name: np.zeros(self.n_envs, dtype=np.float64) for name in self.reward_config.weights}
+        signals: dict[str, np.ndarray] = {name: np.zeros(self.n_envs, dtype=np.float64) for name in SIGNAL_NAMES}
         rewards = np.zeros(self.n_envs, dtype=np.float64)
         events: list[list[str]] = [[] for _ in range(self.n_envs)]
         for position, (index, track, projection, edge) in enumerate(
@@ -474,7 +483,8 @@ class VectorizedRacingEnv:
             )
             for name, value in current_signals.items():
                 signals[name][index] = value
-            rewards[index] = self.reward_config.calculate(current_signals)
+            if self.reward_config is not None:
+                rewards[index] = self.reward_config.calculate(current_signals)
             current_events: list[str] = []
             if edge.off_track and not previous_off_track[position]:
                 current_events.append("off_track_start")
@@ -512,6 +522,24 @@ class VectorizedRacingEnv:
         self.previous_s[active_indices] = current_s[active_indices]
         self.last_info = info
         return observation, rewards, terminated, truncated, info
+
+    def step_raw(
+        self,
+        actions: np.ndarray | Iterable[Iterable[float]],
+        *,
+        active_mask: np.ndarray | None = None,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+        """Advance transitions and return raw signals without reward.
+
+        The legacy five-value ``step`` method remains available for the local
+        reference baseline. Participant-owned trainers should use this raw
+        boundary and calculate rewards outside the simulator.
+        """
+
+        observation, _legacy_rewards, terminated, truncated, info = self.step(
+            actions, active_mask=active_mask
+        )
+        return observation, terminated, truncated, info
 
     def _observation_at(self, index: int, projection: Projection | None = None) -> np.ndarray:
         track = self.tracks[int(self.track_indices[index])]

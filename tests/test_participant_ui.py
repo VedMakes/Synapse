@@ -23,15 +23,17 @@ class ParticipantUiTests(unittest.TestCase):
         )
 
     def test_command_is_workspace_bound_and_uses_existing_cli(self) -> None:
-        command = build_training_command({"output_dir": "ui-run", "steps": 16})
+        command = build_training_command({"output_dir": "ui-run", "trainer": "examples/participant_train.py", "steps": 16})
         self.assertTrue(command[1].endswith("tools/train_participant.py"))
+        self.assertIn("--trainer", command)
+        self.assertTrue(command[command.index("--trainer") + 1].endswith("/examples/participant_train.py"))
         self.assertIn("--output-dir", command)
         self.assertTrue(command[command.index("--output-dir") + 1].endswith("/ui-run"))
         with self.assertRaises(ValueError):
             build_training_command({"output_dir": "../../outside"})
 
     def test_page_contains_participant_contract_and_controls(self) -> None:
-        for text in ("Start / resume SYNAPSE training", "Cumulative budget", "Fixed PPO policy", "Watch best run for map", "Set up / repair Python", "/api/status"):
+        for text in ("Start / resume participant training", "Cumulative budget", "Your model and reward", "Watch reference artifact for map", "Set up / repair Python", "/api/status"):
             self.assertIn(text, PAGE)
 
     def test_public_map_selector_has_three_development_maps(self) -> None:

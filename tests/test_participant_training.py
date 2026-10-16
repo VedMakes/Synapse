@@ -6,7 +6,8 @@ import tempfile
 import unittest
 
 from tools.build_training_manifest import build_manifest
-from tools.train_participant import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
+from tools.run_reference_baseline import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
+from tools.train_participant import build_training_command
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,7 +22,7 @@ class ParticipantTrainingTests(unittest.TestCase):
         self.assertTrue(all(len(item["canonical_content_hash"]) == 64 for item in manifest["maps"]))
         self.assertTrue(all(len(item["delivered_file_sha256"]) == 64 for item in manifest["maps"]))
 
-    def test_participant_runner_resumes_persistent_budget(self) -> None:
+    def test_reference_baseline_resumes_persistent_budget(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory) / "run"
             args = Namespace(
@@ -43,6 +44,26 @@ class ParticipantTrainingTests(unittest.TestCase):
             self.assertTrue((output_dir / "policy.pt").exists())
             self.assertTrue((output_dir / "training_contract.json").exists())
             self.assertEqual(len((output_dir / "training_metrics.jsonl").read_text().splitlines()), 2)
+
+    def test_participant_launcher_forwards_owned_trainer(self) -> None:
+        args = Namespace(
+            trainer=ROOT / "examples" / "participant_train.py",
+            reward=DEFAULT_REWARD,
+            track_dir=DEFAULT_TRACK_DIR,
+            config=DEFAULT_CONFIG,
+            output_dir=ROOT / "participant_run",
+            steps=8,
+            budget_steps=16,
+            n_envs=1,
+            rollout_length=8,
+            seed=17,
+        )
+        command = build_training_command(args)
+        self.assertTrue(command[1].endswith("examples/participant_train.py"))
+        self.assertIn("--steps", command)
+        with self.assertRaises(ValueError):
+            args.trainer = ROOT.parent / "outside.py"
+            build_training_command(args)
 
 
 if __name__ == "__main__":

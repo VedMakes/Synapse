@@ -260,7 +260,7 @@ class TrainingContract:
     track_ids: tuple[str, ...] = ()
     track_hashes: tuple[str, ...] = ()
     config_hash: str = ""
-    action_distribution: str = "tanh_normal"
+    action_distribution: str = "participant_defined"
     evaluation_spawn: str = "fixed_start_line_standing_zero_noise"
     deterministic_evaluation: bool = True
     version: str = TRAINING_CONTRACT_VERSION

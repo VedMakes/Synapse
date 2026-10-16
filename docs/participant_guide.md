@@ -2,7 +2,7 @@
 
 This is the first participant-facing training path for the local prototype. It
 is intentionally marked as a draft. The exact event budget, final map set,
-submission format, ranking rule, and architecture policy are still open in the
+submission format, ranking rule, and artifact validator are still open in the
 event decision register.
 
 ## Recommended delivery
@@ -10,10 +10,10 @@ event decision register.
 The event should publish one immutable participant release, not a moving branch.
 The release should contain:
 
-- the inspectable Python simulator and fixed trainer;
+- the inspectable Python simulator and an optional reference trainer;
 - public training maps and their manifest;
 - the observation/action contract;
-- the reward configuration template;
+- raw transition signals and a participant-owned reward/training boundary;
 - a local smoke test and deterministic evaluation helper;
 - a versioned wheelhouse for the supported Python 3.11 platform; and
 - an optional Docker path for participants who want it.
@@ -30,20 +30,25 @@ From the repository root, prepare the project environment first:
 python3 tools/setup_participant.py
 ```
 
-Then run the local trainer:
+Then launch the trainer you own:
 
 ```bash
 .venv/bin/python tools/build_training_manifest.py
 .venv/bin/python tools/train_participant.py \
+  --trainer examples/participant_train.py \
   --reward examples/baseline_reward.json \
   --steps 2048 \
   --budget-steps 10000 \
   --output-dir participant_run
 ```
 
-The command loads all public JSON maps in `tracks/train/`, trains the fixed
-two-layer PPO policy in bounded rollout chunks, and prints a small progress
-line after each update. It writes:
+The launcher validates workspace paths and forwards the published inputs to
+your trainer. The bundled `examples/participant_train.py` delegates to the
+optional reference PPO only so the checkout has a runnable smoke test. Replace
+that file with your own training program to own the model architecture,
+algorithm, preprocessing, checkpoints, and reward function. A trainer that
+supports the dashboard should print the documented `update ...` progress line.
+The reference starter writes:
 
 ```text
 participant_run/
@@ -51,9 +56,9 @@ participant_run/
   training_state.json      # release/config/reward/map identity
   training_metrics.jsonl   # one bounded-size record per update
   training_report.md       # human-readable local dashboard
-  policy.pt                # safe state dictionary for the prototype
-  policy.json              # architecture metadata
-  training_contract.json   # schema, map/config hashes, normalizer
+  policy.pt                # reference starter artifact only
+  policy.json              # reference architecture metadata
+  training_contract.json   # environment schema and normalizer for the starter
 ```
 
 Run the same command again with the same `--budget-steps` and output directory
@@ -74,33 +79,60 @@ The same workflow has a small dependency-free Python web UI:
 .venv/bin/python tools/participant_ui.py
 ```
 
-Open `http://127.0.0.1:8766/`. The dashboard provides editable paths and
-bounded-run settings, start/resume and stop controls, budget progress, update
-metrics, a live log, and a short fixed-contract panel. It launches the same
-`tools/train_participant.py` command. It binds to loopback only and is not a
-network service or a second simulator.
+Open `http://127.0.0.1:8766/`. The dashboard provides editable trainer/reward
+paths and bounded-run settings, start/resume and stop controls, budget
+progress, update metrics, a live log, and the SYNAPSE environment contract. It
+launches the same `tools/train_participant.py` command. It binds to loopback
+only and is not a network service or a second model, reward function, or
+simulator.
 
 The dashboard also has a **Set up / repair Python** button. If the UI detects
-that NumPy or PyTorch is missing, it refuses to launch a broken trainer and
-shows the setup command instead. After a policy is saved, choose **Watch best
-run for map** to evaluate the current saved policy deterministically from the
-fixed start and open its read-only replay.
+that NumPy is missing, it refuses to launch a broken environment and shows the
+setup command instead. The bundled reference starter has a **Watch reference
+artifact for map** action; a generic participant artifact replay/export
+contract is not implemented yet.
 
-## Participant contract
+## Participant-owned training boundary
 
-The current provisional policy receives 23 `float32` track-relative values and
-returns two finite actions in `[-1, 1]`:
+The SYNAPSE environment publishes 23 `float32` track-relative values and
+accepts two finite actions in `[-1, 1]`:
 
 1. steering;
 2. throttle/brake, where positive is throttle and negative is braking.
 
-The fixed prototype model is two hidden `tanh` layers of 64 units each. The
-participant-facing free variable is the declarative reward weights in the
-published signal set. Physics, observations, action semantics, PPO settings,
-termination, tracks, and budget accounting are not participant-editable.
+Participants own the policy/model architecture, inference distribution,
+optimizer, training algorithm, preprocessing, checkpoint format, weights, and
+reward function. SYNAPSE owns the physics transition, observation/action
+semantics, termination, public tracks, raw signal names, evaluation starts,
+and scoring environment.
 
-Reward configuration is JSON in this prototype. Non-finite values such as NaN
-and Infinity are rejected before training.
+`VectorizedRacingEnv.step_raw` returns the next observation, termination flags,
+and raw signals. A participant reward callback may use those signals, the
+observation, action, and transition outcome to return one finite scalar.
+`examples/participant_reward.py` shows the callable shape only; copy and
+replace it in your own trainer workspace.
+`RewardConfig` and `examples/baseline_reward.json` are only a reference
+weighted-signal adapter. Non-finite reward values are rejected before the
+training batch is created.
+
+A participant-owned trainer can use the reusable transition adapter without
+accepting its reference PPO implementation:
+
+```python
+env = VectorizedRacingEnv(tracks, config, reward=None, n_envs=your_batch_size)
+collector = RolloutCollector(
+    env,
+    your_policy,
+    budget,
+    run_id,
+    reward_function=your_reward,
+)
+batch = collector.collect(your_transition_count).batch
+# Update your own model/optimizer/algorithm from `batch`.
+```
+
+The callback receives copies of the observation, action, raw signals, and
+terminal flags. It cannot replace or mutate the environment transition.
 
 ## Budget and fairness draft
 
@@ -140,8 +172,7 @@ The following remain discussion items rather than hidden implementation choices:
   organizer retraining;
 - exact scored transition budget;
 - final public/private map counts and identities;
-- fixed architecture versus a bounded architecture division;
-- ONNX operator/runtime contract and submission validator;
-- reward-edit and checkpoint rules;
+- model artifact format, operator/runtime contract, and submission validator;
+- reward-code packaging, checkpoint, and budget-enforcement rules;
 - deterministic evaluation starts, retries, DNF scoring, and ranking; and
 - supported native platforms and offline wheelhouse contents.

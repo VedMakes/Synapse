@@ -16,8 +16,9 @@ boundary remain unfinished.
 - Install the Python 3.11 environment from the lockfile.
 - Run the 77+ test suite and the deterministic scripted smoke test.
 - Inspect three original synthetic public training maps.
-- Use `RacingEnv` or `VectorizedRacingEnv`, the declarative reward config,
-  `RolloutCollector`, fixed PPO model, and deterministic evaluator APIs.
+- Use `RacingEnv` or `VectorizedRacingEnv`, the raw transition/signal boundary,
+  participant-owned reward callback, `RolloutCollector`, and deterministic
+  evaluator APIs. The fixed PPO path is only an optional reference starter.
 - Build the public map manifest with `tools/build_training_manifest.py`.
 - Run the provisional participant workflow with `tools/train_participant.py`.
 - Inspect the bounded terminal progress output and
@@ -25,17 +26,18 @@ boundary remain unfinished.
 
 ## Implemented in this slice
 
-- The participant runner loads all public maps instead of the old single-oval
-  E2 fixture.
+- The participant launcher forwards public maps and environment inputs to an
+  arbitrary participant-owned trainer instead of constructing a model itself.
 - A local one-run persistent budget is resumed across invocations and charges
   active vector lanes through the existing `RunBudget`/`RolloutCollector`
   boundary.
-- Policy, training normalizer, contract, state, JSONL metrics, and a small
-  Markdown report are saved after each bounded PPO update.
+- The optional reference starter saves policy, training normalizer, contract,
+  state, JSONL metrics, and a small Markdown report after each bounded PPO
+  update; participant trainers may use any artifact and algorithm.
 - The runner refuses a changed reward/config/map identity or a missing policy
   after budget usage. It does not accumulate the full budget in memory.
-- Reward weights now reject NaN, Infinity, and non-numeric values before the
-  participant trainer starts.
+- Raw participant reward callbacks receive copied observations/actions/signals
+  and reject non-finite scalar outputs before a training batch is created.
 - `tracks/train/manifest.json` records public map IDs, canonical content hashes,
   delivered-byte hashes, units, and validator identity.
 
@@ -55,8 +57,8 @@ boundary remain unfinished.
 
 - Full public repository versus curated participant release boundary.
 - Exact cumulative scored transition budget and enforcement strength.
-- Fixed model architecture versus a bounded architecture division.
-- Reward edit/checkpoint rules and whether local training is honor-system,
+- Participant artifact format/operator validator and resource limits.
+- Reward-code packaging/checkpoint rules and whether local training is honor-system,
   launcher-anchored, or organizer-retrained.
 - ONNX submission details, held-out track count, deterministic starts/retries,
   ranking, DNF penalties, supported platforms, and artifact rights.

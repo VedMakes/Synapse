@@ -1,7 +1,8 @@
-"""Budgeted rollout collection for the fixed racing environment contract.
+"""Budgeted rollout collection for the SYNAPSE environment boundary.
 
-This module owns environment transitions and metrics.  The PPO optimizer lives
-in :mod:`racing_event.ppo`, which consumes the immutable batch produced here.
+This module owns environment transitions and metrics.  The optional reference
+PPO optimizer lives in :mod:`racing_event.ppo`, which consumes the immutable
+batch produced here; participant algorithms remain outside this package.
 The separation keeps budget accounting independent from model updates:
 policy observations, exact environment-step accounting, selective lane
 stepping/resetting, saved observation normalization, and training metrics.
@@ -9,7 +10,7 @@ stepping/resetting, saved observation normalization, and training metrics.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from numbers import Integral
 import time
@@ -20,6 +21,7 @@ import numpy as np
 from .budget import RunBudget, StepLimitExceeded
 from .metrics import RolloutMetrics
 from .observation import RunningObservationNormalizer
+from .reward import RewardFunction, SIGNAL_NAMES, evaluate_reward_function
 from .vector_env import VectorizedRacingEnv
 
 
@@ -144,6 +146,8 @@ class RolloutCollector:
         run_id: str,
         *,
         normalizer: RunningObservationNormalizer | None = None,
+        reward_function: RewardFunction | None = None,
+        reward_weights: Mapping[str, float] | None = None,
         training: bool = True,
         seed: int | None = None,
     ) -> None:
@@ -162,6 +166,12 @@ class RolloutCollector:
         self.budget = budget
         self.run_id = run_id
         self.normalizer = normalizer
+        self.reward_function = reward_function
+        if reward_weights is None and env.reward_config is not None:
+            reward_weights = env.reward_config.weights
+        self.reward_weights = {
+            name: float((reward_weights or {}).get(name, 0.0)) for name in SIGNAL_NAMES
+        }
         self.training = bool(training)
         self.seed = seed
         self._raw_observation: np.ndarray | None = None
@@ -209,10 +219,10 @@ class RolloutCollector:
             terminated=np.empty((0, self.env.n_envs), dtype=bool),
             truncated=np.empty((0, self.env.n_envs), dtype=bool),
             active_mask=np.empty((0, self.env.n_envs), dtype=bool),
-            signals={name: np.empty((0, self.env.n_envs), dtype=np.float64) for name in self.env.reward_config.weights},
+            signals={name: np.empty((0, self.env.n_envs), dtype=np.float64) for name in SIGNAL_NAMES},
             track_ids=(),
         )
-        return RolloutResult(batch=batch, metrics=RolloutMetrics(self.env.n_envs, self.env.config.dt, self.env.reward_config.weights).snapshot(wall_time_s=wall_time_s), wall_time_s=wall_time_s)
+        return RolloutResult(batch=batch, metrics=RolloutMetrics(self.env.n_envs, self.env.config.dt, self.reward_weights).snapshot(wall_time_s=wall_time_s), wall_time_s=wall_time_s)
 
     def collect(self, steps: int, *, metrics: RolloutMetrics | None = None) -> RolloutResult:
         """Collect exactly ``steps`` transitions or raise before stepping.
@@ -230,7 +240,7 @@ class RolloutCollector:
                 f"requested {steps} transitions exceeds {remaining} remaining steps for {self.run_id}"
             )
         if metrics is None:
-            metrics = RolloutMetrics(self.env.n_envs, self.env.config.dt, self.env.reward_config.weights)
+            metrics = RolloutMetrics(self.env.n_envs, self.env.config.dt, self.reward_weights)
         elif metrics.n_envs != self.env.n_envs:
             raise ValueError("metrics n_envs does not match environment")
 
@@ -243,7 +253,7 @@ class RolloutCollector:
         truncated: list[np.ndarray] = []
         active_masks: list[np.ndarray] = []
         signal_history: dict[str, list[np.ndarray]] = {
-            name: [] for name in self.env.reward_config.weights
+            name: [] for name in SIGNAL_NAMES
         }
         track_history: list[tuple[str, ...]] = []
         collected = 0
@@ -260,9 +270,22 @@ class RolloutCollector:
             active_mask = np.zeros(self.env.n_envs, dtype=bool)
             active_mask[active_indices] = True
 
+            raw_observation = self._raw_observation.copy() if self._raw_observation is not None else observation.copy()
             raw_action = self._validate_policy_action(self.policy(observation.copy()))
             self.budget.consume(self.run_id, count)
-            next_raw, reward, term, trunc, info = self.env.step(raw_action, active_mask=active_mask)
+            if self.reward_function is None:
+                next_raw, reward, term, trunc, info = self.env.step(raw_action, active_mask=active_mask)
+            else:
+                next_raw, term, trunc, info = self.env.step_raw(raw_action, active_mask=active_mask)
+                reward = evaluate_reward_function(
+                    self.reward_function,
+                    raw_observation,
+                    raw_action,
+                    info["signals"],
+                    term,
+                    trunc,
+                    active_mask,
+                )
             next_observation = self._normalize(next_raw, active_mask)
             metrics.update(
                 rewards=reward,
