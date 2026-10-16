@@ -221,6 +221,52 @@ The measured local E2 artifact is retained outside Git at
 `artifacts/e2-stable/` (`policy.pt`, `policy.json`, and
 `training_contract.json`).
 
+## Declarative participant artifact (first generic evaluator slice)
+
+The repository now includes a Torch-free, organizer-side evaluator for a safe
+first generic submission format. A participant artifact is a directory with
+exactly:
+
+```text
+submission/
+  manifest.json
+  training_contract.json
+  weights.npz
+```
+
+`manifest.json` declares a sequential NumPy MLP, preprocessing mode, schema
+identity, and file hashes. The loader supports participant-chosen feed-forward
+layer widths and `identity`, `relu`, and `tanh` activations, with bounded layer,
+parameter, file-size, and inference-batch limits. It does not load participant
+Python, pickle, reward modules, or arbitrary operators. The contract normalizer
+must be frozen for this artifact path.
+
+Evaluate it against organizer-provided tracks with:
+
+```bash
+.venv/bin/python tools/evaluate_participant.py \
+  --artifact-dir submission \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --repeats 2 \
+  --output artifacts/participant-evaluation.json
+```
+
+The same artifact can be exported through the existing replay schema:
+
+```bash
+.venv/bin/python tools/export_replay.py \
+  --artifact-dir submission \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --participant-id team-a \
+  --output artifacts/replay/team-a.json
+```
+
+This is a safe first generic artifact format, not yet the final ONNX/event
+submission contract. The evaluator still needs organizer-owned process,
+memory, CPU, wall-time, network, and private-track supervision before event use.
+
 ## Replay UI boundary (Python simulation only)
 
 Generate a complete smoke-controller replay and bundle an offline preview:

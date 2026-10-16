@@ -16,7 +16,7 @@ from typing import Any, Callable
 import numpy as np
 
 from .observation import RunningObservationNormalizer, TrainingContract
-from .trajectory import replay_frame
+from .trajectory import engine_code_hash, replay_frame
 from .vector_env import VectorizedRacingEnv
 
 
@@ -61,6 +61,8 @@ def validate_evaluation_contract(
     env: VectorizedRacingEnv,
     contract: TrainingContract,
     normalizer: RunningObservationNormalizer | None = None,
+    *,
+    require_track_match: bool = True,
 ) -> None:
     """Reject an artifact that does not belong to ``env``.
 
@@ -77,16 +79,47 @@ def validate_evaluation_contract(
         raise ValueError("saved observation size does not match the environment")
     if contract.config_hash != env.training_contract.config_hash:
         raise ValueError("saved config hash does not match the environment")
-    if contract.track_ids != tuple(track.track_id for track in env.tracks):
-        raise ValueError("saved track IDs do not match the environment")
-    if contract.track_hashes != tuple(track.content_hash for track in env.tracks):
-        raise ValueError("saved track hashes do not match the environment")
+    if not contract.track_ids or len(contract.track_ids) != len(contract.track_hashes):
+        raise ValueError("saved training track IDs and hashes must be paired")
+    if require_track_match:
+        if contract.track_ids != tuple(track.track_id for track in env.tracks):
+            raise ValueError("saved track IDs do not match the environment")
+        if contract.track_hashes != tuple(track.content_hash for track in env.tracks):
+            raise ValueError("saved track hashes do not match the environment")
     if contract.action_distribution not in {"participant_defined", "tanh_normal"}:
         raise ValueError("saved contract uses an unsupported action distribution")
     if not contract.deterministic_evaluation or contract.evaluation_spawn != "fixed_start_line_standing_zero_noise":
         raise ValueError("saved contract does not describe deterministic evaluation")
     if normalizer is not None and normalizer.size != env.observation_size:
         raise ValueError("saved normalizer size does not match the environment")
+    if not require_track_match and normalizer is not None and normalizer.training:
+        raise ValueError("saved normalizer must be frozen for evaluation")
+
+
+def evaluate_participant_artifact(
+    env: VectorizedRacingEnv,
+    artifact: Any,
+    *,
+    max_steps: int | None = None,
+    frame_sink: Callable[[dict[str, Any]], None] | None = None,
+) -> EvaluationResult:
+    """Evaluate a validated model artifact without executing participant code."""
+
+    from .model_artifact import ParticipantModelArtifact
+
+    if not isinstance(artifact, ParticipantModelArtifact):
+        raise TypeError("artifact must be a ParticipantModelArtifact")
+    if env.reward_config is not None:
+        raise ValueError("participant artifact evaluation requires an environment with reward=None")
+    if artifact.manifest["environment_code_hash"] != engine_code_hash():
+        raise ValueError("artifact.environment: environment code hash does not match evaluator")
+    validate_evaluation_contract(
+        env,
+        artifact.contract,
+        artifact.normalizer,
+        require_track_match=False,
+    )
+    return evaluate_policy(env, artifact, max_steps=max_steps, frame_sink=frame_sink)
 
 
 def _hash_array(digest: "hashlib._Hash", name: str, value: Any, dtype: str) -> None:
@@ -267,4 +300,9 @@ def evaluate_policy(
     )
 
 
-__all__ = ["EvaluationResult", "evaluate_policy", "validate_evaluation_contract"]
+__all__ = [
+    "EvaluationResult",
+    "evaluate_policy",
+    "evaluate_participant_artifact",
+    "validate_evaluation_contract",
+]

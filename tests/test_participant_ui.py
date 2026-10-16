@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import os
+from pathlib import Path
 import sys
+import tempfile
 import time
 
 from tools.participant_ui import PAGE, TrainingProcess, build_training_command, parse_update_line, public_maps
@@ -74,6 +77,32 @@ class ParticipantUiTests(unittest.TestCase):
             time.sleep(0.02)
         self.assertFalse(snapshot["running"])
         self.assertEqual(snapshot["state"], "stopped")
+
+    def test_stop_terminates_the_trainer_process_group(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "child.pid"
+            code = (
+                "import pathlib, subprocess, sys, time; "
+                "child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(10)']); "
+                "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(10)"
+            )
+            process = TrainingProcess()
+            process.start_command([sys.executable, "-c", code, str(pid_path)], kind="tree-test")
+            for _ in range(100):
+                if pid_path.exists():
+                    break
+                time.sleep(0.02)
+            self.assertTrue(pid_path.exists())
+            child_pid = int(pid_path.read_text())
+            process.stop()
+            for _ in range(150):
+                try:
+                    os.kill(child_pid, 0)
+                except ProcessLookupError:
+                    break
+                time.sleep(0.02)
+            with self.assertRaises(ProcessLookupError):
+                os.kill(child_pid, 0)
 
 
 if __name__ == "__main__":

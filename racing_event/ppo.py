@@ -13,7 +13,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 from numbers import Integral
+import os
 from pathlib import Path
+import tempfile
 import time
 from typing import Any, Mapping
 
@@ -259,11 +261,26 @@ class FixedMLPActorCritic(nn.Module):
         weights = Path(weights_path)
         metadata = Path(metadata_path) if metadata_path is not None else weights.with_suffix(".json")
         state = {name: value.detach().cpu() for name, value in self.state_dict().items()}
-        torch.save(state, weights)
-        metadata.write_text(
-            json.dumps(self.artifact_metadata(hyperparameters), sort_keys=True, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        weights.parent.mkdir(parents=True, exist_ok=True)
+        metadata.parent.mkdir(parents=True, exist_ok=True)
+        weight_fd, weight_name = tempfile.mkstemp(prefix=f".{weights.name}.", suffix=".tmp", dir=weights.parent)
+        metadata_fd, metadata_name = tempfile.mkstemp(prefix=f".{metadata.name}.", suffix=".tmp", dir=metadata.parent)
+        weight_temp = Path(weight_name)
+        metadata_temp = Path(metadata_name)
+        try:
+            with os.fdopen(weight_fd, "wb") as stream:
+                torch.save(state, stream)
+                stream.flush()
+                os.fsync(stream.fileno())
+            with os.fdopen(metadata_fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(self.artifact_metadata(hyperparameters), sort_keys=True, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(weight_temp, weights)
+            os.replace(metadata_temp, metadata)
+        finally:
+            weight_temp.unlink(missing_ok=True)
+            metadata_temp.unlink(missing_ok=True)
         return weights, metadata
 
     @classmethod

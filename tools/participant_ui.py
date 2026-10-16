@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -206,10 +207,12 @@ class TrainingProcess:
             self._process = subprocess.Popen(
                 command,
                 cwd=ROOT,
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                start_new_session=True,
             )
             self._thread = Thread(target=self._read_output, args=(self._process,), daemon=True)
             self._thread.start()
@@ -219,7 +222,10 @@ class TrainingProcess:
         with self._lock:
             process = self._process
             if process is not None and process.poll() is None:
-                process.terminate()
+                try:
+                    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+                except ProcessLookupError:
+                    pass
                 self._status["state"] = "stopping"
                 Thread(target=self._escalate_stop, args=(process,), daemon=True).start()
         return self.snapshot()
@@ -229,7 +235,10 @@ class TrainingProcess:
         try:
             process.wait(timeout=2.0)
         except subprocess.TimeoutExpired:
-            process.kill()
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
     def _read_output(self, process: subprocess.Popen[str]) -> None:
         assert process.stdout is not None

@@ -4,6 +4,7 @@ from argparse import Namespace
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from tools.build_training_manifest import build_manifest
 from tools.run_reference_baseline import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
@@ -83,6 +84,41 @@ class ParticipantTrainingTests(unittest.TestCase):
         args.config = ROOT / "artifacts" / "missing-config.json"
         with self.assertRaisesRegex(ValueError, "config does not exist"):
             build_training_command(args)
+
+    def test_reference_checkpoint_recovers_after_policy_publish_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = Path(directory) / "recover"
+            args = Namespace(
+                reward=DEFAULT_REWARD,
+                track_dir=DEFAULT_TRACK_DIR,
+                tracks=None,
+                config=DEFAULT_CONFIG,
+                output_dir=output_dir,
+                budget_steps=8,
+                steps=4,
+                n_envs=1,
+                rollout_length=4,
+                seed=17,
+            )
+            from tools import run_reference_baseline
+
+            original = run_reference_baseline.FixedMLPActorCritic.save_artifact
+            calls = 0
+
+            def flaky_save(policy, *save_args, **save_kwargs):
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    raise OSError("injected checkpoint interruption")
+                return original(policy, *save_args, **save_kwargs)
+
+            with patch.object(run_reference_baseline.FixedMLPActorCritic, "save_artifact", flaky_save):
+                with self.assertRaisesRegex(OSError, "injected"):
+                    run_reference_baseline.run(args)
+            self.assertTrue((output_dir / "training_state.json").exists())
+            resumed = run_reference_baseline.run(args)
+            self.assertEqual(resumed["budget_used"], 8)
+            self.assertEqual(len((output_dir / "training_metrics.jsonl").read_text().splitlines()), 1)
 
 
 if __name__ == "__main__":

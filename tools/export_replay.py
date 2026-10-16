@@ -14,7 +14,8 @@ if __package__ in (None, ""):
 import numpy as np
 
 from racing_event.config import SimulationConfig
-from racing_event.evaluation import evaluate_policy, validate_evaluation_contract
+from racing_event.evaluation import evaluate_participant_artifact, evaluate_policy, validate_evaluation_contract
+from racing_event.model_artifact import load_participant_artifact
 from racing_event.observation import TrainingContract
 from racing_event.track import TrackGeometry
 from racing_event.trajectory import ReplayWriter, replay_header, replay_result
@@ -23,15 +24,33 @@ from tools.run_scripted import scripted_action
 
 
 def export(args: argparse.Namespace) -> dict:
-    sources = (args.config, args.track, args.weights, args.metadata, args.contract)
+    artifact_dir = getattr(args, "artifact_dir", None)
+    sources = (args.config, args.track, args.weights, args.metadata, args.contract, artifact_dir)
     if any(p is not None and Path(p).resolve() == args.output.resolve() for p in sources):
         raise ValueError("replay output must not overwrite a source artifact")
+    if artifact_dir is not None:
+        artifact_root = Path(artifact_dir).resolve()
+        try:
+            args.output.resolve().relative_to(artifact_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("replay output must stay outside the participant artifact directory")
+        if any(value is not None for value in (args.weights, args.metadata, args.contract)):
+            raise ValueError("--artifact-dir cannot be combined with reference PPO artifact options")
     config = SimulationConfig.from_file(args.config)
     track = TrackGeometry.from_file(args.track)
-    env = VectorizedRacingEnv(track, config, n_envs=1)
+    env = (
+        VectorizedRacingEnv(track, config, reward=None, n_envs=1)
+        if artifact_dir is not None
+        else VectorizedRacingEnv(track, config, n_envs=1)
+    )
     normalizer = None
-    mode = "scripted" if args.weights is None else "evaluation"
-    if args.weights is None:
+    mode = "scripted" if args.weights is None and artifact_dir is None else "evaluation"
+    artifact = None
+    if artifact_dir is not None:
+        artifact = load_participant_artifact(artifact_dir)
+    elif args.weights is None:
         if args.contract is not None or args.metadata is not None:
             raise ValueError("--contract and --metadata require --weights")
 
@@ -54,9 +73,14 @@ def export(args: argparse.Namespace) -> dict:
 
     header = replay_header(track, config, mode=mode, participant_id=args.participant_id)
     with ReplayWriter(args.output, header) as writer:
-        result = evaluate_policy(
-            env, policy, normalizer=normalizer, max_steps=args.steps, frame_sink=writer.append,
-        )
+        if artifact is not None:
+            result = evaluate_participant_artifact(
+                env, artifact, max_steps=args.steps, frame_sink=writer.append,
+            )
+        else:
+            result = evaluate_policy(
+                env, policy, normalizer=normalizer, max_steps=args.steps, frame_sink=writer.append,
+            )
         writer.finish(replay_result(result, config.tick_hz))
     return result.to_dict()
 
@@ -66,6 +90,7 @@ def main() -> None:
     policy_group = parser.add_mutually_exclusive_group(required=True)
     policy_group.add_argument("--scripted", action="store_true", help="smoke controller, not a trained policy")
     policy_group.add_argument("--weights", type=Path, help="saved reference-PPO state dictionary")
+    policy_group.add_argument("--artifact-dir", type=Path, help="declarative participant model artifact directory")
     parser.add_argument("--metadata", type=Path)
     parser.add_argument("--contract", type=Path)
     parser.add_argument("--track", type=Path, default=Path("tracks/train/synthetic_oval.json"))

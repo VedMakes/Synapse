@@ -5,6 +5,8 @@ import importlib.util
 from .config import SimulationConfig
 from .env import RacingEnv
 from .evaluation import EvaluationResult, evaluate_policy, validate_evaluation_contract
+from .evaluation import evaluate_participant_artifact
+from .model_artifact import ArtifactLimits, ParticipantModelArtifact, load_participant_artifact
 from .observation import (
     ObservationSchema,
     RunningObservationNormalizer,
@@ -25,6 +27,9 @@ __all__ = [
     "RewardConfig",
     "RewardFunction",
     "evaluate_reward_function",
+    "ArtifactLimits",
+    "ParticipantModelArtifact",
+    "load_participant_artifact",
     "PPOHyperparameters",
     "RolloutBatch",
     "RolloutCollector",
@@ -38,6 +43,7 @@ __all__ = [
     "EvaluationResult",
     "evaluate_policy",
     "validate_evaluation_contract",
+    "evaluate_participant_artifact",
 ]
 
 if importlib.util.find_spec("torch") is not None:

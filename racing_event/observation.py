@@ -10,7 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import hashlib
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any, Iterable, Mapping
 
 import numpy as np
@@ -329,7 +331,18 @@ class TrainingContract:
         }
 
     def save(self, path: str | Path, *, normalizer: RunningObservationNormalizer | None = None) -> None:
-        Path(path).write_text(json.dumps(self.to_dict(normalizer), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        fd, temporary_name = tempfile.mkstemp(prefix=f".{destination.name}.", suffix=".tmp", dir=destination.parent)
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                stream.write(json.dumps(self.to_dict(normalizer), sort_keys=True, indent=2) + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, destination)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     @classmethod
     def load(cls, path: str | Path) -> tuple["TrainingContract", RunningObservationNormalizer | None]:

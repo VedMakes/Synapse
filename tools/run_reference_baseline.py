@@ -61,6 +61,40 @@ def _atomic_json(path: Path, payload: Any) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _read_metrics(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    rows: list[dict[str, Any]] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            # A terminated process may leave a partial final line. Committed
+            # state determines which complete rows are trusted on resume.
+            break
+        if not isinstance(row, dict):
+            break
+        rows.append(row)
+    return rows
+
+
+def _atomic_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            for row in rows:
+                stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
 def _resolve_tracks(track_dir: Path, explicit: list[Path] | None) -> list[Path]:
     paths = explicit or sorted(track_dir.glob("*.json"))
     paths = [Path(path) for path in paths if Path(path).name != "manifest.json"]
@@ -133,11 +167,7 @@ def _load_or_create_policy(
 
 def _write_report(output_dir: Path, state: dict[str, Any]) -> None:
     metrics_path = output_dir / "training_metrics.jsonl"
-    rows: list[dict[str, Any]] = []
-    if metrics_path.exists():
-        for line in metrics_path.read_text(encoding="utf-8").splitlines():
-            if line.strip():
-                rows.append(json.loads(line))
+    rows = _read_metrics(metrics_path)
     lines = [
         "# Reference baseline training run",
         "",
@@ -173,6 +203,8 @@ def _write_report(output_dir: Path, state: dict[str, Any]) -> None:
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.steps <= 0 or args.n_envs <= 0 or args.rollout_length <= 0:
         raise ValueError("--steps, --n-envs, and --rollout-length must be positive")
+    if args.n_envs * args.rollout_length > 8_192:
+        raise ValueError("n_envs * rollout_length must be at most 8192 for the bounded reference trainer")
     output_dir = args.output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     track_paths = _resolve_tracks(args.track_dir, args.tracks)
@@ -183,6 +215,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     hyperparameters = PPOHyperparameters(rollout_length=args.rollout_length)
     budget, run_id = _open_budget(output_dir / "budget.json", args.budget_steps)
     budget_status = budget.status(run_id)
+    if budget_status["used_steps"] == 0:
+        partial = [output_dir / name for name in ("policy.pt", "policy.json", "training_contract.json")]
+        if any(path.exists() for path in partial) and not all(path.exists() for path in partial):
+            for path in partial:
+                path.unlink(missing_ok=True)
     policy, normalizer, resumed = _load_or_create_policy(
         output_dir,
         env.observation_size,
@@ -228,6 +265,24 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 raise ValueError(f"saved training state does not match {name}")
         state["updates"] = int(saved_state.get("updates", 0))
 
+    metrics_path = output_dir / "training_metrics.jsonl"
+    metrics_rows = _read_metrics(metrics_path)
+    if len(metrics_rows) > state["updates"]:
+        metrics_rows = metrics_rows[: state["updates"]]
+        _atomic_jsonl(metrics_path, metrics_rows)
+
+    # Publish a complete update-0 checkpoint before reserving the first
+    # transition. An interrupted later update can therefore always fall back
+    # to the last complete policy/contract pair.
+    policy_path = output_dir / "policy.pt"
+    metadata_path = output_dir / "policy.json"
+    contract_path = output_dir / "training_contract.json"
+    if not all(path.exists() for path in (policy_path, metadata_path, contract_path)):
+        env.training_contract.save(contract_path, normalizer=normalizer)
+        policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
+    if not state_path.exists():
+        _atomic_json(state_path, state)
+
     remaining = budget_status["remaining_steps"]
     target = min(args.steps, remaining)
     if target == 0:
@@ -235,7 +290,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         print(f"budget exhausted: {budget_status['used_steps']} / {args.budget_steps} transitions")
         return state
 
-    metrics_path = output_dir / "training_metrics.jsonl"
     update_number = state["updates"]
     transitions_per_rollout = args.n_envs * args.rollout_length
     while target > 0:
@@ -256,11 +310,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "off_track_rate": rollout.metrics["off_track_rate"],
             **ppo_metrics.to_dict(),
         }
-        with metrics_path.open("a", encoding="utf-8") as stream:
-            stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
+        metrics_rows.append(row)
+        _atomic_jsonl(metrics_path, metrics_rows)
         normalizer_state = normalizer
-        policy.save_artifact(output_dir / "policy.pt", output_dir / "policy.json", hyperparameters=hyperparameters)
-        env.training_contract.save(output_dir / "training_contract.json", normalizer=normalizer_state)
+        # Contract is written first; both writes are individually atomic, and
+        # the state file below is the committed update marker on resume.
+        env.training_contract.save(contract_path, normalizer=normalizer_state)
+        policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
         state["updates"] = update_number
         state["budget_used"] = budget_status["used_steps"]
         state["budget_remaining"] = budget_status["remaining_steps"]

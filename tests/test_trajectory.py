@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import copy
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -12,9 +13,10 @@ import numpy as np
 
 from racing_event.config import SimulationConfig
 from racing_event.evaluation import evaluate_policy
+from racing_event.observation import TrainingContract
 from racing_event.track import TrackGeometry
 from racing_event.trajectory import (
-    ReplayWriter, load_replay, replay_header, replay_frame, replay_result, validate_replay,
+    ReplayWriter, engine_code_hash, load_replay, replay_header, replay_frame, replay_result, validate_replay,
 )
 from racing_event.vector_env import VectorizedRacingEnv
 from tools.build_replay import build
@@ -28,6 +30,37 @@ CONFIG = SimulationConfig.from_file(ROOT / "config/simulation.json")
 
 def coast(observations: np.ndarray) -> np.ndarray:
     return np.zeros((len(observations), 2), dtype=np.float64)
+
+
+def make_generic_artifact(root: Path) -> None:
+    contract = TrainingContract.for_config(
+        CONFIG,
+        track_ids=(TRACK.track_id,),
+        track_hashes=(TRACK.content_hash,),
+    )
+    contract_path = root / "training_contract.json"
+    contract.save(contract_path)
+    weights_path = root / "weights.npz"
+    np.savez(
+        weights_path,
+        dense_0_weights=np.zeros((2, 23), dtype=np.float32),
+        dense_0_bias=np.zeros(2, dtype=np.float32),
+    )
+    manifest = {
+        "format": "synapse_numpy_mlp",
+        "format_version": 1,
+        "environment_code_hash": engine_code_hash(),
+        "observation": {"schema_version": "1.0", "size": 23, "dtype": "float32"},
+        "action": {
+            "schema_version": "1.0", "size": 2, "dtype": "float32",
+            "bounds": [[-1.0, 1.0], [-1.0, 1.0]], "output_activation": "tanh",
+        },
+        "preprocessing": {"kind": "identity"},
+        "layers": [{"name": "dense_0", "weights": "dense_0_weights", "bias": "dense_0_bias", "activation": "tanh"}],
+        "weights_sha256": hashlib.sha256(weights_path.read_bytes()).hexdigest(),
+        "training_contract_sha256": hashlib.sha256(contract_path.read_bytes()).hexdigest(),
+    }
+    (root / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
 
 
 class ReplayTests(unittest.TestCase):
@@ -187,6 +220,29 @@ class ReplayTests(unittest.TestCase):
         self.assertEqual(len(data["frames"]), 6)
         args.output = args.config
         with self.assertRaisesRegex(ValueError, "overwrite"):
+            export(args)
+
+    def test_generic_artifact_export_tool_reads_back(self) -> None:
+        artifact_dir = Path(self.tmp.name) / "artifact"
+        artifact_dir.mkdir()
+        make_generic_artifact(artifact_dir)
+        args = argparse.Namespace(
+            artifact_dir=artifact_dir,
+            track=ROOT / "tracks/train/synthetic_oval.json",
+            config=ROOT / "config/simulation.json",
+            weights=None,
+            metadata=None,
+            contract=None,
+            participant_id="generic",
+            steps=3,
+            output=self.path,
+        )
+        result = export(args)
+        data = load_replay(self.path)
+        self.assertEqual(data["source"]["mode"], "evaluation")
+        self.assertEqual(data["result"]["steps"], result["steps"])
+        with self.assertRaisesRegex(ValueError, "artifact directory"):
+            args.output = artifact_dir / "inside.json"
             export(args)
 
     def test_real_stuck_replay_preserves_engine_outcome(self) -> None:

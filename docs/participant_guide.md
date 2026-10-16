@@ -161,6 +161,25 @@ trainer can ignore the forwarded budget values unless it uses `RunBudget` and
 the environment/rollout APIs; independent event-grade enforcement belongs in
 the future organizer evaluator/launcher.
 
+## Generic model artifact preview
+
+For participants who want to separate training from organizer evaluation, the
+prototype includes a declarative NumPy MLP artifact path. It accepts model
+weights and architecture metadata, but not participant Python or reward code:
+
+```text
+submission/
+  manifest.json
+  training_contract.json
+  weights.npz
+```
+
+Use `tools/evaluate_participant.py` or `tools/export_replay.py --artifact-dir`
+to exercise the artifact. This preview supports feed-forward MLPs only; it is
+not yet the final ONNX/runtime submission contract. Organizer-side resource
+supervision is still required before using arbitrary participant submissions
+in an event.
+
 ## Maps
 
 The current three maps are original synthetic development fixtures. The

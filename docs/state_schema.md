@@ -92,6 +92,23 @@ implement any finite reward function over copies of the observation, action,
 signals, and transition outcome. `RewardConfig` is only the reference weighted
 signal adapter used by the bundled baseline.
 
+## Declarative participant model artifact
+
+The first generic evaluator slice accepts a directory containing exactly
+`manifest.json`, `training_contract.json`, and `weights.npz`. The manifest
+declares a sequential NumPy MLP and either identity preprocessing, a frozen
+contract normalizer, or a finite affine transform. Supported activations are
+`identity`, `relu`, and `tanh`; the final layer must be a two-output `tanh`
+action layer.
+
+The loader rejects unexpected files, symlinks, duplicate/non-finite JSON,
+hash mismatches, object arrays, non-`float32` weights, malformed shapes,
+non-finite tensors, excessive layers/width/parameters, and oversized inference
+batches. It never imports participant code or executes participant reward
+logic. Default limits are 8 layers, width 1,024, 1,000,000 parameters, 64 MiB
+of artifact files, and 64 inference samples per call. These are implementation
+defaults for the prototype, not frozen tournament rules.
+
 ## Deterministic evaluation
 
 `racing_event.evaluation.evaluate_policy` requires a one-lane vector
