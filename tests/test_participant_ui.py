@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import unittest
+import sys
+import time
 
-from tools.participant_ui import PAGE, build_training_command, parse_update_line, public_maps
+from tools.participant_ui import PAGE, TrainingProcess, build_training_command, parse_update_line, public_maps
 
 
 class ParticipantUiTests(unittest.TestCase):
@@ -40,6 +42,38 @@ class ParticipantUiTests(unittest.TestCase):
         maps = public_maps()
         self.assertEqual(len(maps), 3)
         self.assertEqual({item["id"] for item in maps}, {"synthetic_oval", "synthetic_flowing", "synthetic_tight_loop"})
+
+    def test_numeric_inputs_reject_fractional_boolean_and_infinite_values(self) -> None:
+        for value in (1.5, True, float("nan"), float("inf"), "not-a-number"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    build_training_command({"steps": value})
+
+    def test_missing_paths_are_rejected_before_start(self) -> None:
+        with self.assertRaisesRegex(ValueError, "trainer does not exist"):
+            build_training_command({"trainer": "artifacts/does-not-exist.py"})
+        with self.assertRaisesRegex(ValueError, "config does not exist"):
+            build_training_command({"config": "artifacts/does-not-exist.json"})
+
+    def test_stop_reaches_a_terminal_stopped_state(self) -> None:
+        process = TrainingProcess()
+        process.start_command(
+            [sys.executable, "-c", "import time; print('ready', flush=True); time.sleep(10)"],
+            kind="test",
+        )
+        for _ in range(20):
+            if process.snapshot()["running"]:
+                break
+            time.sleep(0.01)
+        self.assertTrue(process.snapshot()["running"])
+        process.stop()
+        for _ in range(100):
+            snapshot = process.snapshot()
+            if not snapshot["running"]:
+                break
+            time.sleep(0.02)
+        self.assertFalse(snapshot["running"])
+        self.assertEqual(snapshot["state"], "stopped")
 
 
 if __name__ == "__main__":

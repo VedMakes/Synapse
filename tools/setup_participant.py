@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import venv
@@ -43,18 +42,21 @@ def _python_has_dependencies(python: Path) -> tuple[bool, str]:
     return result.returncode == 0, detail
 
 
-def _bootstrap_python() -> Path:
-    configured = shutil.which("python3.11") or sys.executable
-    return Path(configured).resolve()
+def _require_supported_python() -> None:
+    if sys.version_info[:2] != (3, 11):
+        raise RuntimeError(
+            "SYNAPSE supports Python 3.11; run this helper with python3.11 "
+            "so the project virtual environment uses the pinned runtime"
+        )
 
 
 def setup_environment() -> str:
+    _require_supported_python()
     if VENV_PYTHON.exists():
         ready, detail = _python_has_dependencies(VENV_PYTHON)
         if ready:
             return f"SYNAPSE environment ready: {detail}"
-    bootstrap = _bootstrap_python()
-    print(f"Creating project environment with {bootstrap} ...")
+    print(f"Creating project environment with {sys.executable} ...")
     builder = venv.EnvBuilder(with_pip=True, clear=False)
     builder.create(VENV_DIR)
     if not VENV_PYTHON.exists():

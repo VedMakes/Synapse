@@ -15,7 +15,7 @@ participant-maps:
 	$(PYTHON) tools/build_training_manifest.py
 
 participant-setup:
-	python3 tools/setup_participant.py
+	python3.11 tools/setup_participant.py
 
 participant-smoke:
 	$(PYTHON) tools/train_participant.py --steps 256 --budget-steps 10000 --output-dir participant_run

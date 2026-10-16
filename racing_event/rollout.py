@@ -130,12 +130,18 @@ class RolloutCollector:
     ``policy`` receives a float32 array shaped ``(n_envs, observation_size)``
     and returns raw action commands shaped ``(n_envs, 2)``.  The collector
     accepts out-of-range finite actions so saturation can be logged; the
-    environment applies the authoritative ``[-1, 1]`` clipping.
+    environment applies the authoritative ``[-1, 1]`` clipping. A participant
+    reward callback receives the clipped action that was actually applied.
 
     A ``RunBudget`` reservation is made immediately before every environment
     step.  The reservation counts active lanes, not calls to ``step``.  If the
     requested collection ends in the middle of a vector step, only the needed
     lanes are active and the remaining lanes are not advanced.
+
+    ``max_batch_steps`` bounds the retained batch memory. A failed participant
+    reward callback consumes the already-reserved transition and permanently
+    invalidates this collector; create a fresh collector rather than retrying
+    with potentially stale state.
     """
 
     def __init__(
@@ -148,6 +154,7 @@ class RolloutCollector:
         normalizer: RunningObservationNormalizer | None = None,
         reward_function: RewardFunction | None = None,
         reward_weights: Mapping[str, float] | None = None,
+        max_batch_steps: int = 8_192,
         training: bool = True,
         seed: int | None = None,
     ) -> None:
@@ -161,6 +168,8 @@ class RolloutCollector:
             raise TypeError("run_id must be a string")
         if normalizer is not None and normalizer.size != env.observation_size:
             raise ValueError("normalizer size does not match environment observations")
+        if isinstance(max_batch_steps, (bool, np.bool_)) or not isinstance(max_batch_steps, (int, np.integer)) or int(max_batch_steps) <= 0:
+            raise ValueError("max_batch_steps must be a positive integer")
         self.env = env
         self.policy = policy
         self.budget = budget
@@ -172,9 +181,11 @@ class RolloutCollector:
         self.reward_weights = {
             name: float((reward_weights or {}).get(name, 0.0)) for name in SIGNAL_NAMES
         }
+        self.max_batch_steps = int(max_batch_steps)
         self.training = bool(training)
         self.seed = seed
         self._raw_observation: np.ndarray | None = None
+        self._invalid_reason: str | None = None
 
     @property
     def observation_size(self) -> int:
@@ -234,6 +245,16 @@ class RolloutCollector:
         if isinstance(steps, (bool, np.bool_)) or not isinstance(steps, (int, np.integer)) or int(steps) <= 0:
             raise ValueError("steps must be a positive integer")
         steps = int(steps)
+        if self._invalid_reason is not None:
+            raise RuntimeError(
+                "this rollout collector cannot be reused after a participant "
+                f"reward failure: {self._invalid_reason}; create a fresh collector"
+            )
+        if steps > self.max_batch_steps:
+            raise ValueError(
+                f"steps exceeds max_batch_steps={self.max_batch_steps}; "
+                "collect smaller bounded batches to keep memory predictable"
+            )
         remaining = self.budget.remaining(self.run_id)
         if steps > remaining:
             raise StepLimitExceeded(
@@ -272,20 +293,29 @@ class RolloutCollector:
 
             raw_observation = self._raw_observation.copy() if self._raw_observation is not None else observation.copy()
             raw_action = self._validate_policy_action(self.policy(observation.copy()))
+            applied_action = np.clip(raw_action, -1.0, 1.0)
             self.budget.consume(self.run_id, count)
             if self.reward_function is None:
                 next_raw, reward, term, trunc, info = self.env.step(raw_action, active_mask=active_mask)
             else:
                 next_raw, term, trunc, info = self.env.step_raw(raw_action, active_mask=active_mask)
-                reward = evaluate_reward_function(
-                    self.reward_function,
-                    raw_observation,
-                    raw_action,
-                    info["signals"],
-                    term,
-                    trunc,
-                    active_mask,
-                )
+                try:
+                    reward = evaluate_reward_function(
+                        self.reward_function,
+                        raw_observation,
+                        applied_action,
+                        info["signals"],
+                        term,
+                        trunc,
+                        active_mask,
+                    )
+                except Exception as exc:
+                    # The reservation and environment transition are already
+                    # committed. Do not allow a caller to retry with a stale
+                    # observation after participant code failed.
+                    self._raw_observation = next_raw
+                    self._invalid_reason = str(exc)
+                    raise
             next_observation = self._normalize(next_raw, active_mask)
             metrics.update(
                 rewards=reward,

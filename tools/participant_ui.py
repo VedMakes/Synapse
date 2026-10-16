@@ -42,15 +42,18 @@ def _workspace_path(value: str, *, label: str) -> Path:
     return resolved
 
 
-def _ready_python() -> Path:
+def _ready_python(*, require_torch: bool = False) -> Path:
     candidates = [ROOT / ".venv" / "bin" / "python", Path(sys.executable)]
     checked: list[str] = []
     for candidate in candidates:
         if not candidate.exists():
             continue
         try:
+            probe = "import numpy"
+            if require_torch:
+                probe += "; import torch"
             result = subprocess.run(
-                [str(candidate), "-c", "import numpy"],
+                [str(candidate), "-c", probe],
                 cwd=ROOT,
                 text=True,
                 capture_output=True,
@@ -63,7 +66,9 @@ def _ready_python() -> Path:
         if result.returncode == 0:
             return candidate
         detail = (result.stderr or result.stdout).strip().splitlines()
-        checked.append(f"{candidate}: {detail[-1] if detail else 'numpy import failed'}")
+        checked.append(
+            f"{candidate}: {detail[-1] if detail else ('numpy/torch import failed' if require_torch else 'numpy import failed')}"
+        )
     raise ValueError(
         "SYNAPSE environment dependencies are not ready. Run "
         f"'{sys.executable} tools/setup_participant.py', then start the UI again. "
@@ -97,34 +102,65 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         value = form.get(name, default)
         if isinstance(value, bool):
             raise ValueError(f"{name} must be a positive integer")
-        try:
-            parsed = int(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{name} must be a positive integer") from exc
+        if isinstance(value, int):
+            parsed = value
+        elif isinstance(value, str) and value.strip():
+            try:
+                parsed = int(value.strip(), 10)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be a positive integer") from exc
+        else:
+            raise ValueError(f"{name} must be a positive integer")
         if parsed <= 0:
             raise ValueError(f"{name} must be a positive integer")
         return parsed
 
     trainer = _workspace_path(text("trainer", "examples/participant_train.py"), label="trainer")
-    reward = _workspace_path(text("reward", "examples/baseline_reward.json"), label="reward")
+    reward_value = form.get("reward", "examples/baseline_reward.json")
+    if reward_value is None or (isinstance(reward_value, str) and not reward_value.strip()):
+        reward = None
+    else:
+        reward = _workspace_path(text("reward", "examples/baseline_reward.json"), label="reward")
     config = _workspace_path(text("config", "config/simulation.json"), label="config")
     track_dir = _workspace_path(text("track_dir", "tracks/train"), label="track_dir")
     output_dir = _workspace_path(text("output_dir", "participant_run"), label="output_dir")
-    python = _ready_python()
-    return [
+    if not trainer.is_file():
+        raise ValueError(f"trainer does not exist: {trainer}")
+    if not config.is_file():
+        raise ValueError(f"config does not exist: {config}")
+    if not track_dir.is_dir():
+        raise ValueError(f"track_dir is not a directory: {track_dir}")
+    if not any(path.name != "manifest.json" for path in track_dir.glob("*.json")):
+        raise ValueError(f"track_dir contains no JSON tracks: {track_dir}")
+    if reward is not None and not reward.is_file():
+        raise ValueError(f"reward does not exist: {reward}")
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ValueError(f"output_dir must be a directory path: {output_dir}")
+    if output_dir.parent.exists() and not output_dir.parent.is_dir():
+        raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
+    steps = positive_int("steps", 2048)
+    budget_steps = positive_int("budget_steps", 10000)
+    n_envs = positive_int("n_envs", 4)
+    rollout_length = positive_int("rollout_length", 64)
+    seed = positive_int("seed", 17)
+    reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
+    python = _ready_python(require_torch=reference_trainer)
+    command = [
         str(python),
         str(ROOT / "tools" / "train_participant.py"),
         "--trainer", str(trainer),
-        "--reward", str(reward),
         "--config", str(config),
         "--track-dir", str(track_dir),
         "--output-dir", str(output_dir),
-        "--steps", str(positive_int("steps", 2048)),
-        "--budget-steps", str(positive_int("budget_steps", 10000)),
-        "--n-envs", str(positive_int("n_envs", 4)),
-        "--rollout-length", str(positive_int("rollout_length", 64)),
-        "--seed", str(positive_int("seed", 17)),
+        "--steps", str(steps),
+        "--budget-steps", str(budget_steps),
+        "--n-envs", str(n_envs),
+        "--rollout-length", str(rollout_length),
+        "--seed", str(seed),
     ]
+    if reward is not None:
+        command[2:2] = ["--reward", str(reward)]
+    return command
 
 
 class TrainingProcess:
@@ -146,6 +182,8 @@ class TrainingProcess:
             current["lines"] = list(self._status["lines"])
             current["metrics"] = dict(self._status["metrics"])
             current["running"] = self._process is not None and self._process.poll() is None
+            if not current["running"] and current.get("state") == "stopping":
+                current["state"] = "stopped"
             return current
 
     def start(self, form: dict[str, object]) -> dict[str, object]:
@@ -154,7 +192,7 @@ class TrainingProcess:
 
     def start_command(self, command: list[str], *, kind: str) -> dict[str, object]:
         with self._lock:
-            if self._process is not None and self._process.poll() is None:
+            if self._process is not None and (self._process.poll() is None or self._status.get("state") == "stopping"):
                 raise RuntimeError("a training process is already running")
             self._status = {
                 "state": "starting",
@@ -183,7 +221,15 @@ class TrainingProcess:
             if process is not None and process.poll() is None:
                 process.terminate()
                 self._status["state"] = "stopping"
+                Thread(target=self._escalate_stop, args=(process,), daemon=True).start()
         return self.snapshot()
+
+    @staticmethod
+    def _escalate_stop(process: subprocess.Popen[str]) -> None:
+        try:
+            process.wait(timeout=2.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
 
     def _read_output(self, process: subprocess.Popen[str]) -> None:
         assert process.stdout is not None
@@ -204,7 +250,9 @@ class TrainingProcess:
                 self._status["returncode"] = return_code
                 if return_code == 0:
                     self._status["state"] = "completed"
-                elif self._status["state"] != "stopping":
+                elif self._status["state"] == "stopping":
+                    self._status["state"] = "stopped"
+                else:
                     self._status["state"] = "failed"
                     self._status["error"] = f"trainer exited with status {return_code}"
         except Exception as exc:  # pragma: no cover - defensive process boundary
@@ -212,6 +260,8 @@ class TrainingProcess:
                 self._status["state"] = "failed"
                 self._status["error"] = str(exc)
         finally:
+            if process.stdout is not None:
+                process.stdout.close()
             with self._lock:
                 self._process = None
 
@@ -416,7 +466,7 @@ PAGE = r'''<!doctype html>
   <script>
     const $ = id => document.getElementById(id);
     const fields = ["trainer", "reward", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed"];
-    const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", completed: "Training completed", failed: "Training failed" };
+    const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
     function formData() { return { trainer: $("trainer").value, reward: $("reward").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value }; }
     function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
     function render(data) {
@@ -425,7 +475,7 @@ PAGE = r'''<!doctype html>
       $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
-      $("start").disabled = Boolean(data.running); $("setup").disabled = Boolean(data.running); $("watch").disabled = Boolean(data.running);
+      $("start").disabled = Boolean(data.running) || state === "stopping"; $("stop").disabled = !Boolean(data.running); $("setup").disabled = Boolean(data.running) || state === "stopping"; $("watch").disabled = Boolean(data.running);
       $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
     }
     async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
@@ -490,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 command = [sys.executable, str(ROOT / "tools" / "setup_participant.py")]
                 self._json(200, PROCESS.start_command(command, kind="setup"))
-            except (RuntimeError, OSError, ValueError) as exc:
+            except (RuntimeError, OSError, ValueError, OverflowError) as exc:
                 self._json(400, {"error": str(exc)})
             return
         if path == "/api/watch":
@@ -505,7 +555,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError("stop training before building a best-run replay")
                 result = build_best_run(form.get("map_id", ""), str(form.get("output_dir", "participant_run")))
                 self._json(200, result)
-            except (ValueError, RuntimeError, OSError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+            except (ValueError, RuntimeError, OSError, OverflowError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
                 self._json(400, {"error": str(exc)})
             return
         if path != "/api/start":
@@ -519,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
             if not isinstance(form, dict):
                 raise ValueError("request must be a JSON object")
             self._json(200, PROCESS.start(form))
-        except (ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
+        except (ValueError, RuntimeError, OSError, OverflowError, json.JSONDecodeError) as exc:
             self._json(400, {"error": str(exc)})
 
     def log_message(self, format: str, *args: object) -> None:

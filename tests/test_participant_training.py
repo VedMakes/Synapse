@@ -65,6 +65,25 @@ class ParticipantTrainingTests(unittest.TestCase):
             args.trainer = ROOT.parent / "outside.py"
             build_training_command(args)
 
+    def test_participant_launcher_validates_inputs_and_allows_no_reward(self) -> None:
+        args = Namespace(
+            trainer=ROOT / "examples" / "participant_train.py",
+            reward=None,
+            track_dir=DEFAULT_TRACK_DIR,
+            config=DEFAULT_CONFIG,
+            output_dir=ROOT / "participant_run",
+            steps=1,
+            budget_steps=1,
+            n_envs=1,
+            rollout_length=1,
+            seed=17,
+        )
+        command = build_training_command(args)
+        self.assertNotIn("--reward", command)
+        args.config = ROOT / "artifacts" / "missing-config.json"
+        with self.assertRaisesRegex(ValueError, "config does not exist"):
+            build_training_command(args)
+
 
 if __name__ == "__main__":
     unittest.main()

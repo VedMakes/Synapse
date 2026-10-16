@@ -1829,3 +1829,57 @@ organizer-owned model or reward assumptions. Then rerun the required checks,
 review the clean diff, and commit this ownership correction. Keep the optional
 reference PPO/replay path clearly labeled as a starter until the generic
 artifact exporter and validator exist.
+
+## 26. SESSION HANDOFF (2026-10-17, PARTICIPANT QA AND UX HARDENING)
+
+### Goal and result
+
+The module was exercised as a participant using tiny budgets, three-lane
+partial batches, custom reward code, two alternative reward-weight files, a
+zero-action policy, reference resume, missing inputs, invalid UI numbers, and
+process interruption. Findings and exact commands are recorded in
+`reports/participant_qa_2026-10-17.md`.
+
+### Fixes
+
+- `RolloutCollector` now caps a single retained batch at 8,192 transitions by
+  default, passes applied clipped actions to reward callbacks, and permanently
+  invalidates a collector after a reward callback failure so stale state cannot
+  be retried silently.
+- `tools/participant_ui.py` now rejects fractional/boolean/non-finite numeric
+  inputs, validates paths before spawn, returns structured HTTP 400 errors,
+  enables the Stop control while running, reports a terminal `stopped` state,
+  and escalates ignored termination after two seconds.
+- `tools/train_participant.py` validates trainer/config/track/reward/output
+  inputs, supports an omitted reward input for custom trainers, and documents
+  the forwarded trainer CLI.
+- `racing_event/__init__.py` lazily imports the optional Torch PPO module, so
+  environment-only participant code works without Torch installed.
+- `tools/setup_participant.py` requires Python 3.11 before creating the project
+  virtual environment.
+- README and participant guide now document the cooperative budget limitation,
+  applied-action reward semantics, trainer CLI, and bounded memory pattern.
+
+### Evidence
+
+- `make test`: **94 Python tests passed**.
+- Direct replay frontend suite: **65 Node tests passed**.
+- Environment-only rollout/UI tests using system Python without Torch: **17
+  tests passed**.
+- Python compilation and `git diff --check`: **passed**.
+- Live UI HTTP invalid-input probes: structured 400 responses for fractional,
+  infinite, and missing-trainer inputs.
+
+### Remaining gaps
+
+- Custom trainer budget/resource enforcement remains cooperative until the
+  organizer evaluator/launcher exists.
+- Generic participant artifact export/replay, ONNX/runtime validation, and
+  transactional reference checkpoint recovery remain unimplemented.
+- Real browser screenshot/layout review remains unavailable in this container.
+
+### Exact next action
+
+Keep the QA report with the release notes, then implement the generic model
+artifact/evaluator boundary. Do not expand the fixed PPO reference path into a
+participant requirement while doing so.

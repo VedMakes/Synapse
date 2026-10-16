@@ -283,7 +283,10 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 
 def main() -> None:
     args = _parse_args()
-    state = run(args)
+    try:
+        state = run(args)
+    except (OSError, ValueError, RunLimitExceeded, StepLimitExceeded) as exc:
+        raise SystemExit(f"reference baseline could not continue: {exc}") from exc
     print(f"saved participant run in {args.output_dir}")
     print(f"budget remaining: {state.get('budget_remaining', 'see training_state.json')}")
 

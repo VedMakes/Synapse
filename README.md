@@ -48,7 +48,7 @@ First prepare the project environment. This keeps the SYNAPSE environment
 dependencies inside `.venv`:
 
 ```bash
-python3 tools/setup_participant.py
+python3.11 tools/setup_participant.py
 ```
 
 The same setup action is available from the dashboard's **Set up / repair
@@ -64,7 +64,10 @@ Python** button.
 ```
 
 The launcher forwards the published environment inputs to the trainer script
-you select. `examples/participant_train.py` is only a runnable reference
+you select. A trainer entrypoint must accept the forwarded options
+`--track-dir`, `--config`, `--output-dir`, `--steps`, `--budget-steps`,
+`--n-envs`, `--rollout-length`, and `--seed`; `--reward` is forwarded only
+when supplied. `examples/participant_train.py` is only a runnable reference
 starter; replace it with your own script to choose the model, algorithm,
 preprocessing, weights, and reward implementation. Run the same command again
 with the same output directory if your trainer supports resuming.
@@ -143,7 +146,11 @@ storage, ranking, and Unity playback remain separate milestones.
 adapter, not the participant's model or algorithm. It accepts a batched policy
 callable and an optional participant-owned reward callback, reserves the persistent
 `RunBudget` in individual environment-transition units, uses a partial active
-mask for a final batch, and resets only lanes that ended.
+mask for a final batch, and resets only lanes that ended. Each call is capped
+at 8,192 transitions by default; call `collect()` repeatedly for larger runs.
+The local launcher is cooperative: a custom trainer must use the environment
+and budget APIs if it needs the same accounting guarantees as the reference
+starter.
 `RolloutMetrics` records raw signals and optional reference weighted terms, episode outcomes,
 speed, off-track rate, action saturation, action smoothness, policy-invisible
 sector coverage, positive off-track progress, boundary excess, and per-track

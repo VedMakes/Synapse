@@ -125,6 +125,59 @@ class RolloutCollectorTests(unittest.TestCase):
         np.testing.assert_allclose(result.batch.rewards[result.batch.active_mask], 2.5)
         self.assertEqual(set(calls[0][0]), {"progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"})
 
+    def test_participant_reward_sees_applied_bounded_action(self) -> None:
+        env = VectorizedRacingEnv(TRACK, CONFIG, reward=None, n_envs=1)
+        seen: list[np.ndarray] = []
+
+        def policy(observations: np.ndarray) -> np.ndarray:
+            return np.asarray([[5.0, -5.0]])
+
+        def participant_reward(observation, action, signals, terminated, truncated):
+            del observation, signals, terminated, truncated
+            seen.append(action)
+            return 0.0
+
+        collector = RolloutCollector(
+            env,
+            policy,
+            self.budget,
+            self.run_id,
+            reward_function=participant_reward,
+            seed=7,
+        )
+        result = collector.collect(1)
+
+        np.testing.assert_array_equal(seen[0], [1.0, -1.0])
+        np.testing.assert_array_equal(result.batch.actions[0, 0], [5.0, -5.0])
+        np.testing.assert_array_equal(env.state.previous_longitudinal_command, [-1.0])
+
+    def test_reward_failure_consumes_transition_and_blocks_stale_retry(self) -> None:
+        env = VectorizedRacingEnv(TRACK, CONFIG, reward=None, n_envs=1)
+
+        def participant_reward(observation, action, signals, terminated, truncated):
+            del observation, action, signals, terminated, truncated
+            return np.nan
+
+        collector = RolloutCollector(
+            env,
+            ZeroPolicy(),
+            self.budget,
+            self.run_id,
+            reward_function=participant_reward,
+            seed=7,
+        )
+        with self.assertRaises(ValueError):
+            collector.collect(1)
+        self.assertEqual(self.budget.status(self.run_id)["used_steps"], 1)
+        with self.assertRaisesRegex(RuntimeError, "cannot be reused"):
+            collector.collect(1)
+
+    def test_collector_rejects_unbounded_batch_request(self) -> None:
+        collector = self.make_collector()
+        with self.assertRaisesRegex(ValueError, "max_batch_steps"):
+            collector.collect(8_193)
+        self.assertEqual(self.budget.status(self.run_id)["used_steps"], 0)
+
     def test_crash_reset_is_random_new_episode_and_budget_keeps_counting(self) -> None:
         class CrashProbe(VectorizedRacingEnv):
             def __init__(self):

@@ -27,7 +27,7 @@ Held-out maps and final scoring must stay in an organizer-owned evaluator.
 From the repository root, prepare the project environment first:
 
 ```bash
-python3 tools/setup_participant.py
+python3.11 tools/setup_participant.py
 ```
 
 Then launch the trainer you own:
@@ -47,7 +47,11 @@ your trainer. The bundled `examples/participant_train.py` delegates to the
 optional reference PPO only so the checkout has a runnable smoke test. Replace
 that file with your own training program to own the model architecture,
 algorithm, preprocessing, checkpoints, and reward function. A trainer that
-supports the dashboard should print the documented `update ...` progress line.
+supports the dashboard should accept the forwarded CLI options
+`--track-dir`, `--config`, `--output-dir`, `--steps`, `--budget-steps`,
+`--n-envs`, `--rollout-length`, and `--seed`, and print the documented
+`update ...` progress line. `--reward` is forwarded only when a reward input is
+provided.
 The reference starter writes:
 
 ```text
@@ -133,6 +137,10 @@ batch = collector.collect(your_transition_count).batch
 
 The callback receives copies of the observation, action, raw signals, and
 terminal flags. It cannot replace or mutate the environment transition.
+The action passed to the callback is the action after SYNAPSE's `[-1, 1]`
+clipping; the rollout batch also retains the raw policy request for saturation
+diagnostics. Keep calls to `RolloutCollector.collect()` bounded (8,192
+transitions by default) for predictable memory use.
 
 ## Budget and fairness draft
 
@@ -147,6 +155,11 @@ The `10,000` value in the example is an onboarding smoke budget only. It is not
 the proposed final scored budget. Research recommends measuring candidate
 budgets such as 100k, 250k, 500k, and 1M with equal settings and multiple seeds
 before freezing one.
+
+The local launcher and dashboard are cooperative development tools. A custom
+trainer can ignore the forwarded budget values unless it uses `RunBudget` and
+the environment/rollout APIs; independent event-grade enforcement belongs in
+the future organizer evaluator/launcher.
 
 ## Maps
 
