@@ -1,4 +1,4 @@
-"""Small, fixed PPO trainer for the racing event.
+"""Small, fixed PPO trainer for SYNAPSE.
 
 The environment and rollout collector remain NumPy-first.  This module is the
 model/optimizer boundary only: it evaluates a fixed two-layer actor-critic,

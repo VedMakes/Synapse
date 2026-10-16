@@ -202,7 +202,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     )
     state_path = output_dir / "training_state.json"
     state = {
-        "release_id": "local-participant-prototype",
+        "release_id": "synapse-local-participant-prototype",
         "run_id": run_id,
         "budget_steps": args.budget_steps,
         "budget_used": budget_status["used_steps"],

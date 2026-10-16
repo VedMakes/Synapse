@@ -1,4 +1,4 @@
-# Participant delivery options and racing maps
+# SYNAPSE participant delivery options and racing maps
 
 **Research date:** 2026-10-17
 

@@ -36,6 +36,6 @@
     }
   ],
   "private_tracks_included": false,
-  "release_id": "local-participant-prototype",
+  "release_id": "synapse-local-participant-prototype",
   "split": "train"
 }

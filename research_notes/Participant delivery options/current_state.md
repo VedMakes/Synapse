@@ -1,4 +1,4 @@
-# Current participant-delivery audit
+# Current SYNAPSE participant-delivery audit
 
 **Audit date:** 2026-10-17
 

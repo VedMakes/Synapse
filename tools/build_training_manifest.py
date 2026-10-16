@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tracks-dir", type=Path, default=ROOT / "tracks" / "train")
     parser.add_argument("--output", type=Path, default=None)
-    parser.add_argument("--release-id", default="local-participant-prototype")
+    parser.add_argument("--release-id", default="synapse-local-participant-prototype")
     return parser.parse_args()
 
 

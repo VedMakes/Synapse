@@ -1,4 +1,4 @@
-# Participant guide draft
+# SYNAPSE participant guide draft
 
 This is the first participant-facing training path for the local prototype. It
 is intentionally marked as a draft. The exact event budget, final map set,
@@ -24,7 +24,13 @@ Held-out maps and final scoring must stay in an organizer-owned evaluator.
 
 ## First local run
 
-From the repository root, with the project virtual environment installed:
+From the repository root, prepare the project environment first:
+
+```bash
+python3 tools/setup_participant.py
+```
+
+Then run the local trainer:
 
 ```bash
 .venv/bin/python tools/build_training_manifest.py
@@ -73,6 +79,12 @@ bounded-run settings, start/resume and stop controls, budget progress, update
 metrics, a live log, and a short fixed-contract panel. It launches the same
 `tools/train_participant.py` command. It binds to loopback only and is not a
 network service or a second simulator.
+
+The dashboard also has a **Set up / repair Python** button. If the UI detects
+that NumPy or PyTorch is missing, it refuses to launch a broken trainer and
+shows the setup command instead. After a policy is saved, choose **Watch best
+run for map** to evaluate the current saved policy deterministically from the
+fixed start and open its read-only replay.
 
 ## Participant contract
 

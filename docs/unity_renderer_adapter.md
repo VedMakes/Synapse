@@ -1,4 +1,4 @@
-# Unity renderer adapter foundation
+# SYNAPSE Unity renderer adapter foundation
 
 ## Target
 

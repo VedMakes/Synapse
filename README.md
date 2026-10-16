@@ -1,6 +1,6 @@
-# Racing RL Event
+# SYNAPSE Racing RL Event
 
-This repository contains the first Python-only vertical slice for the technical-fest racing event.
+This repository contains the first Python-only vertical slice for the SYNAPSE technical-fest event.
 
 The current slice provides:
 
@@ -38,6 +38,16 @@ The first minimal participant-facing workflow is available as a bounded local
 CLI. It is a delivery prototype, not a frozen event launcher or final budget
 rule:
 
+First prepare the project environment. This keeps NumPy, PyTorch, and all
+dependencies inside `.venv`:
+
+```bash
+python3 tools/setup_participant.py
+```
+
+The same setup action is available from the dashboard's **Set up / repair
+Python** button.
+
 ```bash
 .venv/bin/python tools/build_training_manifest.py
 .venv/bin/python tools/train_participant.py \
@@ -69,7 +79,9 @@ For a simple browser dashboard around the same CLI, run:
 
 Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
 library, binds to loopback, launches the existing CLI, and polls its bounded
-progress output. It does not implement a second environment or budget.
+progress output. It does not implement a second environment or budget. After a
+policy is saved, use **Watch best run for map** to open a deterministic replay
+for one public map.
 
 ## Setup
 

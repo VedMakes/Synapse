@@ -652,7 +652,7 @@ Formatting rules the human asked for in the club documents: no em dashes, center
 
 Fighter game facts, for reference only: 1v1, diep.io-style movement, slash and shoot attacks, curriculum of scripted bot then self-play on own checkpoints, tournament of 10 hours on ground, budget 20k INR. Do not build any of it now.
 
-Deliverables still missing for the racing event:
+Deliverables still missing for SYNAPSE:
 
 1. Lean proposal document (EdgeWatch format), blocked on O11.
 2. VECTOR-facing technical reference for racing (STE style).
@@ -1590,6 +1590,10 @@ present the current `.pt` prototype artifact as the final submission format.
 
 ### Goal and result
 
+The event-facing name is **SYNAPSE**. Keep internal schema/package identifiers
+such as `racing_event` unchanged for compatibility, but use SYNAPSE in
+participant-facing UI, guides, release labels, and renderer presentation.
+
 The completed participant-delivery foundation was committed first as:
 
 `a6e1190 feat: add participant delivery foundation`
@@ -1662,3 +1666,87 @@ should ship this web dashboard as the default UI or keep it as an optional
 convenience over the CLI. Then create the clean public participant repository
 from the committed release, excluding private evaluator/history and before
 adding final held-out maps.
+
+## 30. SESSION HANDOFF (2026-10-17, SYNAPSE UI AND SETUP)
+
+### Goal and result
+
+The participant UI is now explicitly branded **SYNAPSE** and has two requested
+features: dependency setup recovery and best-run replay viewing. The previous
+UI/dashboard commit is:
+
+`565d0c0 feat: add participant training dashboard`
+
+This follow-up adds the UI feature work below. Internal Python/package/schema
+identifiers remain `racing_event` for compatibility; participant-facing titles,
+release labels, replay presentation, and guides use SYNAPSE.
+
+### Implemented
+
+- `tools/setup_participant.py`
+  - Creates or repairs the project `.venv` using Python 3.11 when available.
+  - Installs the pinned `requirements.lock` dependencies locally.
+  - Verifies NumPy and CPU PyTorch imports after installation.
+  - Provides `--check` for a fast environment diagnostic.
+- `tools/participant_ui.py`
+  - Checks NumPy/PyTorch before launching the trainer and gives the setup command
+    instead of surfacing a raw `ModuleNotFoundError`.
+  - Adds a **Set up / repair Python** action that runs the setup helper.
+  - Adds a **Watch best run for map:** selector populated from the three public
+    SYNAPSE maps.
+  - Builds a deterministic fixed-start replay for the selected map from the
+    current saved policy, then serves the read-only replay at a local URL.
+  - Uses a temporary one-map contract view for replay validation; the saved
+    multi-map training contract is not modified.
+  - Keeps the server on loopback and constrains all participant paths to the
+    project workspace.
+- `tools/train_participant.py`
+  - Uses the SYNAPSE provisional release label and prints crash/off-track values
+    for the dashboard.
+- Participant-facing docs, replay branding, manifests, and release examples now
+  use SYNAPSE where changing the internal compatibility identifiers is not
+  required.
+
+### How to try it
+
+```bash
+python3 tools/setup_participant.py
+.venv/bin/python tools/participant_ui.py
+```
+
+Open:
+
+`http://127.0.0.1:8766/`
+
+Run a small training slice first. Then select a public map under **Watch best
+run for map:** and click **Build / watch saved best run**. The generated replay
+opens in the existing read-only viewer and is served from a local `/replays/`
+route. “Best” currently means the latest saved deterministic policy artifact;
+historical checkpoint ranking is not implemented yet.
+
+### Checks and evidence
+
+- `python3 tools/setup_participant.py --check`: **passed** — NumPy `2.4.6`
+  and CPU PyTorch `2.7.1+cpu` imported successfully.
+- UI unit tests: **passed** — 4 tests.
+- Full suite: **passed** — `make test`, 84 Python tests including frontend
+  integration.
+- Direct frontend suite: **passed** — 65 Node tests.
+- Python compilation and `git diff --check`: **passed**.
+- HTTP smoke: **passed** — `/api/maps` returned all 3 public maps, the root
+  contained SYNAPSE branding/setup/watch controls, and `/api/status` returned a
+  valid state.
+- Best-run replay smoke: **passed** — selected `synthetic_oval`, generated a
+  234,346-byte replay HTML, and served it at `/replays/synthetic_oval` with
+  embedded replay data. The current short-trained policy returned `dnf_crash`,
+  which is an engine result, not a UI failure.
+- Real browser screenshot: **not run** — no browser binary is installed in the
+  container. The local server is running for desktop-browser inspection.
+
+### Exact next action
+
+Open `http://127.0.0.1:8766/` in a desktop browser, run the setup action only if
+needed, train a tiny 256-transition slice, and inspect the selected-map replay.
+Then commit this SYNAPSE branding/setup/replay follow-up and decide whether the
+clean public participant repository should include the dashboard by default or
+ship it as an optional convenience over the CLI.

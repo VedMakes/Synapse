@@ -1,1 +1,1 @@
-"""Development tools for the racing event."""
+"""Development tools for SYNAPSE."""

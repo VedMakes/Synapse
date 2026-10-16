@@ -1,4 +1,4 @@
-# Participant delivery options for the college RL racing event
+# SYNAPSE participant delivery options
 
 **Research-note basis:** `research_notes/Participant delivery options/packaging.md`, `fairness.md`, and `maps.md`
 **Research date in the notes:** 2026-10-17

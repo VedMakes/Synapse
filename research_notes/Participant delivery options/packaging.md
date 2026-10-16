@@ -1,7 +1,7 @@
-# Participant delivery options for a college RL racing event
+# SYNAPSE participant delivery options
 
 **Research date:** 2026-10-17
-**Question:** What is the best way to deliver a fixed Python training environment to college participants and receive models for a reinforcement-learning racing event?
+**Question:** What is the best way to deliver a fixed Python training environment to college participants and receive models for the SYNAPSE reinforcement-learning event?
 **Scope:** Public GitHub repository; public/partial participant repository; standalone executable; Python wheel/source package; Docker/Dev Container; and hybrid designs. Criteria are reproducibility, cross-platform support, offline use, trust/cheat resistance, setup friction, update/versioning, licensing, and organizer operational burden.
 **Source policy:** Primary documentation was prioritized. Web sources below were checked on 2026-10-17; where a source exposes a publication/update date, it is recorded. Claims marked **Inference** are event-specific engineering conclusions rather than statements made by the cited source.
 

@@ -1,4 +1,4 @@
-"""Python-authoritative racing event simulation."""
+"""Python-authoritative SYNAPSE racing simulation."""
 
 from .config import SimulationConfig
 from .env import RacingEnv

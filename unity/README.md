@@ -1,4 +1,4 @@
-# Racing Event Unity renderer foundation
+# SYNAPSE Unity renderer foundation
 
 This is a read-only renderer foundation for **Unity 2022.3.22f1 LTS with
 URP 14.0.8**. It consumes one validated Python replay schema `1.1` document at

@@ -1,4 +1,4 @@
-# Participant-facing fairness controls for a fixed-budget RL competition
+# SYNAPSE participant-facing fairness controls
 
 **Research date:** 2026-10-17
 **Scope:** A participant-facing fairness contract for a fixed-budget reinforcement-learning racing competition. The focus is environment-step budgets, cumulative versus per-run accounting, tamper-evident logs, model architecture limits, observation/action contracts, dependency and runtime pinning, reproducible and deterministic evaluation, submission verification, and resistance to reward or environment exploits.

@@ -1,5 +1,5 @@
 {
-  "release_id": "local-participant-prototype",
+  "release_id": "synapse-local-participant-prototype",
   "tracks": "tracks/train",
   "simulation_config": "config/simulation.json",
   "reward_config": "examples/baseline_reward.json",

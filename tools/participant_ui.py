@@ -14,10 +14,11 @@ from pathlib import Path
 import re
 import subprocess
 import sys
+import tempfile
 from threading import Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import quote, unquote, urlparse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,6 +40,35 @@ def _workspace_path(value: str, *, label: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"{label} must stay inside the project workspace") from exc
     return resolved
+
+
+def _ready_python() -> Path:
+    candidates = [ROOT / ".venv" / "bin" / "python", Path(sys.executable)]
+    checked: list[str] = []
+    for candidate in candidates:
+        if not candidate.exists():
+            continue
+        try:
+            result = subprocess.run(
+                [str(candidate), "-c", "import numpy, torch"],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            checked.append(f"{candidate}: {exc}")
+            continue
+        if result.returncode == 0:
+            return candidate
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        checked.append(f"{candidate}: {detail[-1] if detail else 'numpy/torch import failed'}")
+    raise ValueError(
+        "SYNAPSE Python dependencies are not ready. Run "
+        f"'{sys.executable} tools/setup_participant.py', then start the UI again. "
+        + " | ".join(checked)
+    )
 
 
 def parse_update_line(line: str) -> dict[str, object] | None:
@@ -79,9 +109,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     config = _workspace_path(text("config", "config/simulation.json"), label="config")
     track_dir = _workspace_path(text("track_dir", "tracks/train"), label="track_dir")
     output_dir = _workspace_path(text("output_dir", "participant_run"), label="output_dir")
-    python = ROOT / ".venv" / "bin" / "python"
-    if not python.exists():
-        python = Path(sys.executable)
+    python = _ready_python()
     return [
         str(python),
         str(ROOT / "tools" / "train_participant.py"),
@@ -120,11 +148,15 @@ class TrainingProcess:
 
     def start(self, form: dict[str, object]) -> dict[str, object]:
         command = build_training_command(form)
+        return self.start_command(command, kind="training")
+
+    def start_command(self, command: list[str], *, kind: str) -> dict[str, object]:
         with self._lock:
             if self._process is not None and self._process.poll() is None:
                 raise RuntimeError("a training process is already running")
             self._status = {
                 "state": "starting",
+                "kind": kind,
                 "lines": [],
                 "metrics": {},
                 "error": None,
@@ -183,6 +215,77 @@ class TrainingProcess:
 
 
 PROCESS = TrainingProcess()
+REPLAY_OUTPUTS: dict[str, Path] = {}
+REPLAY_LOCK = Lock()
+
+
+def public_maps() -> list[dict[str, str]]:
+    maps = []
+    for path in sorted((ROOT / "tracks" / "train").glob("*.json")):
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            map_id = str(data["meta"]["id"])
+            display_name = str(data["meta"].get("display_name", map_id))
+            content_hash = str(data["meta"]["content_hash"])
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
+            continue
+        maps.append({"id": map_id, "display_name": display_name, "path": str(path), "content_hash": content_hash})
+    return maps
+
+
+def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
+    if not isinstance(map_id, str) or not map_id:
+        raise ValueError("map_id must be selected from the public SYNAPSE maps")
+    selected = next((item for item in public_maps() if item["id"] == map_id), None)
+    if selected is None:
+        raise ValueError("unknown public SYNAPSE map")
+    output_dir = _workspace_path(output_dir_value, label="output_dir")
+    weights = output_dir / "policy.pt"
+    metadata = output_dir / "policy.json"
+    contract = output_dir / "training_contract.json"
+    if not all(path.exists() for path in (weights, metadata, contract)):
+        raise ValueError("train a policy first; policy.pt, policy.json, and training_contract.json are required")
+    python = _ready_python()
+    replay_dir = output_dir / "replays"
+    replay_dir.mkdir(parents=True, exist_ok=True)
+    replay_path = replay_dir / f"{map_id}.json"
+    html_path = replay_dir / f"{map_id}.html"
+    participant_id = f"SYNAPSE-best-{map_id}"
+    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+    contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
+    temporary_contract: Path | None = None
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{map_id}.contract.", suffix=".json", dir=replay_dir)
+    temporary_contract = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(contract_payload, stream, sort_keys=True, indent=2, allow_nan=False)
+            stream.write("\n")
+        export_command = [
+            str(python), str(ROOT / "tools" / "export_replay.py"),
+            "--weights", str(weights), "--metadata", str(metadata), "--contract", str(temporary_contract),
+            "--track", selected["path"], "--config", str(ROOT / "config" / "simulation.json"),
+            "--participant-id", participant_id, "--output", str(replay_path),
+        ]
+        build_command = [str(python), str(ROOT / "tools" / "build_replay.py"), str(replay_path), "--output", str(html_path)]
+        subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
+        subprocess.run(build_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=60)
+    except subprocess.CalledProcessError as exc:
+        detail = (exc.stderr or exc.stdout or "replay command failed").strip()
+        raise RuntimeError(f"could not build SYNAPSE replay: {detail}") from exc
+    finally:
+        if temporary_contract is not None:
+            temporary_contract.unlink(missing_ok=True)
+    with replay_path.open(encoding="utf-8") as stream:
+        replay = json.load(stream)
+    with REPLAY_LOCK:
+        REPLAY_OUTPUTS[map_id] = html_path
+    return {
+        "map_id": map_id,
+        "display_name": selected["display_name"],
+        "status": replay.get("result", {}).get("status"),
+        "lap_time_s": replay.get("result", {}).get("lap_time_s"),
+        "url": f"/replays/{quote(map_id, safe='')}",
+    }
 
 
 PAGE = r'''<!doctype html>
@@ -190,7 +293,7 @@ PAGE = r'''<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Racing Event · Training Console</title>
+  <title>SYNAPSE · Training Console</title>
   <style>
     :root { color-scheme: dark; --bg: #091018; --panel: #121d29; --panel2: #172535; --line: #2b3d51; --muted: #9aacbf; --text: #eef7ff; --accent: #62ead1; --amber: #ffd28a; --danger: #ff9d91; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
     * { box-sizing: border-box; }
@@ -246,6 +349,11 @@ PAGE = r'''<!doctype html>
     .contract-item strong { display: block; font-size: 13px; }
     .contract-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
     .callout { margin-top: 16px; padding: 13px; border: 1px solid #6f593d; border-radius: 8px; color: var(--amber); background: #2c251b; font-size: 11px; }
+    .watch { display: grid; gap: 9px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
+    .watch label { color: var(--muted); font-size: 11px; }
+    .watch select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0b141e; }
+    .watch-result { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+    .watch-result a { color: var(--accent); }
     footer { padding: 0 0 30px; color: var(--muted); font-size: 11px; }
     footer code { color: var(--text); }
     @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
@@ -255,8 +363,8 @@ PAGE = r'''<!doctype html>
 </head>
 <body>
   <main class="shell">
-    <header><div class="brand"><span class="brand-mark">R/</span> RACING EVENT <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> LOCAL / PYTHON AUTHORITATIVE</div></header>
-    <section class="hero"><div class="eyebrow">Participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose a reward configuration, start or resume a bounded local run, and watch the same metrics that will help you understand the agent. The browser is only a control surface. Python owns the environment, transitions, and budget.</p></section>
+    <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> LOCAL / PYTHON AUTHORITATIVE</div></header>
+    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose a reward configuration, start or resume a bounded local run, and watch the same metrics that will help you understand the agent. The browser is only a control surface. Python owns the environment, transitions, and budget.</p></section>
     <section class="grid">
       <section class="panel">
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">release prototype</span></div>
@@ -271,8 +379,8 @@ PAGE = r'''<!doctype html>
             <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="64"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
           </div>
-          <div class="actions"><button id="start" class="primary">Start / resume training</button><button id="stop" disabled>Stop after current process boundary</button></div>
-          <p class="hint">The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
+          <div class="actions"><button id="start" class="primary">Start / resume SYNAPSE training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
+          <p class="hint">If NumPy or PyTorch is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
         </div>
       </section>
       <aside class="panel">
@@ -281,7 +389,8 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>23-value observation</strong><span>Track-relative float32 state. No track ID or absolute progress.</span></div>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
           <div class="contract-item"><strong>Fixed PPO policy</strong><span>Two tanh layers, 64 units each. Reward weights are the experiment surface.</span></div>
-          <div class="contract-item"><strong>Public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
+          <div class="contract-item"><strong>SYNAPSE public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
+          <div class="watch"><label for="watch-map">Watch best run for map:</label><select id="watch-map"><option>Loading SYNAPSE maps…</option></select><button id="watch">Build / watch saved best run</button><div id="watch-result" class="watch-result">After training, this evaluates the current best saved policy from the fixed start and opens its read-only replay.</div></div>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
         </div>
       </aside>
@@ -295,7 +404,7 @@ PAGE = r'''<!doctype html>
         </div>
       </section>
     </section>
-    <footer>Local UI only. Start with <code>python tools/participant_ui.py</code>. The server binds to loopback and launches the existing CLI; it never becomes a second environment authority.</footer>
+    <footer>Local SYNAPSE UI only. Start with <code>python tools/participant_ui.py</code>. The server binds to loopback and launches the existing CLI; it never becomes a second environment authority.</footer>
   </main>
   <script>
     const $ = id => document.getElementById(id);
@@ -309,15 +418,18 @@ PAGE = r'''<!doctype html>
       $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
-      $("start").disabled = Boolean(data.running); $("stop").disabled = !data.running;
+      $("start").disabled = Boolean(data.running); $("setup").disabled = Boolean(data.running); $("watch").disabled = Boolean(data.running);
       $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
     }
     async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
     async function refresh() { try { render(await request("/api/status")); } catch (error) { $("state-label").textContent = error.message; } }
+    async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.innerHTML = ""; maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); } catch (error) { $("watch-result").textContent = error.message; } }
     $("start").addEventListener("click", async () => { try { render(await request("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(formData()) })); } catch (error) { alert(error.message); } });
     $("stop").addEventListener("click", async () => { try { render(await request("/api/stop", { method: "POST" })); } catch (error) { alert(error.message); } });
+    $("setup").addEventListener("click", async () => { try { render(await request("/api/setup", { method: "POST" })); } catch (error) { alert(error.message); } });
+    $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · `; const link = document.createElement("a"); link.href = result.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open replay"; target.appendChild(link); } catch (error) { $("watch-result").textContent = error.message; } });
     fields.forEach(id => $(id).addEventListener("change", refresh));
-    refresh(); setInterval(refresh, 700);
+    refreshMaps(); refresh(); setInterval(refresh, 700);
   </script>
 </body>
 </html>'''
@@ -343,12 +455,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
         elif path == "/api/status":
             self._json(200, PROCESS.snapshot())
+        elif path == "/api/maps":
+            self._json(200, public_maps())
         elif path == "/api/report":
             report = ROOT / "participant_run" / "training_report.md"
             if not report.exists():
                 self._json(404, {"error": "no participant report exists yet"})
             else:
                 self._send(200, "text/markdown; charset=utf-8", report.read_bytes())
+        elif path.startswith("/replays/"):
+            map_id = unquote(path.removeprefix("/replays/")).strip("/")
+            with REPLAY_LOCK:
+                replay_path = REPLAY_OUTPUTS.get(map_id)
+            if replay_path is None or not replay_path.exists():
+                self._json(404, {"error": "replay has not been built for this map yet"})
+            else:
+                self._send(200, "text/html; charset=utf-8", replay_path.read_bytes())
         else:
             self._json(404, {"error": "not found"})
 
@@ -356,6 +478,28 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/stop":
             self._json(200, PROCESS.stop())
+            return
+        if path == "/api/setup":
+            try:
+                command = [sys.executable, str(ROOT / "tools" / "setup_participant.py")]
+                self._json(200, PROCESS.start_command(command, kind="setup"))
+            except (RuntimeError, OSError, ValueError) as exc:
+                self._json(400, {"error": str(exc)})
+            return
+        if path == "/api/watch":
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+                if length > 16 * 1024:
+                    raise ValueError("request is too large")
+                form = json.loads(self.rfile.read(length).decode("utf-8"))
+                if not isinstance(form, dict):
+                    raise ValueError("request must be a JSON object")
+                if PROCESS.snapshot().get("running"):
+                    raise RuntimeError("stop training before building a best-run replay")
+                result = build_best_run(form.get("map_id", ""), str(form.get("output_dir", "participant_run")))
+                self._json(200, result)
+            except (ValueError, RuntimeError, OSError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
+                self._json(400, {"error": str(exc)})
             return
         if path != "/api/start":
             self._json(404, {"error": "not found"})
@@ -387,7 +531,7 @@ def main() -> None:
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"participant UI: http://{args.host}:{args.port}/")
+    print(f"SYNAPSE participant UI: http://{args.host}:{args.port}/")
     print("Press Ctrl-C to stop the local server.")
     try:
         server.serve_forever()

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from tools.participant_ui import PAGE, build_training_command, parse_update_line
+from tools.participant_ui import PAGE, build_training_command, parse_update_line, public_maps
 
 
 class ParticipantUiTests(unittest.TestCase):
@@ -31,8 +31,13 @@ class ParticipantUiTests(unittest.TestCase):
             build_training_command({"output_dir": "../../outside"})
 
     def test_page_contains_participant_contract_and_controls(self) -> None:
-        for text in ("Start / resume training", "Cumulative budget", "Fixed PPO policy", "/api/status"):
+        for text in ("Start / resume SYNAPSE training", "Cumulative budget", "Fixed PPO policy", "Watch best run for map", "Set up / repair Python", "/api/status"):
             self.assertIn(text, PAGE)
+
+    def test_public_map_selector_has_three_development_maps(self) -> None:
+        maps = public_maps()
+        self.assertEqual(len(maps), 3)
+        self.assertEqual({item["id"] for item in maps}, {"synthetic_oval", "synthetic_flowing", "synthetic_tight_loop"})
 
 
 if __name__ == "__main__":
