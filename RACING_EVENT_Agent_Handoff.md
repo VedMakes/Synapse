@@ -1585,3 +1585,80 @@ candidate route-family-balanced maps, while keeping final geometry outside the
 participant-visible repository. After the event decisions above are approved,
 implement the ONNX export/validator and private evaluation boundary; do not
 present the current `.pt` prototype artifact as the final submission format.
+
+## 29. SESSION HANDOFF (2026-10-17, PARTICIPANT UI)
+
+### Goal and result
+
+The completed participant-delivery foundation was committed first as:
+
+`a6e1190 feat: add participant delivery foundation`
+
+The user approved the separate public participant-repository direction and
+requested a simple Python UI alongside the CLI. Tkinter is not installed in the
+current Python environment, so the UI is implemented as a dependency-free local
+web dashboard served by Python's standard library. It is a thin controller for
+the existing CLI and is not a second environment, reward system, or budget
+authority.
+
+### Implemented files
+
+- `tools/participant_ui.py`
+  - Serves a responsive local training dashboard on loopback.
+  - Provides reward/map/output paths, per-run steps, cumulative budget, envs,
+    rollout length, and seed fields.
+  - Starts/resumes `tools/train_participant.py` in a background subprocess,
+    displays bounded progress lines, and offers a stop control.
+  - Shows budget progress, update number, mean return, lap completion, speed,
+    crash rate, off-track rate, and recent trainer output.
+  - Enforces workspace-local paths for the launched CLI and keeps the server
+    bound to `127.0.0.1` by default.
+- `tests/test_participant_ui.py`
+  - Covers progress-line parsing, workspace-bound command construction, and
+    the participant contract/control surface in the page.
+- `README.md`, `docs/participant_guide.md`, and `Makefile`
+  - Document `python tools/participant_ui.py`, `http://127.0.0.1:8766/`, and
+    `make participant-ui`.
+- `tools/train_participant.py`
+  - Prints crash and off-track rates in the progress line so the dashboard can
+    display them without reading unbounded training logs.
+
+### How to view it
+
+The local server is currently running at:
+
+`http://127.0.0.1:8766/`
+
+Start it again after a restart with:
+
+```bash
+.venv/bin/python tools/participant_ui.py
+```
+
+The container has no browser binary, so this session verified the served HTML
+and JSON status endpoint with HTTP requests rather than a screenshot. A normal
+desktop browser should show the run setup form, fixed-contract panel, budget
+progress bar, metric cards, and live log.
+
+### Checks and evidence
+
+- UI-focused tests: **passed** — 3 tests in `test_participant_ui.py`.
+- Full suite: **passed** — `make test`, 84 Python tests including the Node
+  frontend integration.
+- Direct frontend suite: **passed** — 65 Node tests.
+- Syntax/diff: **passed** — Python compile, `node --check`, and
+  `git diff --check`.
+- HTTP smoke: **passed** — the UI root returned 13,832 bytes and contained the
+  training controls; `/api/status` returned an idle JSON state.
+- Tkinter/real-browser screenshot: **not run** — Tkinter and a browser binary
+  are unavailable in the current container. The UI has no additional Python
+  dependency.
+
+### Exact next action
+
+Open the local UI in a desktop browser and try a tiny run with `Steps this run`
+set to 256. After the interaction pass, decide whether the participant release
+should ship this web dashboard as the default UI or keep it as an optional
+convenience over the CLI. Then create the clean public participant repository
+from the committed release, excluding private evaluator/history and before
+adding final held-out maps.

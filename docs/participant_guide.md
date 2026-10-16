@@ -60,6 +60,20 @@ PyTorch optimizer state. A process restart therefore resumes from the saved
 policy with a fresh optimizer. This is acceptable for the onboarding slice but
 must be decided before the scored event.
 
+## Optional local dashboard
+
+The same workflow has a small dependency-free Python web UI:
+
+```bash
+.venv/bin/python tools/participant_ui.py
+```
+
+Open `http://127.0.0.1:8766/`. The dashboard provides editable paths and
+bounded-run settings, start/resume and stop controls, budget progress, update
+metrics, a live log, and a short fixed-contract panel. It launches the same
+`tools/train_participant.py` command. It binds to loopback only and is not a
+network service or a second simulator.
+
 ## Participant contract
 
 The current provisional policy receives 23 `float32` track-relative values and

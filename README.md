@@ -61,6 +61,16 @@ vector lanes and repeated frames charged individually, but the exact budget
 and enforcement model remain open. See `docs/participant_guide.md` and the
 research report `reports/Participant delivery options.md`.
 
+For a simple browser dashboard around the same CLI, run:
+
+```bash
+.venv/bin/python tools/participant_ui.py
+```
+
+Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
+library, binds to loopback, launches the existing CLI, and polls its bounded
+progress output. It does not implement a second environment or budget.
+
 ## Setup
 
 The supported runtime is Python 3.11. The lock file uses the CPU PyTorch wheel

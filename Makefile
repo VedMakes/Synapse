@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: test e1 e2 participant-maps participant-smoke
+.PHONY: test e1 e2 participant-maps participant-smoke participant-ui
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -16,3 +16,6 @@ participant-maps:
 
 participant-smoke:
 	$(PYTHON) tools/train_participant.py --steps 256 --budget-steps 10000 --output-dir participant_run
+
+participant-ui:
+	$(PYTHON) tools/participant_ui.py

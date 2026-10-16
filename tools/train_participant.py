@@ -270,7 +270,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             f"update {update_number}: steps {budget_status['used_steps']}/{args.budget_steps} "
             f"return={display(row['mean_episode_return'])} "
             f"lap={display(row['lap_completion_rate'])} "
-            f"speed={display(row['mean_speed_mps'])} m/s"
+            f"speed={display(row['mean_speed_mps'])} m/s "
+            f"crash={display(row['crash_rate'])} "
+            f"off_track={display(row['off_track_rate'])}"
         )
         target -= batch_steps
     return state
