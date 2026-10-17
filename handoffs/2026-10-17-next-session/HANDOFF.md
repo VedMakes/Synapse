@@ -26,6 +26,12 @@ The two requested participant controls are implemented and committed in
 - The participant UI now has a cyberpunk/touge-night visual treatment, inline
   signal definitions, and a live SVG dummy car diagram that renders ordered ray
   indices/angles without changing the backend contract.
+- The first diagram pass was revised after visual feedback: rays now use a
+  clean front-bumper origin, positive angles render on the visual left, labels
+  use fixed non-overlapping side rails with leader lines, invalid angles are not
+  drawn, and the car has explicit wheels, windows, lights, bumpers, and shadow.
+  The page still needs real browser screenshot review when a browser is
+  available; this container has no browser binary.
 - `docs/participant_guide.md` now documents the UI flow, all nine signal
   definitions, reward-sign guidance, ray semantics, UI-vs-custom reward
   boundaries, and dummy confirmation commands.

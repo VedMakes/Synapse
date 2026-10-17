@@ -541,26 +541,43 @@ PAGE = r'''<!doctype html>
       .diagram-shell { margin-top: 14px; padding: 10px; border: 1px solid #21485a; background: linear-gradient(145deg, #07131d, #0d0b1b); }
       .diagram-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
       .diagram-count { color: var(--acid); text-shadow: 0 0 9px #b7f23a66; }
-      #ray-diagram { display: block; width: 100%; height: auto; min-height: 220px; border: 1px solid #17354a; background: radial-gradient(circle at 50% 70%, #142f3c 0, transparent 25%), #060b12; }
+      #ray-diagram { display: block; width: 100%; height: auto; aspect-ratio: 640 / 430; border: 1px solid #17354a; background: radial-gradient(circle at 50% 72%, #142f3c 0, transparent 27%), #060b12; }
       #ray-diagram .diagram-grid { fill: url(#diagram-grid); opacity: .52; }
-      #ray-diagram .range-ring { fill: none; stroke: #45f3ff38; stroke-dasharray: 4 7; }
+      #ray-diagram .range-arc { fill: none; stroke: #45f3ff38; stroke-dasharray: 5 8; stroke-width: 2; }
       #ray-diagram .range-label { fill: #91a7bb; font: 10px ui-monospace, monospace; }
-      #ray-diagram .ray-line { stroke: var(--pink); stroke-width: 2; opacity: .86; filter: url(#ray-glow); }
-      #ray-diagram .ray-line.center { stroke: var(--cyan); stroke-width: 3; }
-      #ray-diagram .ray-label { fill: var(--text); font: 10px ui-monospace, monospace; paint-order: stroke; stroke: #060b12; stroke-width: 4px; }
-      #ray-diagram .car-body { fill: #111d2b; stroke: var(--amber); stroke-width: 2; filter: url(#car-glow); }
-      #ray-diagram .car-window { fill: #45f3ff33; stroke: #45f3ffaa; stroke-width: 1; }
-      #ray-diagram .car-lamp { fill: var(--pink); filter: url(#ray-glow); }
-      .ray-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; color: var(--muted); font: 10px ui-monospace, monospace; }
-      .ray-summary span { padding: 4px 6px; border: 1px solid #28445a; background: #091522; }
+      #ray-diagram .ray-line { stroke: var(--pink); stroke-width: 2.5; opacity: .86; filter: url(#ray-glow); stroke-linecap: round; }
+      #ray-diagram .ray-line.center { stroke: var(--cyan); stroke-width: 3.5; }
+      #ray-diagram .ray-endpoint { fill: var(--pink); stroke: #fef6ff; stroke-width: 1.5; }
+      #ray-diagram .ray-endpoint.center { fill: var(--cyan); }
+      #ray-diagram .ray-leader { fill: none; stroke: #ff3fa466; stroke-width: 1.25; stroke-dasharray: 3 4; }
+      #ray-diagram .ray-leader.center { stroke: #45f3ff99; }
+      #ray-diagram .ray-label-box { fill: #07131ee8; stroke: #2b5367; stroke-width: 1; rx: 3; }
+      #ray-diagram .ray-label-box.center { stroke: #45f3ffb8; }
+      #ray-diagram .ray-label { fill: var(--text); font: 11px ui-monospace, monospace; }
+      #ray-diagram .ray-label.center { fill: var(--cyan); }
+      #ray-diagram .car-shadow { fill: #00000080; filter: url(#car-shadow); }
+      #ray-diagram .car-body { fill: #15283a; stroke: var(--amber); stroke-width: 3; filter: url(#car-glow); }
+      #ray-diagram .car-bumper { fill: #263e50; stroke: #8ea6b8; stroke-width: 1.5; }
+      #ray-diagram .car-window { fill: #164b5d; stroke: var(--cyan); stroke-width: 2; }
+      #ray-diagram .car-roof { fill: #102233; stroke: #55788a; stroke-width: 1; }
+      #ray-diagram .car-wheel { fill: #050a10; stroke: #9bb4c4; stroke-width: 2; }
+      #ray-diagram .car-rim { fill: #263c4a; stroke: var(--cyan); stroke-width: 1; }
+      #ray-diagram .car-lamp { fill: var(--amber); filter: url(#ray-glow); }
+      #ray-diagram .car-tail { fill: var(--pink); filter: url(#ray-glow); }
+      #ray-diagram .car-centerline { stroke: #45f3ff77; stroke-width: 1.5; stroke-dasharray: 5 6; }
+      #ray-diagram .car-caption { fill: #91a7bb; font: 10px ui-monospace, monospace; letter-spacing: .08em; }
+      .ray-summary { display: grid; grid-template-columns: repeat(auto-fit, minmax(128px, 1fr)); gap: 6px; margin-top: 9px; color: var(--muted); font: 11px ui-monospace, monospace; }
+      .ray-summary span { min-width: 0; padding: 5px 7px; overflow: hidden; border: 1px solid #28445a; background: #091522; white-space: nowrap; text-overflow: ellipsis; }
       .ray-summary span[data-center="true"] { color: var(--cyan); border-color: #45f3ff7a; }
+      .ray-summary span[data-invalid="true"] { color: var(--danger); border-color: #ff657c88; }
       .validation { min-height: 16px; margin-top: 8px; color: var(--acid); font-size: 10px; }
       .validation[data-kind="error"] { color: var(--danger); }
       .validation[data-kind="warn"] { color: var(--amber); }
       footer { padding: 0 0 30px; color: var(--muted); font-size: 11px; }
       footer code { color: var(--cyan); }
      @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } .hero::after { display: none; } }
-     @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics, .weight-grid { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } #ray-diagram { min-height: 170px; } }
+      @media (max-width: 700px) { #ray-diagram .ray-callout, #ray-diagram .ray-leader, #ray-diagram .range-label { display: none; } }
+      @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics, .weight-grid { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } }
      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .001ms !important; scroll-behavior: auto !important; } body::before, body::after { opacity: .12; } }
   </style>
 </head>
@@ -588,20 +605,35 @@ PAGE = r'''<!doctype html>
             <div class="subpanel"><h3>Forward-facing ray sensors</h3><div class="form-grid">
               <label>Ray count<input id="ray-count" type="number" min="1" max="16" step="1" value="9" aria-describedby="ray-hint ray-validation"></label>
               <label class="full">Angles in degrees, ordered as observation fields<input id="ray-angles" value="0,-15,15,-30,30,-60,60,-90,90" spellcheck="false" aria-describedby="ray-hint ray-validation"></label>
-            </div><p id="ray-hint" class="hint">Use 1–16 unique finite angles in [-90, 90], including 0. Positive angles sweep left; negative angles sweep right. Order changes the observation contract.</p><div class="diagram-shell"><div class="diagram-head"><span>Forward sensor layout / dummy preview</span><span id="diagram-count" class="diagram-count">RAYS 9 / 9</span></div><svg id="ray-diagram" viewBox="0 0 640 390" role="img" aria-labelledby="ray-diagram-title ray-diagram-desc">
+            </div><p id="ray-hint" class="hint">Use 1–16 unique finite angles in [-90, 90], including 0. Positive angles sweep left; negative angles sweep right. Order changes the observation contract.</p><div class="diagram-shell"><div class="diagram-head"><span>Forward sensor layout / dummy preview</span><span id="diagram-count" class="diagram-count">RAYS 9 / 9</span></div><svg id="ray-diagram" viewBox="0 0 640 430" role="img" aria-labelledby="ray-diagram-title ray-diagram-desc">
                 <title id="ray-diagram-title">Forward-facing sensor layout</title>
-                <desc id="ray-diagram-desc">A top-down dummy car with one labeled line for each configured forward ray. The diagram represents angles only; it does not perform physics or raycasts.</desc>
+                 <desc id="ray-diagram-desc">A clean top-down dummy sports car with one colored sensor line for each configured forward ray. The diagram represents angles only; it does not perform physics or raycasts.</desc>
                 <defs>
                   <pattern id="diagram-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="#45f3ff18" stroke-width="1"></path></pattern>
                   <filter id="ray-glow"><feGaussianBlur stdDeviation="2.6" result="blur"></feGaussianBlur><feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge></filter>
                   <filter id="car-glow"><feGaussianBlur stdDeviation="1.2" result="blur"></feGaussianBlur><feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMerge></feMerge></filter>
-                </defs>
-                <rect class="diagram-grid" x="0" y="0" width="640" height="390"></rect>
-                <circle class="range-ring" cx="320" cy="168" r="145"></circle>
-                <text class="range-label" x="320" y="21" text-anchor="middle">MAX RANGE / 100 M</text>
-                <g id="ray-lines" aria-hidden="true"></g>
-                <g aria-hidden="true"><path class="car-body" d="M320 145 L348 184 L354 257 Q352 285 320 292 Q288 285 286 257 L292 184 Z"></path><path class="car-window" d="M302 194 Q320 175 338 194 L334 222 L306 222 Z"></path><path class="car-window" d="M305 235 L335 235 L339 258 Q320 270 301 258 Z"></path><circle class="car-lamp" cx="300" cy="182" r="3"></circle><circle class="car-lamp" cx="340" cy="182" r="3"></circle><path d="M320 145 L314 158 L326 158 Z" fill="var(--amber)"></path></g>
-                <text class="range-label" x="320" y="350" text-anchor="middle">CAR HEADING ↑ · 0° = FORWARD</text>
+                   <filter id="car-shadow"><feGaussianBlur stdDeviation="5"></feGaussianBlur></filter>
+                 </defs>
+                 <rect class="diagram-grid" x="0" y="0" width="640" height="430"></rect>
+                 <path class="range-arc" d="M126 270 A194 194 0 0 0 514 270"></path>
+                 <text class="range-label" x="320" y="54" text-anchor="middle">MAX RANGE / 100 M</text>
+                 <g id="ray-lines" aria-hidden="true"></g>
+                 <g id="ray-callouts" aria-hidden="true"></g>
+                 <g aria-hidden="true">
+                   <path class="car-shadow" d="M274 304 Q274 286 292 279 Q320 268 348 279 Q366 286 366 304 L371 370 Q370 405 320 412 Q270 405 269 370 Z"></path>
+                   <rect class="car-wheel" x="258" y="304" width="18" height="43" rx="8"></rect><circle class="car-rim" cx="267" cy="325" r="5"></circle>
+                   <rect class="car-wheel" x="364" y="304" width="18" height="43" rx="8"></rect><circle class="car-rim" cx="373" cy="325" r="5"></circle>
+                   <rect class="car-wheel" x="258" y="360" width="18" height="43" rx="8"></rect><circle class="car-rim" cx="267" cy="381" r="5"></circle>
+                   <rect class="car-wheel" x="364" y="360" width="18" height="43" rx="8"></rect><circle class="car-rim" cx="373" cy="381" r="5"></circle>
+                   <path class="car-body" d="M274 304 Q274 286 292 279 Q320 268 348 279 Q366 286 366 304 L371 370 Q370 405 320 412 Q270 405 269 370 Z"></path>
+                   <path class="car-bumper" d="M289 286 Q320 274 351 286 L347 298 Q320 289 293 298 Z"></path>
+                   <path class="car-window" d="M294 310 Q320 288 346 310 L341 340 Q320 348 299 340 Z"></path>
+                   <path class="car-roof" d="M301 349 Q320 357 339 349 L345 377 Q320 391 295 377 Z"></path>
+                   <path class="car-centerline" d="M320 301 L320 396"></path>
+                   <rect class="car-lamp" x="293" y="286" width="14" height="6" rx="2"></rect><rect class="car-lamp" x="333" y="286" width="14" height="6" rx="2"></rect>
+                   <rect class="car-tail" x="291" y="395" width="18" height="5" rx="2"></rect><rect class="car-tail" x="331" y="395" width="18" height="5" rx="2"></rect>
+                 </g>
+                 <text class="car-caption" x="320" y="426" text-anchor="middle">CAR HEADING ↑ · 0° = FORWARD</text>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
             <label>Training maps<input id="track-dir" value="tracks/train" spellcheck="false"></label>
             <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
@@ -663,19 +695,37 @@ PAGE = r'''<!doctype html>
        else if (!values.includes(0)) error = "Include a 0° center ray so the car has a straight-ahead sensor.";
        return { entries, values, rayCount, error };
      }
-     function renderRayDiagram() {
-       const preview = rayPreview(), group = $("ray-lines"), summary = $("ray-summary"), validation = $("ray-validation");
-       group.replaceChildren(); summary.replaceChildren();
-       preview.entries.filter(entry => entry.valid).forEach(entry => {
-         const radians = entry.value * Math.PI / 180, startX = 320, startY = 164, radius = 145;
-         const endX = startX + Math.sin(radians) * radius, endY = startY - Math.cos(radians) * radius;
-         const line = document.createElementNS(svgNamespace, "line");
-         line.setAttribute("class", `ray-line${entry.value === 0 ? " center" : ""}`); line.setAttribute("x1", startX); line.setAttribute("y1", startY); line.setAttribute("x2", endX.toFixed(2)); line.setAttribute("y2", endY.toFixed(2)); line.setAttribute("aria-label", `Ray ${entry.index}, ${formatAngle(entry.value)}`); group.appendChild(line);
-         const label = document.createElementNS(svgNamespace, "text");
-         const labelX = endX + (endX >= startX ? 8 : -8), labelY = Math.max(34, Math.min(330, endY + (endY < startY ? 0 : 14)));
-         label.setAttribute("class", "ray-label"); label.setAttribute("x", labelX.toFixed(2)); label.setAttribute("y", labelY.toFixed(2)); label.setAttribute("text-anchor", endX >= startX ? "start" : "end"); label.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`; group.appendChild(label);
-         const chip = document.createElement("span"); chip.dataset.center = String(entry.value === 0); chip.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`; summary.appendChild(chip);
-       });
+      function svgNode(name, attributes = {}) {
+        const node = document.createElementNS(svgNamespace, name);
+        Object.entries(attributes).forEach(([key, value]) => node.setAttribute(key, String(value)));
+        return node;
+      }
+      function renderRayDiagram() {
+        const preview = rayPreview(), group = $("ray-lines"), callouts = $("ray-callouts"), summary = $("ray-summary"), validation = $("ray-validation");
+        const originX = 320, originY = 270, radius = 194, labelTop = 64, rowHeight = 24;
+        group.replaceChildren(); callouts.replaceChildren(); summary.replaceChildren();
+        const drawable = preview.entries.filter(entry => entry.valid && entry.value >= -90 && entry.value <= 90);
+        drawable.forEach((entry, drawableIndex) => {
+          const radians = entry.value * Math.PI / 180;
+          const endX = originX - Math.sin(radians) * radius, endY = originY - Math.cos(radians) * radius;
+          const center = entry.value === 0, side = drawableIndex % 2 === 0 ? "left" : "right", row = Math.floor(drawableIndex / 2);
+          const boxX = side === "left" ? 8 : 510, boxY = labelTop + row * rowHeight, boxEdgeX = side === "left" ? 130 : 510, elbowX = side === "left" ? 144 : 496, boxCenterY = boxY + 10;
+          const line = svgNode("line", { class: `ray-line${center ? " center" : ""}`, x1: originX, y1: originY, x2: endX.toFixed(2), y2: endY.toFixed(2), "aria-label": `Ray ${entry.index}, ${formatAngle(entry.value)}` });
+          const endpoint = svgNode("circle", { class: `ray-endpoint${center ? " center" : ""}`, cx: endX.toFixed(2), cy: endY.toFixed(2), r: center ? 4 : 3 });
+          group.appendChild(line); group.appendChild(endpoint);
+          const leader = svgNode("polyline", { class: `ray-leader${center ? " center" : ""}`, points: `${endX.toFixed(2)},${endY.toFixed(2)} ${elbowX},${boxCenterY} ${boxEdgeX},${boxCenterY}` });
+          const box = svgNode("rect", { class: `ray-label-box ray-callout${center ? " center" : ""}`, x: boxX, y: boxY, width: 122, height: 20 });
+          const label = svgNode("text", { class: `ray-label ray-callout${center ? " center" : ""}`, x: side === "left" ? boxX + 8 : boxX + 114, y: boxY + 14, "text-anchor": side === "left" ? "start" : "end" });
+          label.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`;
+          callouts.appendChild(leader); callouts.appendChild(box); callouts.appendChild(label);
+        });
+        preview.entries.forEach(entry => {
+          const chip = document.createElement("span");
+          const drawableEntry = entry.valid && entry.value >= -90 && entry.value <= 90;
+          chip.dataset.center = String(entry.value === 0); chip.dataset.invalid = String(!drawableEntry);
+          chip.textContent = entry.valid ? `ray_${entry.index} · ${formatAngle(entry.value)}` : `ray_${entry.index} · invalid`;
+          summary.appendChild(chip);
+        });
        $("diagram-count").textContent = `RAYS ${preview.values.length} / ${Number.isInteger(preview.rayCount) ? preview.rayCount : "?"}`;
        validation.dataset.kind = preview.error ? "error" : "ok";
        validation.textContent = preview.error || `Layout valid: ${preview.values.length} ordered rays. The cyan line is 0° forward.`;

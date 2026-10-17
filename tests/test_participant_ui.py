@@ -57,6 +57,12 @@ class ParticipantUiTests(unittest.TestCase):
             "curvature_matched_speed",
             "Measures abrupt steering changes; larger means rougher",
             '["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram))',
+            'viewBox="0 0 640 430"',
+            'id="ray-callouts"',
+            "ray-label-box",
+            "ray-endpoint",
+            "car-wheel",
+            "Positive angles sweep left",
         ):
             self.assertIn(text, PAGE)
 
