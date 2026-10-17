@@ -9,7 +9,9 @@ The current prototype proves the parts that should be stable before a trainer or
 3. `TrackGeometry` owns projection, raycasts, and rectangle-footprint edge checks.
 4. `RacingEnv` exposes `reset(seed)` and `step_raw(action)` with two continuous actions; `step(action)` remains a legacy reference-reward adapter.
 5. Physics uses a fixed timestep and a deterministic kinematic model.
-6. Raw transition signals are returned in `info["signals"]`; participant code may apply any reward function, while `RewardConfig` remains an optional reference adapter.
+6. Raw transition signals are returned in `info["signals"]`; the dashboard can
+   apply UI-edited `RewardConfig` weights, while a custom participant trainer
+   may apply any finite local reward function over copies of the published data.
 7. `RunBudget` persists `n` logical runs with at most `k` environment transitions per run.
 8. The scripted tool writes the versioned trajectory shape intended for later Unity playback.
 9. Rollout diagnostics expose spawn-relative sector coverage, positive off-track

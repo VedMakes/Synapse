@@ -89,10 +89,12 @@ algorithm, or artifact format.
 ## Participant-owned reward
 
 `VectorizedRacingEnv.step_raw` exposes the next observation, termination flags,
-and raw signal mapping without applying a reward. A participant trainer may
-implement any finite reward function over copies of the observation, action,
-signals, and transition outcome. `RewardConfig` is only the reference weighted
-signal adapter used by the bundled baseline.
+and raw signal mapping without applying a reward. The normal dashboard path
+uses the UI-edited `RewardConfig` weights over these nine published signals and
+saves the canonical configuration with the run. A custom participant trainer
+may still implement any finite reward function over copies of the observation,
+action, signals, and transition outcome. Organizer evaluation never executes
+participant reward code.
 
 ## Declarative participant model artifact
 
