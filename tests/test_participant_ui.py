@@ -41,7 +41,23 @@ class ParticipantUiTests(unittest.TestCase):
             build_training_command({"output_dir": "../../outside"})
 
     def test_page_contains_participant_contract_and_controls(self) -> None:
-        for text in ("Start / resume participant training", "Cumulative budget", "Reward function · signal weights", "Forward-facing ray sensors", "Watch reference artifact for map", "Set up / repair Python", "/api/status"):
+        for text in (
+            "Start / resume participant training",
+            "Cumulative budget",
+            "Reward function · signal weights",
+            "Forward-facing ray sensors",
+            "Watch reference artifact for map",
+            "Set up / repair Python",
+            "/api/status",
+            'id="ray-diagram"',
+            'role="img"',
+            "renderRayDiagram",
+            'id="ray-summary"',
+            "The cyan line is 0° forward",
+            "curvature_matched_speed",
+            "Measures abrupt steering changes; larger means rougher",
+            '["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram))',
+        ):
             self.assertIn(text, PAGE)
 
     def test_ui_writes_weighted_reward_and_ray_config_snapshots(self) -> None:
@@ -60,6 +76,22 @@ class ParticipantUiTests(unittest.TestCase):
             self.assertEqual(json.loads(reward_path.read_text())["weights"]["progress"], 4.5)
             self.assertEqual(json.loads(config_path.read_text())["sensors"]["ray_angles_deg"], [-30.0, 0.0, 30.0])
             self.assertTrue((output_dir / "run_identity.json").exists())
+
+    def test_ui_preserves_non_sorted_ray_order_in_identity(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output_dir = Path(directory).resolve()
+            build_training_command({
+                "output_dir": str(output_dir),
+                "trainer": "examples/participant_train.py",
+                "ray_count": 3,
+                "ray_angles_deg": "30,-30,0",
+                "steps": 1,
+            })
+            config = json.loads((output_dir / "run_config.json").read_text())
+            identity = json.loads((output_dir / "run_identity.json").read_text())
+        self.assertEqual(config["sensors"]["ray_angles_deg"], [30.0, -30.0, 0.0])
+        self.assertEqual(identity["ray_angles_deg"], [30.0, -30.0, 0.0])
+        self.assertEqual(identity["ray_count"], 3)
 
     def test_ui_rejects_ray_count_mismatch(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:

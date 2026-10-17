@@ -1,9 +1,9 @@
-# SYNAPSE participant guide draft
+# SYNAPSE participant guide
 
 This is the first participant-facing training path for the local prototype. It
-is intentionally marked as a draft. The exact event budget, final map set,
-submission format, ranking rule, and artifact validator are still open in the
-event decision register.
+is ready for local onboarding and dummy training confirmation. The exact event
+budget, final map set, submission format, ranking rule, and final artifact
+validator are still open in the event decision register.
 
 ## Recommended delivery
 
@@ -83,41 +83,56 @@ The same workflow has a small dependency-free Python web UI:
 .venv/bin/python tools/participant_ui.py
 ```
 
-Open `http://127.0.0.1:8766/`. The dashboard provides editable trainer/reward
-paths and bounded-run settings, start/resume and stop controls, budget
-progress, update metrics, a live log, and the SYNAPSE environment contract. It
-launches the same `tools/train_participant.py` command. It binds to loopback
-only and is not a network service or a second model, reward function, or
-simulator.
+Open `http://127.0.0.1:8766/`. The dashboard provides a local night-racing
+console for the same `tools/train_participant.py` command. Its run flow is:
+
+1. Choose your trainer script.
+2. Set the nine static signal weights in the **Reward function** panel.
+3. Set the ray count and ordered angles in **Forward-facing ray sensors**.
+4. Set maps, output directory, steps, cumulative budget, parallel environments,
+   rollout length, and seed.
+5. Click **Start / resume participant training**.
+6. Watch the transition counter, update metrics, and bounded process log. Use
+   **Stop after current process boundary** to terminate the trainer.
+
+The dashboard is a loopback presentation/controller layer, not a network
+service or a second model, reward engine, simulator, or scoring authority. It
+launches the existing trainer and writes the selected configuration beside the
+run. The **Watch reference artifact for map** action is a reference-only replay
+path after a bundled starter run; generic artifact evaluation is documented
+below.
 
 The dashboard also has a **Set up / repair Python** button. If the UI detects
-that NumPy is missing, it refuses to launch a broken environment and shows the
-setup command instead. The bundled reference starter has a **Watch reference
-artifact for map** action; a generic participant artifact replay/export
-contract is not implemented yet.
+that NumPy or the reference trainer's PyTorch dependency is missing, it refuses
+to launch a broken environment and shows the setup command instead. The first
+run should be intentionally small; repeat with the same output directory only
+when your trainer supports resuming.
 
 ## Participant-owned training boundary
 
-The SYNAPSE environment publishes 23 `float32` track-relative values and
-accepts two finite actions in `[-1, 1]`:
+The SYNAPSE environment publishes `10 + ray_count + lookahead_count` `float32`
+track-relative values. The default is 23 values; the UI lets you choose the
+forward-ray portion. It accepts two finite actions in `[-1, 1]`:
 
 1. steering;
 2. throttle/brake, where positive is throttle and negative is braking.
 
 Participants own the policy/model architecture, inference distribution,
 optimizer, training algorithm, preprocessing, checkpoint format, weights, and
-reward function. SYNAPSE owns the physics transition, observation/action
-semantics, termination, public tracks, raw signal names, evaluation starts,
-and scoring environment.
+custom training logic. SYNAPSE owns the physics transition, observation/action
+semantics, termination, public tracks, raw signal names, evaluation starts, and
+scoring environment.
 
 `VectorizedRacingEnv.step_raw` returns the next observation, termination flags,
 and raw signals. A participant reward callback may use those signals, the
 observation, action, and transition outcome to return one finite scalar.
 `examples/participant_reward.py` shows the callable shape only; copy and
 replace it in your own trainer workspace.
-`RewardConfig` and `examples/baseline_reward.json` are only a reference
-weighted-signal adapter. Non-finite reward values are rejected before the
-training batch is created.
+The normal dashboard path uses the static `RewardConfig` weighted-signal
+adapter and writes the canonical `reward_config.json` into the run directory.
+A custom participant trainer may instead omit `--reward` and compute its own
+finite reward callback. The organizer evaluator never executes participant
+reward code.
 
 A participant-owned trainer can use the reusable transition adapter without
 accepting its reference PPO implementation:
@@ -166,6 +181,117 @@ weights and writes a canonical `reward_config.json`; it also edits the ordered
 forward-ray list. The ray list must contain 1–16 unique finite angles in
 `[-90, 90]` degrees and must include `0`. Ray order is part of the observation
 contract, so changing it requires a compatible new run/artifact.
+
+### Signal definitions
+
+The UI weights are applied as:
+
+```text
+reward = sum(weight[signal] * signal[transition])
+```
+
+These are raw transition signals, not equal-scale scores. Some are dense
+per-step values and some are one-shot events. The definitions are:
+
+| Signal | Definition | Typical sign |
+|---|---|---|
+| `progress` | Signed wrapped change in track arclength divided by track length. Positive means forward progress. | Positive |
+| `speed` | Dense speed incentive, scaled by `dt`, above the 5 m/s floor and capped against the configured/55 m/s reference. | Positive |
+| `curvature_matched_speed` | `-abs(actual_speed - curvature_target_speed)`, scaled by `dt`; zero means a match and more-negative values mean a mismatch. | Positive weight |
+| `off_track` | `dt` while the car is off the drivable track; otherwise zero. | Negative |
+| `crash` | One-shot `1.0` on a crash transition; otherwise zero. | Negative |
+| `stuck` | One-shot `1.0` when the stuck condition occurs; otherwise zero. | Negative |
+| `lap_complete` | One-shot `1.0` when a lap completes; otherwise zero. | Positive |
+| `time` | Positive `dt` on every transition. | Negative |
+| `steer_smoothness` | Steering-command change multiplied by normalized speed. Larger values mean more abrupt steering despite the historical name. | Negative |
+
+Positive weights generally reward `progress`, `speed`, and `lap_complete`.
+Negative weights generally penalize `off_track`, `crash`, `stuck`, `time`, and
+`steer_smoothness`. `curvature_matched_speed` is already zero or negative, so
+a positive weight penalizes mismatch; a negative weight normally rewards the
+wrong behavior. Zero disables a signal. All weights must be finite numbers in
+`[-100, 100]`.
+
+The values in `examples/baseline_reward.json` are starting points, not event
+tuning. Change one weight at a time and compare per-signal contributions with
+return, lap completion, speed, crash rate, and off-track rate. Do not assume a
+larger coefficient dominates: an event impulse and a dense `dt`-scaled signal
+occur at different frequencies.
+
+### Ray layout and dummy diagram
+
+The dashboard’s dummy car diagram is a configuration preview. It shows the car
+heading upward, the ordered ray indices, and each entered angle; it does not
+perform physics, detect obstacles, or calculate reward. The cyan line is the
+straight-ahead center ray.
+
+- Ray count is limited to **1–16**.
+- Angles must be finite, unique, and within `[-90, 90]` degrees.
+- The list must include `0`.
+- `0°` points straight ahead relative to the car heading.
+- Positive angles sweep to the car’s left/counterclockwise; negative angles
+  sweep to its right/clockwise.
+- The default ordered list is `0, -15, 15, -30, 30, -60, 60, -90, 90`.
+- The default ray range is 100 m; each observation ray is the nearest boundary
+  distance capped at that range and normalized to `[0, 1]`.
+- `ray_0`, `ray_1`, and so on follow the configured list order. The UI and
+  server never silently sort the list.
+
+Changing the ray list changes observation size and the observation/config
+identity. Start a compatible new run and artifact after changing it.
+
+### UI weights versus custom reward code
+
+**Dashboard weights** are a static `RewardConfig` adapter saved as
+`reward_config.json`. They are convenient for quick experiments and
+reproducible local reference training. They are not an event scoring authority.
+
+**Custom reward code** remains participant-owned. A custom trainer can call
+`RolloutCollector` with `reward_function=...`; the callback receives copies of
+the observation, clipped action, raw signals, and termination flags and must
+return one finite scalar per transition. Passing
+`--reward examples/baseline_reward.json` selects the static weighted adapter;
+omitting `--reward` is valid for a trainer that computes its own reward.
+
+## Dummy training confirmations
+
+Use a short deterministic run before beginning larger experiments:
+
+```bash
+python3.11 tools/setup_participant.py
+.venv/bin/python tools/build_training_manifest.py
+
+.venv/bin/python tools/train_participant.py \
+  --trainer examples/participant_train.py \
+  --reward examples/baseline_reward.json \
+  --steps 16 \
+  --budget-steps 16 \
+  --n-envs 1 \
+  --rollout-length 16 \
+  --seed 17 \
+  --output-dir participant_smoke
+```
+
+Confirm that the output contains the local budget/state/metrics artifacts and
+that the console prints an `update ... steps ...` progress line. For the UI
+confirmation, launch `tools/participant_ui.py`, choose a small budget such as
+16, set a visibly different ray layout such as `-30,0,30`, and edit at least
+one reward weight. After the run, confirm that its output directory contains:
+
+```text
+run_config.json       # selected ray layout and effective simulation config
+reward_config.json    # canonical UI signal weights
+run_identity.json     # ray count, observation size, and config/reward hashes
+training_state.json   # trainer state and budget identity
+training_metrics.jsonl
+```
+
+The identity file should report observation size 17 for the four lookaheads
+plus ten self-state fields and three rays. Finish with:
+
+```bash
+make test
+```
 
 ## Generic model artifact preview
 

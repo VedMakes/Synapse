@@ -23,6 +23,12 @@ The two requested participant controls are implemented and committed in
 - UI writes `run_config.json` and `run_identity.json` beside the run.
 - Observation contracts and public training manifest now expose ray metadata.
 - Scalar/vector custom-ray parity and UI/reward regression tests exist.
+- The participant UI now has a cyberpunk/touge-night visual treatment, inline
+  signal definitions, and a live SVG dummy car diagram that renders ordered ray
+  indices/angles without changing the backend contract.
+- `docs/participant_guide.md` now documents the UI flow, all nine signal
+  definitions, reward-sign guidance, ray semantics, UI-vs-custom reward
+  boundaries, and dummy confirmation commands.
 
 - The preceding generic artifact/evaluation slice is `c82c3a2 feat: start generic participant evaluation boundary`.
 - Preserve unrelated dirty `.gitignore`, Unity, `participant_run/`, and
@@ -46,8 +52,14 @@ The two requested participant controls are implemented and committed in
   Node replay suite passed 65 tests.
 - Current verification: `make test` passed **106 Python tests**; direct Node
   replay suite passed **65 tests**; Python compilation, JS syntax, and the
-  longer UI/API smoke passed. The generic evaluator CLI evaluated two tracks
-  twice deterministically, and the generic replay CLI produced a valid replay.
+  longer UI/API smoke passed. After the visual/documentation slice,
+  `make test` passed **107 Python tests**, the extracted UI JavaScript passed
+  `node --check`, and a UI/API page smoke confirmed the diagram markers were
+  served. Two dummy reference runs completed 16/16 transitions: the default
+  9-ray run produced a 23-field contract, and the UI-configured
+  `[-45,-15,0,20,45]` run produced a 19-field contract plus reward/config/
+  identity snapshots. The generic evaluator CLI evaluated two tracks twice
+  deterministically, and the generic replay CLI produced a valid replay.
   Docker was not run because Docker is unavailable.
 
 ## First next steps

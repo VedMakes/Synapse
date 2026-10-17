@@ -464,101 +464,145 @@ PAGE = r'''<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>SYNAPSE · Training Console</title>
   <style>
-    :root { color-scheme: dark; --bg: #091018; --panel: #121d29; --panel2: #172535; --line: #2b3d51; --muted: #9aacbf; --text: #eef7ff; --accent: #62ead1; --amber: #ffd28a; --danger: #ff9d91; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-    * { box-sizing: border-box; }
-    body { margin: 0; color: var(--text); background: radial-gradient(circle at 80% 0, #1d3a46 0, transparent 38%), var(--bg); line-height: 1.45; }
-    button, input { font: inherit; }
-    button { cursor: pointer; border: 1px solid #4d657c; border-radius: 8px; padding: 11px 16px; color: var(--text); background: #203143; font-weight: 700; }
-    button:hover:enabled { background: #2d465b; border-color: #7591aa; }
-    button:disabled { cursor: not-allowed; opacity: .45; }
-    .primary { color: #08251f; background: var(--accent); border-color: var(--accent); }
-    .primary:hover:enabled { color: #08251f; background: #9af8e5; }
-    input { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0b141e; padding: 9px 11px; }
-    input:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
-    .shell { width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
-    header { display: flex; align-items: center; justify-content: space-between; min-height: 86px; border-bottom: 1px solid var(--line); gap: 20px; }
-    .brand { font-weight: 850; letter-spacing: .11em; font-size: 13px; }
-    .brand-mark { color: var(--accent); font-size: 28px; font-style: italic; margin-right: 9px; }
-    .read-only { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; }
-    .read-only span { color: var(--accent); }
-    .hero { padding: 31px 0 24px; }
-    .eyebrow { color: var(--muted); font-size: 10px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
-    h1, h2, h3, p { margin: 0; }
-    h1 { margin-top: 8px; font-size: clamp(28px, 4vw, 48px); letter-spacing: -.045em; line-height: 1.05; }
-    .hero p { max-width: 680px; margin-top: 12px; color: var(--muted); font-size: 14px; }
-    .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; padding-bottom: 32px; }
-    .panel { border: 1px solid var(--line); border-radius: 13px; background: linear-gradient(150deg, #142333, var(--panel)); box-shadow: 0 12px 30px #00000026; overflow: hidden; }
-    .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 19px; border-bottom: 1px solid var(--line); }
-    h2 { font-size: 14px; }
-    h3 { color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
-    .section { padding: 18px 19px; }
-    .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 13px; }
-    label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
-    label.full { grid-column: 1 / -1; }
-    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 19px; }
-    .hint { margin-top: 10px; color: var(--muted); font-size: 11px; }
-    .status-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+     :root { color-scheme: dark; --bg: #05070d; --panel: #0b111b; --panel2: #101b29; --line: #20354a; --grid: #153044; --muted: #91a7bb; --text: #eef7ff; --cyan: #45f3ff; --pink: #ff3fa4; --amber: #ffd166; --acid: #b7f23a; --danger: #ff657c; --ink: #061018; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+     * { box-sizing: border-box; }
+     body { position: relative; min-height: 100vh; margin: 0; overflow-x: hidden; color: var(--text); background: radial-gradient(circle at 78% -5%, #183d49 0, transparent 34%), radial-gradient(circle at 8% 45%, #251b39 0, transparent 30%), var(--bg); line-height: 1.45; }
+     body::before { position: fixed; inset: 0; z-index: 0; pointer-events: none; content: ""; opacity: .3; background-image: linear-gradient(115deg, transparent 0 46%, #45f3ff12 47%, transparent 48% 100%), repeating-linear-gradient(0deg, transparent 0 31px, #45f3ff0a 32px, transparent 33px), repeating-linear-gradient(90deg, transparent 0 31px, #ff3fa40b 32px, transparent 33px); mask-image: linear-gradient(to bottom, #000, transparent 86%); }
+     body::after { position: fixed; inset: 0; z-index: 0; pointer-events: none; content: ""; opacity: .1; background: repeating-linear-gradient(180deg, transparent 0 3px, #fff 4px, transparent 5px); mix-blend-mode: screen; }
+     button, input, select { font: inherit; }
+     button { cursor: pointer; border: 1px solid #2e6074; border-radius: 4px; padding: 11px 16px; color: var(--text); background: linear-gradient(135deg, #14283a, #0d1825); font-weight: 800; letter-spacing: .03em; text-transform: uppercase; box-shadow: inset 0 0 0 1px #ffffff08, 0 0 0 transparent; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease, background .18s ease; }
+     button:hover:enabled { background: linear-gradient(135deg, #1e3b4b, #132236); border-color: var(--cyan); box-shadow: 0 0 18px #45f3ff26; transform: translateY(-1px); }
+     button:disabled { cursor: not-allowed; opacity: .45; }
+     .primary { color: #061118; background: linear-gradient(100deg, var(--cyan), #91ffe7); border-color: var(--cyan); box-shadow: 0 0 24px #45f3ff38; }
+     .primary:hover:enabled { color: #061118; background: linear-gradient(100deg, #9affee, var(--cyan)); }
+     input { width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 3px; color: var(--text); background: #060c14d9; padding: 9px 11px; font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; box-shadow: inset 0 0 18px #00000042; }
+     input:focus-visible, button:focus-visible, select:focus-visible { outline: 2px solid var(--amber); outline-offset: 3px; }
+     .shell { position: relative; z-index: 1; width: min(1180px, calc(100% - 32px)); margin: 0 auto; }
+     header { display: flex; align-items: center; justify-content: space-between; min-height: 86px; border-bottom: 1px solid var(--line); gap: 20px; }
+     .brand { font-weight: 900; letter-spacing: .13em; font-size: 13px; text-shadow: 0 0 14px #45f3ff55; }
+     .brand-mark { color: var(--cyan); font-size: 28px; font-style: italic; margin-right: 9px; }
+     .read-only { color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; }
+     .read-only span { color: var(--acid); text-shadow: 0 0 9px var(--acid); }
+     .hero { position: relative; padding: 31px 0 24px; }
+     .hero::after { position: absolute; right: 0; bottom: 27px; width: 160px; height: 2px; content: ""; background: linear-gradient(90deg, transparent, var(--pink), var(--cyan)); box-shadow: 0 0 16px #ff3fa466; }
+     .eyebrow { color: var(--pink); font: 800 10px ui-monospace, monospace; letter-spacing: .16em; text-transform: uppercase; }
+     h1, h2, h3, p { margin: 0; }
+     h1 { margin-top: 8px; color: var(--text); font-size: clamp(28px, 4vw, 48px); letter-spacing: -.045em; line-height: 1.05; text-shadow: 3px 3px 0 #ff3fa41c, 0 0 28px #45f3ff22; }
+     .hero p { max-width: 680px; margin-top: 12px; color: var(--muted); font-size: 14px; }
+     .hero-stamp { display: inline-flex; gap: 10px; margin-top: 16px; padding: 6px 9px; border: 1px solid #6a3e68; color: var(--amber); background: #1b1020b8; font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+     .grid { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr); gap: 16px; padding-bottom: 32px; }
+     .panel { position: relative; border: 1px solid var(--line); border-radius: 5px; background: linear-gradient(150deg, #111f2eeb, var(--panel)); box-shadow: 0 18px 40px #00000045, inset 0 0 35px #45f3ff05; overflow: hidden; }
+     .panel::before { position: absolute; top: 0; left: 0; width: 42px; height: 2px; content: ""; background: var(--cyan); box-shadow: 0 0 16px var(--cyan); }
+     .panel-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 16px 19px; border-bottom: 1px solid var(--line); background: linear-gradient(90deg, #45f3ff09, transparent 45%, #ff3fa408); }
+     h2 { font: 800 13px ui-monospace, monospace; letter-spacing: .07em; text-transform: uppercase; }
+     h3 { color: var(--cyan); font: 800 11px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+     .section { padding: 18px 19px; }
+     .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 15px 13px; }
+     label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+     label.full { grid-column: 1 / -1; }
+     .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 19px; }
+     .hint { margin-top: 10px; color: var(--muted); font-size: 11px; }
+     .subcopy { margin: 7px 0 13px; color: var(--muted); font-size: 11px; }
+     .signal-label { display: flex; align-items: center; justify-content: space-between; gap: 7px; color: var(--text); font: 700 10px ui-monospace, monospace; letter-spacing: .04em; text-transform: uppercase; }
+     .signal-tag { color: var(--pink); font-size: 9px; }
+     .signal-help { min-height: 30px; color: var(--muted); font-size: 10px; line-height: 1.35; }
+     .signal-help code { color: var(--amber); font: inherit; }
+     .status-main { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
     .status-label { display: flex; align-items: center; gap: 9px; font-weight: 750; }
     .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #7890a5; }
-    .dot[data-state="running"], .dot[data-state="starting"] { background: var(--accent); box-shadow: 0 0 12px var(--accent); }
-    .dot[data-state="failed"] { background: var(--danger); }
+     .dot[data-state="running"], .dot[data-state="starting"] { background: var(--cyan); box-shadow: 0 0 12px var(--cyan); }
+     .dot[data-state="failed"] { background: var(--danger); box-shadow: 0 0 12px var(--danger); }
     .dot[data-state="completed"] { background: var(--amber); }
     .status-chip { padding: 5px 9px; border: 1px solid var(--line); border-radius: 6px; color: var(--muted); font: 10px ui-monospace, monospace; text-transform: uppercase; }
     .progress-wrap { margin-top: 21px; }
     .progress-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--muted); font: 11px ui-monospace, monospace; }
     .progress { height: 9px; margin-top: 8px; overflow: hidden; border-radius: 5px; background: #0b141e; }
-    .progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, #62ead1, #9af8e5); transition: width .25s ease; }
+     .progress span { display: block; width: 0; height: 100%; background: linear-gradient(90deg, var(--pink), var(--cyan)); box-shadow: 0 0 16px var(--cyan); transition: width .25s ease; }
     .metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; margin-top: 18px; }
-    .metric { padding: 11px; border: 1px solid var(--line); border-radius: 8px; background: #0e1924; }
+     .metric { padding: 11px; border: 1px solid var(--line); border-radius: 3px; background: #0a131f; }
     .metric small { display: block; color: var(--muted); font-size: 10px; }
-    .metric strong { display: block; margin-top: 5px; font-size: 18px; font-variant-numeric: tabular-nums; }
+     .metric strong { display: block; margin-top: 5px; color: var(--cyan); font-size: 18px; font-variant-numeric: tabular-nums; text-shadow: 0 0 10px #45f3ff55; }
     .log { min-height: 166px; max-height: 245px; margin-top: 17px; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #081019; color: #b9d2dc; font: 11px/1.6 ui-monospace, monospace; white-space: pre-wrap; }
     .contract { display: grid; gap: 12px; }
-    .contract-item { padding: 12px; border-left: 2px solid #3d6570; background: #0f1a25; }
+     .contract-item { padding: 12px; border-left: 2px solid var(--pink); background: #0b1521; }
     .contract-item strong { display: block; font-size: 13px; }
-    .contract-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
-    .callout { margin-top: 16px; padding: 13px; border: 1px solid #6f593d; border-radius: 8px; color: var(--amber); background: #2c251b; font-size: 11px; }
+     .contract-item span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+     .callout { margin-top: 16px; padding: 13px; border: 1px solid #6f593d; border-radius: 3px; color: var(--amber); background: #2c251b; font-size: 11px; }
     .watch { display: grid; gap: 9px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
     .watch label { color: var(--muted); font-size: 11px; }
     .watch select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0b141e; }
      .watch-result { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-     .watch-result a { color: var(--accent); }
-     .subpanel { grid-column: 1 / -1; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #0e1924; }
-     .subpanel h3 { margin-bottom: 10px; }
-     .weight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-     .weight-grid label { font-size: 10px; }
-    footer { padding: 0 0 30px; color: var(--muted); font-size: 11px; }
-    footer code { color: var(--text); }
-    @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
-    @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } }
-    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .001ms !important; scroll-behavior: auto !important; } }
+      .watch-result a { color: var(--cyan); }
+      .subpanel { grid-column: 1 / -1; padding: 12px; border: 1px solid var(--line); border-radius: 3px; background: #0a131f; box-shadow: inset 0 0 20px #0000002b; }
+      .subpanel h3 { margin-bottom: 10px; }
+      .weight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+      .weight-grid label { gap: 5px; padding: 9px; border: 1px solid #1c3043; background: #07101a; }
+      .weight-grid input { min-height: 36px; }
+      .diagram-shell { margin-top: 14px; padding: 10px; border: 1px solid #21485a; background: linear-gradient(145deg, #07131d, #0d0b1b); }
+      .diagram-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 8px; color: var(--muted); font: 10px ui-monospace, monospace; letter-spacing: .08em; text-transform: uppercase; }
+      .diagram-count { color: var(--acid); text-shadow: 0 0 9px #b7f23a66; }
+      #ray-diagram { display: block; width: 100%; height: auto; min-height: 220px; border: 1px solid #17354a; background: radial-gradient(circle at 50% 70%, #142f3c 0, transparent 25%), #060b12; }
+      #ray-diagram .diagram-grid { fill: url(#diagram-grid); opacity: .52; }
+      #ray-diagram .range-ring { fill: none; stroke: #45f3ff38; stroke-dasharray: 4 7; }
+      #ray-diagram .range-label { fill: #91a7bb; font: 10px ui-monospace, monospace; }
+      #ray-diagram .ray-line { stroke: var(--pink); stroke-width: 2; opacity: .86; filter: url(#ray-glow); }
+      #ray-diagram .ray-line.center { stroke: var(--cyan); stroke-width: 3; }
+      #ray-diagram .ray-label { fill: var(--text); font: 10px ui-monospace, monospace; paint-order: stroke; stroke: #060b12; stroke-width: 4px; }
+      #ray-diagram .car-body { fill: #111d2b; stroke: var(--amber); stroke-width: 2; filter: url(#car-glow); }
+      #ray-diagram .car-window { fill: #45f3ff33; stroke: #45f3ffaa; stroke-width: 1; }
+      #ray-diagram .car-lamp { fill: var(--pink); filter: url(#ray-glow); }
+      .ray-summary { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; color: var(--muted); font: 10px ui-monospace, monospace; }
+      .ray-summary span { padding: 4px 6px; border: 1px solid #28445a; background: #091522; }
+      .ray-summary span[data-center="true"] { color: var(--cyan); border-color: #45f3ff7a; }
+      .validation { min-height: 16px; margin-top: 8px; color: var(--acid); font-size: 10px; }
+      .validation[data-kind="error"] { color: var(--danger); }
+      .validation[data-kind="warn"] { color: var(--amber); }
+      footer { padding: 0 0 30px; color: var(--muted); font-size: 11px; }
+      footer code { color: var(--cyan); }
+     @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } .hero::after { display: none; } }
+     @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics, .weight-grid { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } #ray-diagram { min-height: 170px; } }
+     @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .001ms !important; scroll-behavior: auto !important; } body::before, body::after { opacity: .12; } }
   </style>
 </head>
 <body>
   <main class="shell">
-    <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> LOCAL / PYTHON AUTHORITATIVE</div></header>
-    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose reward weights and forward-facing rays in the UI, then run your own trainer. SYNAPSE owns the environment boundary; your code owns the model, algorithm, and weights.</p></section>
+    <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">NIGHT SHIFT / TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> TOUGE NIGHT // LOOPBACK</div></header>
+    <section class="hero"><div class="eyebrow">PROJECT SYNAPSE / TOUGE NIGHT / PROVISIONAL RELEASE</div><h1>Tune the line. Own the run.</h1><p>Set the signal mix, lay out your forward sensors, then launch your own trainer. SYNAPSE owns the road and the physics; your code owns the driver, algorithm, and weights.</p><div class="hero-stamp"><span>RUN MODE: LOCAL</span><span>TELEMETRY: LIVE</span><span>RAYS: CONFIGURABLE</span></div></section>
     <section class="grid">
       <section class="panel">
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
         <div class="section">
           <div class="form-grid">
             <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
-            <div class="subpanel"><h3>Reward function · signal weights</h3><div class="weight-grid">
-              <label>Progress<input id="reward-progress" type="number" step="0.01" value="12"></label>
-              <label>Speed<input id="reward-speed" type="number" step="0.01" value="0.5"></label>
-              <label>Curvature speed<input id="reward-curvature_matched_speed" type="number" step="0.01" value="0.25"></label>
-              <label>Off track<input id="reward-off_track" type="number" step="0.01" value="-1.5"></label>
-              <label>Crash<input id="reward-crash" type="number" step="0.01" value="-10"></label>
-              <label>Stuck<input id="reward-stuck" type="number" step="0.01" value="-8"></label>
-              <label>Lap complete<input id="reward-lap_complete" type="number" step="0.01" value="20"></label>
-              <label>Time<input id="reward-time" type="number" step="0.01" value="-0.15"></label>
-              <label>Steer smoothness<input id="reward-steer_smoothness" type="number" step="0.01" value="-0.05"></label>
+            <div class="subpanel"><h3>Reward function · signal weights</h3><p class="subcopy">Tune the nine published transition signals. Positive rewards attract behavior; negative weights penalize it. Zero disables a signal. Limits: -100 to +100.</p><div class="weight-grid">
+              <label><span class="signal-label">Progress <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>progress</code> Signed forward track advance.</span><input id="reward-progress" type="number" step="0.01" value="12" aria-label="Progress weight"></label>
+              <label><span class="signal-label">Speed <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>speed</code> Encourages useful speed above the floor.</span><input id="reward-speed" type="number" step="0.01" value="0.5" aria-label="Speed weight"></label>
+              <label><span class="signal-label">Curvature speed <span class="signal-tag">MATCH</span></span><span class="signal-help"><code>curvature_matched_speed</code> Is zero when speed matches the curve target.</span><input id="reward-curvature_matched_speed" type="number" step="0.01" value="0.25" aria-label="Curvature matched speed weight"></label>
+              <label><span class="signal-label">Off track <span class="signal-tag">COST -</span></span><span class="signal-help"><code>off_track</code> Time spent outside the drivable surface.</span><input id="reward-off_track" type="number" step="0.01" value="-1.5" aria-label="Off track weight"></label>
+              <label><span class="signal-label">Crash <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>crash</code> One-shot impulse when barrier contact ends the run.</span><input id="reward-crash" type="number" step="0.01" value="-10" aria-label="Crash weight"></label>
+              <label><span class="signal-label">Stuck <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>stuck</code> One-shot impulse when the vehicle stalls.</span><input id="reward-stuck" type="number" step="0.01" value="-8" aria-label="Stuck weight"></label>
+              <label><span class="signal-label">Lap complete <span class="signal-tag">EVENT +</span></span><span class="signal-help"><code>lap_complete</code> One-shot impulse on a completed lap.</span><input id="reward-lap_complete" type="number" step="0.01" value="20" aria-label="Lap complete weight"></label>
+              <label><span class="signal-label">Time <span class="signal-tag">DENSE -</span></span><span class="signal-help"><code>time</code> Charges every transition to discourage stalling.</span><input id="reward-time" type="number" step="0.01" value="-0.15" aria-label="Time weight"></label>
+              <label><span class="signal-label">Steer smoothness <span class="signal-tag">ROUGH -</span></span><span class="signal-help"><code>steer_smoothness</code> Measures abrupt steering changes; larger means rougher.</span><input id="reward-steer_smoothness" type="number" step="0.01" value="-0.05" aria-label="Steer smoothness weight"></label>
             </div></div>
             <div class="subpanel"><h3>Forward-facing ray sensors</h3><div class="form-grid">
-              <label>Ray count<input id="ray-count" type="number" min="1" max="16" step="1" value="9"></label>
-              <label class="full">Angles in degrees, ordered as observation fields<input id="ray-angles" value="0,-15,15,-30,30,-60,60,-90,90" spellcheck="false"></label>
-            </div><p class="hint">Use 1–16 unique finite angles in [-90, 90], including 0. Order changes the observation contract.</p></div>
+              <label>Ray count<input id="ray-count" type="number" min="1" max="16" step="1" value="9" aria-describedby="ray-hint ray-validation"></label>
+              <label class="full">Angles in degrees, ordered as observation fields<input id="ray-angles" value="0,-15,15,-30,30,-60,60,-90,90" spellcheck="false" aria-describedby="ray-hint ray-validation"></label>
+            </div><p id="ray-hint" class="hint">Use 1–16 unique finite angles in [-90, 90], including 0. Positive angles sweep left; negative angles sweep right. Order changes the observation contract.</p><div class="diagram-shell"><div class="diagram-head"><span>Forward sensor layout / dummy preview</span><span id="diagram-count" class="diagram-count">RAYS 9 / 9</span></div><svg id="ray-diagram" viewBox="0 0 640 390" role="img" aria-labelledby="ray-diagram-title ray-diagram-desc">
+                <title id="ray-diagram-title">Forward-facing sensor layout</title>
+                <desc id="ray-diagram-desc">A top-down dummy car with one labeled line for each configured forward ray. The diagram represents angles only; it does not perform physics or raycasts.</desc>
+                <defs>
+                  <pattern id="diagram-grid" width="24" height="24" patternUnits="userSpaceOnUse"><path d="M 24 0 L 0 0 0 24" fill="none" stroke="#45f3ff18" stroke-width="1"></path></pattern>
+                  <filter id="ray-glow"><feGaussianBlur stdDeviation="2.6" result="blur"></feGaussianBlur><feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMergeNode></feMerge></filter>
+                  <filter id="car-glow"><feGaussianBlur stdDeviation="1.2" result="blur"></feGaussianBlur><feMerge><feMergeNode in="blur"></feMergeNode><feMergeNode in="SourceGraphic"></feMerge></feMerge></filter>
+                </defs>
+                <rect class="diagram-grid" x="0" y="0" width="640" height="390"></rect>
+                <circle class="range-ring" cx="320" cy="168" r="145"></circle>
+                <text class="range-label" x="320" y="21" text-anchor="middle">MAX RANGE / 100 M</text>
+                <g id="ray-lines" aria-hidden="true"></g>
+                <g aria-hidden="true"><path class="car-body" d="M320 145 L348 184 L354 257 Q352 285 320 292 Q288 285 286 257 L292 184 Z"></path><path class="car-window" d="M302 194 Q320 175 338 194 L334 222 L306 222 Z"></path><path class="car-window" d="M305 235 L335 235 L339 258 Q320 270 301 258 Z"></path><circle class="car-lamp" cx="300" cy="182" r="3"></circle><circle class="car-lamp" cx="340" cy="182" r="3"></circle><path d="M320 145 L314 158 L326 158 Z" fill="var(--amber)"></path></g>
+                <text class="range-label" x="320" y="350" text-anchor="middle">CAR HEADING ↑ · 0° = FORWARD</text>
+              </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
             <label>Training maps<input id="track-dir" value="tracks/train" spellcheck="false"></label>
             <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="2048"></label>
@@ -596,12 +640,48 @@ PAGE = r'''<!doctype html>
     <footer>Local SYNAPSE UI only. Start with <code>python tools/participant_ui.py</code>. The server binds to loopback and launches the existing CLI; it never becomes a second environment authority.</footer>
   </main>
   <script>
-    const $ = id => document.getElementById(id);
-    const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
-    const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
-    const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
-    function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
-    function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
+     const $ = id => document.getElementById(id);
+     const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
+     const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+     const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
+     const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
+     const svgNamespace = "http://www.w3.org/2000/svg";
+     function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+     function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
+     function rayPreview() {
+       const raw = $("ray-angles").value.trim();
+       const tokens = (raw === "" ? defaultRayAngles.map(String) : raw.split(",")).map(token => token.trim()).filter(token => token !== "");
+       const entries = tokens.map((token, index) => { const value = Number(token); return { index, token, value, valid: token !== "" && Number.isFinite(value) }; });
+       const values = entries.filter(entry => entry.valid).map(entry => entry.value);
+       const rayCount = Number($("ray-count").value);
+       let error = null;
+       if (!Number.isInteger(rayCount) || rayCount < 1 || rayCount > 16) error = "Ray count must be an integer from 1 to 16.";
+       else if (entries.some(entry => !entry.valid)) error = "Every ray angle must be a finite number.";
+       else if (values.length !== rayCount) error = `Count mismatch: ${rayCount} rays requested, ${values.length} angles supplied.`;
+       else if (values.some(value => value < -90 || value > 90)) error = "Angles must stay within -90° to +90°.";
+       else if (new Set(values).size !== values.length) error = "Angles must be unique; duplicate rays would share an observation slot.";
+       else if (!values.includes(0)) error = "Include a 0° center ray so the car has a straight-ahead sensor.";
+       return { entries, values, rayCount, error };
+     }
+     function renderRayDiagram() {
+       const preview = rayPreview(), group = $("ray-lines"), summary = $("ray-summary"), validation = $("ray-validation");
+       group.replaceChildren(); summary.replaceChildren();
+       preview.entries.filter(entry => entry.valid).forEach(entry => {
+         const radians = entry.value * Math.PI / 180, startX = 320, startY = 164, radius = 145;
+         const endX = startX + Math.sin(radians) * radius, endY = startY - Math.cos(radians) * radius;
+         const line = document.createElementNS(svgNamespace, "line");
+         line.setAttribute("class", `ray-line${entry.value === 0 ? " center" : ""}`); line.setAttribute("x1", startX); line.setAttribute("y1", startY); line.setAttribute("x2", endX.toFixed(2)); line.setAttribute("y2", endY.toFixed(2)); line.setAttribute("aria-label", `Ray ${entry.index}, ${formatAngle(entry.value)}`); group.appendChild(line);
+         const label = document.createElementNS(svgNamespace, "text");
+         const labelX = endX + (endX >= startX ? 8 : -8), labelY = Math.max(34, Math.min(330, endY + (endY < startY ? 0 : 14)));
+         label.setAttribute("class", "ray-label"); label.setAttribute("x", labelX.toFixed(2)); label.setAttribute("y", labelY.toFixed(2)); label.setAttribute("text-anchor", endX >= startX ? "start" : "end"); label.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`; group.appendChild(label);
+         const chip = document.createElement("span"); chip.dataset.center = String(entry.value === 0); chip.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`; summary.appendChild(chip);
+       });
+       $("diagram-count").textContent = `RAYS ${preview.values.length} / ${Number.isInteger(preview.rayCount) ? preview.rayCount : "?"}`;
+       validation.dataset.kind = preview.error ? "error" : "ok";
+       validation.textContent = preview.error || `Layout valid: ${preview.values.length} ordered rays. The cyan line is 0° forward.`;
+       $("ray-count").setAttribute("aria-invalid", preview.error ? "true" : "false"); $("ray-angles").setAttribute("aria-invalid", preview.error ? "true" : "false");
+     }
+     function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
     function render(data) {
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
@@ -617,9 +697,10 @@ PAGE = r'''<!doctype html>
     $("start").addEventListener("click", async () => { try { render(await request("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(formData()) })); } catch (error) { alert(error.message); } });
     $("stop").addEventListener("click", async () => { try { render(await request("/api/stop", { method: "POST" })); } catch (error) { alert(error.message); } });
     $("setup").addEventListener("click", async () => { try { render(await request("/api/setup", { method: "POST" })); } catch (error) { alert(error.message); } });
-    $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · `; const link = document.createElement("a"); link.href = result.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open replay"; target.appendChild(link); } catch (error) { $("watch-result").textContent = error.message; } });
-    fields.forEach(id => $(id).addEventListener("change", refresh));
-    refreshMaps(); refresh(); setInterval(refresh, 700);
+     $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · `; const link = document.createElement("a"); link.href = result.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open replay"; target.appendChild(link); } catch (error) { $("watch-result").textContent = error.message; } });
+     ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
+     fields.forEach(id => $(id).addEventListener("change", refresh));
+     renderRayDiagram(); refreshMaps(); refresh(); setInterval(refresh, 700);
   </script>
 </body>
 </html>'''
