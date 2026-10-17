@@ -12,6 +12,7 @@ in memory.
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -141,6 +142,7 @@ def _load_or_create_policy(
     output_dir: Path,
     observation_size: int,
     hyperparameters: PPOHyperparameters,
+    expected_contract: TrainingContract,
     *,
     has_used_steps: bool,
 ) -> tuple[FixedMLPActorCritic, RunningObservationNormalizer, bool]:
@@ -156,7 +158,9 @@ def _load_or_create_policy(
         saved_ppo = saved_metadata.get("ppo")
         if saved_ppo is not None and saved_ppo != hyperparameters.to_dict():
             raise ValueError("saved PPO settings do not match this invocation")
-        _, normalizer = TrainingContract.load(contract_path)
+        saved_contract, normalizer = TrainingContract.load(contract_path)
+        if saved_contract.to_dict() != expected_contract.to_dict():
+            raise ValueError("saved training contract does not match this invocation")
         if normalizer is None or not normalizer.training:
             raise ValueError("saved training contract must contain an unfrozen training normalizer")
         return policy, normalizer, True
@@ -212,6 +216,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     reward = RewardConfig.from_file(args.reward)
     tracks = tuple(TrackGeometry.from_file(path) for path in track_paths)
     env = VectorizedRacingEnv(tracks, config, reward, n_envs=args.n_envs)
+    training_contract = replace(
+        env.training_contract,
+        reward_config_hash=reward.content_hash,
+        reward_sha256=_sha256(args.reward),
+    )
     hyperparameters = PPOHyperparameters(rollout_length=args.rollout_length)
     budget, run_id = _open_budget(output_dir / "budget.json", args.budget_steps)
     budget_status = budget.status(run_id)
@@ -224,6 +233,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         output_dir,
         env.observation_size,
         hyperparameters,
+        training_contract,
         has_used_steps=budget_status["used_steps"] > 0,
     )
     if resumed:
@@ -267,8 +277,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             "track_ids", "track_hashes", "config_hash", "reward_sha256", "budget_steps",
             "n_envs", "rollout_length", "reward_config_hash", "ray_angles_deg", "observation_size",
         ):
-            if name not in saved_state and name in {"reward_config_hash", "ray_angles_deg", "observation_size"}:
-                continue
             if saved_state.get(name) != state[name]:
                 raise ValueError(f"saved training state does not match {name}")
         state["updates"] = int(saved_state.get("updates", 0))
@@ -286,7 +294,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     metadata_path = output_dir / "policy.json"
     contract_path = output_dir / "training_contract.json"
     if not all(path.exists() for path in (policy_path, metadata_path, contract_path)):
-        env.training_contract.save(contract_path, normalizer=normalizer)
+        training_contract.save(contract_path, normalizer=normalizer)
         policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
     if not state_path.exists():
         _atomic_json(state_path, state)
@@ -323,7 +331,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         normalizer_state = normalizer
         # Contract is written first; both writes are individually atomic, and
         # the state file below is the committed update marker on resume.
-        env.training_contract.save(contract_path, normalizer=normalizer_state)
+        training_contract.save(contract_path, normalizer=normalizer_state)
         policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
         state["updates"] = update_number
         state["budget_used"] = budget_status["used_steps"]

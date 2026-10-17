@@ -52,6 +52,27 @@ class ObservationContractTests(unittest.TestCase):
         assert loaded_normalizer is not None
         np.testing.assert_array_equal(normalizer.transform(values, training=False), loaded_normalizer.transform(values, training=False))
 
+    def test_training_contract_carries_reward_provenance(self) -> None:
+        contract = TrainingContract(
+            observation=build_observation_schema(CONFIG),
+            track_ids=("oval",),
+            track_hashes=("a" * 64,),
+            config_hash=TrainingContract.config_hash_for(CONFIG),
+            reward_config_hash="b" * 64,
+            reward_sha256="c" * 64,
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "contract.json"
+            contract.save(path)
+            loaded, normalizer = TrainingContract.load(path)
+        self.assertIsNone(normalizer)
+        self.assertEqual(loaded.reward_config_hash, "b" * 64)
+        self.assertEqual(loaded.reward_sha256, "c" * 64)
+        self.assertEqual(
+            loaded.to_dict()["training_provenance"],
+            {"reward_config_hash": "b" * 64, "reward_sha256": "c" * 64},
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -55,8 +55,12 @@ absolute lap progress.
 `racing_event.observation.TrainingContract` serializes the versions, action
 schema, observation fields, track ids/hashes, simulation-config hash,
 deterministic evaluation policy mode, fixed-start spawn rule, and optional
-`RunningObservationNormalizer` statistics. Evaluation loads this artifact,
-uses the policy mean action, and does not update normalization statistics.
+`RunningObservationNormalizer` statistics. Reference training also records the
+canonical UI reward-config hash and reward-file SHA-256 under
+`training_provenance`; this binds selected weights to the training contract
+without making reward code part of organizer evaluation. Evaluation loads this
+artifact, uses the policy mean action, and does not update normalization
+statistics.
 
 ## Optional reference PPO artifact
 

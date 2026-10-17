@@ -25,6 +25,14 @@ ACTION_SCHEMA_VERSION = "1.0"
 TRAINING_CONTRACT_VERSION = "1.0"
 
 
+def _optional_sha256(value: Any, name: str) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        raise ValueError(f"{name} must be a lowercase SHA-256 digest or null")
+    return value
+
+
 @dataclass(frozen=True)
 class ObservationField:
     """One field in the fixed observation vector."""
@@ -268,6 +276,8 @@ class TrainingContract:
     action_distribution: str = "participant_defined"
     evaluation_spawn: str = "fixed_start_line_standing_zero_noise"
     deterministic_evaluation: bool = True
+    reward_config_hash: str | None = None
+    reward_sha256: str | None = None
     version: str = TRAINING_CONTRACT_VERSION
 
     @staticmethod
@@ -321,6 +331,10 @@ class TrainingContract:
             "observation": self.observation.to_dict(),
             "tracks": {"ids": list(self.track_ids), "hashes": list(self.track_hashes)},
             "config_hash": self.config_hash,
+            "training_provenance": {
+                "reward_config_hash": self.reward_config_hash,
+                "reward_sha256": self.reward_sha256,
+            },
             "trainer": {
                 "action_distribution": self.action_distribution,
                 "normalizer": None if normalizer is None else normalizer.state_dict(),
@@ -367,6 +381,7 @@ class TrainingContract:
         if schema.version != OBSERVATION_SCHEMA_VERSION or schema.dtype != "float32":
             raise ValueError("unsupported observation schema")
         tracks = data.get("tracks", {})
+        provenance = data.get("training_provenance", {})
         trainer = data.get("trainer", {})
         evaluation = data.get("evaluation", {})
         action = data.get("action", {})
@@ -380,8 +395,12 @@ class TrainingContract:
             action_distribution=str(trainer.get("action_distribution", "")),
             evaluation_spawn=str(evaluation.get("spawn", "")),
             deterministic_evaluation=bool(evaluation.get("deterministic", False)),
+            reward_config_hash=_optional_sha256(provenance.get("reward_config_hash"), "training_provenance.reward_config_hash"),
+            reward_sha256=_optional_sha256(provenance.get("reward_sha256"), "training_provenance.reward_sha256"),
             version=str(data["version"]),
         )
+        if (contract.reward_config_hash is None) != (contract.reward_sha256 is None):
+            raise ValueError("training provenance reward hashes must be both present or both null")
         normalizer_data = trainer.get("normalizer")
         normalizer = None if normalizer_data is None else RunningObservationNormalizer.from_state_dict(normalizer_data)
         if normalizer is not None and normalizer.size != schema.size:

@@ -32,6 +32,19 @@ The two requested participant controls are implemented and committed in
   drawn, and the car has explicit wheels, windows, lights, bumpers, and shadow.
   The page still needs real browser screenshot review when a browser is
   available; this container has no browser binary.
+- Exact `-90`, `0`, and `+90` UI ray endpoints are now browserless-tested at
+  `(514,270)`, `(320,76)`, and `(126,270)` respectively; angle placement is
+  based on the angle rather than input order. UI input validation and
+  `SensorConfig` both reject values outside `[-90,90]`.
+- `TrainingContract` now carries reference-training reward provenance hashes,
+  and reference resume checks compare the full saved contract. The UI refuses
+  to overwrite an existing run with different config/reward/ray identity.
+- Participant-style dummy cases completed successfully under
+  `participant_run/participant-case-*`: a linear policy with 3 rays, a tiny
+  8-unit MLP with 5 rays, and a second linear policy with the same rays but a
+  different reward. All wrote generic artifacts, contracts, and evaluation
+  reports; repeated artifact evaluation was deterministic. Same-architecture
+  reward cases produced different output bias parameters.
 - `docs/participant_guide.md` now documents the UI flow, all nine signal
   definitions, reward-sign guidance, ray semantics, UI-vs-custom reward
   boundaries, and dummy confirmation commands.

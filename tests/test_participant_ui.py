@@ -81,7 +81,8 @@ class ParticipantUiTests(unittest.TestCase):
             config_path = Path(command[command.index("--config") + 1])
             self.assertEqual(json.loads(reward_path.read_text())["weights"]["progress"], 4.5)
             self.assertEqual(json.loads(config_path.read_text())["sensors"]["ray_angles_deg"], [-30.0, 0.0, 30.0])
-            self.assertTrue((output_dir / "run_identity.json").exists())
+            identity = json.loads((output_dir / "run_identity.json").read_text())
+            self.assertTrue(identity["reward_sha256"])
 
     def test_ui_preserves_non_sorted_ray_order_in_identity(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
@@ -115,6 +116,48 @@ class ParticipantUiTests(unittest.TestCase):
                     "ray_count": 3.5,
                     "ray_angles_deg": "-30,0,30",
                 })
+
+    def test_ui_accepts_exact_ray_boundaries_and_rejects_out_of_range(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output_dir = Path(directory).resolve()
+            build_training_command({
+                "output_dir": str(output_dir),
+                "trainer": "examples/participant_train.py",
+                "ray_count": 3,
+                "ray_angles_deg": "-90,0,90",
+                "steps": 1,
+            })
+            self.assertEqual(
+                json.loads((output_dir / "run_config.json").read_text())["sensors"]["ray_angles_deg"],
+                [-90.0, 0.0, 90.0],
+            )
+            with self.assertRaisesRegex(ValueError, r"\[-90, 90\]"):
+                build_training_command({
+                    "output_dir": str(Path(directory) / "out-of-range"),
+                    "trainer": "examples/participant_train.py",
+                    "ray_count": 3,
+                    "ray_angles_deg": "-90,0,90.01",
+                })
+
+    def test_ui_does_not_overwrite_an_existing_run_with_new_contract_inputs(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output_dir = Path(directory).resolve()
+            form = {
+                "output_dir": str(output_dir),
+                "trainer": "examples/participant_train.py",
+                "reward_weights": {"progress": "4"},
+                "ray_count": 3,
+                "ray_angles_deg": "-30,0,30",
+                "steps": 1,
+            }
+            build_training_command(form)
+            before = {name: (output_dir / name).read_bytes() for name in ("run_config.json", "reward_config.json", "run_identity.json")}
+            changed = dict(form)
+            changed["ray_angles_deg"] = "-90,0,90"
+            with self.assertRaisesRegex(ValueError, r"different (config_hash|ray_angles_deg)"):
+                build_training_command(changed)
+            after = {name: (output_dir / name).read_bytes() for name in before}
+        self.assertEqual(after, before)
 
     def test_public_map_selector_has_three_development_maps(self) -> None:
         maps = public_maps()

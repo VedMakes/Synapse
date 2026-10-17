@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from tools.build_training_manifest import build_manifest
+from racing_event.observation import TrainingContract
 from tools.run_reference_baseline import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
 from tools.train_participant import build_training_command
 
@@ -45,6 +46,9 @@ class ParticipantTrainingTests(unittest.TestCase):
             self.assertTrue((output_dir / "policy.pt").exists())
             self.assertTrue((output_dir / "training_contract.json").exists())
             self.assertEqual(len((output_dir / "training_metrics.jsonl").read_text().splitlines()), 2)
+            contract, _ = TrainingContract.load(output_dir / "training_contract.json")
+            self.assertEqual(contract.reward_config_hash, "4b0eca661d514c3747def79073badd780d77780d1e65d9174a0bd4591622b930")
+            self.assertEqual(len(contract.reward_sha256 or ""), 64)
 
     def test_participant_launcher_forwards_owned_trainer(self) -> None:
         args = Namespace(

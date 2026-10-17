@@ -113,6 +113,39 @@ def _atomic_json(path: Path, payload: object) -> None:
         temporary.unlink(missing_ok=True)
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _reject_incompatible_existing_run(output_dir: Path, identity: dict[str, object]) -> None:
+    identity_path = output_dir / "run_identity.json"
+    markers = (
+        "budget.json",
+        "training_state.json",
+        "policy.pt",
+        "policy.json",
+        "training_contract.json",
+        "training_metrics.jsonl",
+    )
+    if identity_path.exists():
+        try:
+            existing = json.loads(identity_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise ValueError("existing run_identity.json is invalid; choose a new output directory") from exc
+        if not isinstance(existing, dict):
+            raise ValueError("existing run_identity.json must be an object; choose a new output directory")
+        for name in ("config_hash", "reward_config_hash", "reward_sha256", "ray_angles_deg", "ray_count", "observation_size"):
+            if existing.get(name) != identity.get(name):
+                raise ValueError(f"output directory is already bound to a different {name}; choose a new output directory")
+        return
+    if any((output_dir / marker).exists() for marker in markers):
+        raise ValueError("existing training artifacts have no run identity; choose a new output directory")
+
+
 def _finite_float(value: object, name: str) -> float:
     if isinstance(value, bool):
         raise ValueError(f"{name} must be a finite number")
@@ -133,7 +166,16 @@ def _parse_ray_angles(value: object, *, default: tuple[float, ...]) -> list[floa
         raw_values = [part.strip() for part in raw_values.split(",") if part.strip()]
     if not isinstance(raw_values, (list, tuple)):
         raise ValueError("ray_angles_deg must be a comma-separated list or array")
-    return [_finite_float(item, "ray angle") for item in raw_values]
+    angles = [_finite_float(item, "ray angle") for item in raw_values]
+    if not 1 <= len(angles) <= 16:
+        raise ValueError("ray_angles_deg must contain 1..16 angles")
+    if any(angle < -90.0 or angle > 90.0 for angle in angles):
+        raise ValueError("ray_angles_deg must stay within [-90, 90] degrees")
+    if len(set(angles)) != len(angles):
+        raise ValueError("ray_angles_deg must not contain duplicates")
+    if 0.0 not in angles:
+        raise ValueError("ray_angles_deg must include one forward center ray at 0 degrees")
+    return angles
 
 
 def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> RewardConfig | None:
@@ -172,22 +214,37 @@ def _prepare_run_inputs(
     base_data["sensors"] = sensors
     output_dir.mkdir(parents=True, exist_ok=True)
     effective_config_path = output_dir / "run_config.json"
-    _atomic_json(effective_config_path, base_data)
-    effective_config = SimulationConfig.from_file(effective_config_path)
-    reward = _parse_reward_weights(form, reward_path)
-    effective_reward_path: Path | None = None
-    if reward is not None:
-        effective_reward_path = output_dir / "reward_config.json"
-        _atomic_json(effective_reward_path, reward.to_dict())
-    identity = {
-        "identity_version": 1,
-        "config_hash": TrainingContract.config_hash_for(effective_config),
-        "reward_config_hash": None if reward is None else reward.content_hash,
-        "ray_angles_deg": list(effective_config.sensors.ray_angles_deg),
-        "ray_count": effective_config.sensors.ray_count,
-        "observation_size": 10 + effective_config.sensors.ray_count + len(effective_config.sensors.lookahead_distances_m),
-    }
-    _atomic_json(output_dir / "run_identity.json", identity)
+    candidate_config_path = output_dir / f".run_config.{os.getpid()}.candidate"
+    candidate_reward_path = output_dir / f".reward_config.{os.getpid()}.candidate"
+    try:
+        _atomic_json(candidate_config_path, base_data)
+        effective_config = SimulationConfig.from_file(candidate_config_path)
+        reward = _parse_reward_weights(form, reward_path)
+        effective_reward_path: Path | None = None
+        reward_sha256: str | None = None
+        if reward is not None:
+            _atomic_json(candidate_reward_path, reward.to_dict())
+            effective_reward_path = output_dir / "reward_config.json"
+            reward_sha256 = _sha256_file(candidate_reward_path)
+        identity = {
+            "identity_version": 1,
+            "config_hash": TrainingContract.config_hash_for(effective_config),
+            "reward_config_hash": None if reward is None else reward.content_hash,
+            "reward_sha256": reward_sha256,
+            "ray_angles_deg": list(effective_config.sensors.ray_angles_deg),
+            "ray_count": effective_config.sensors.ray_count,
+            "observation_size": 10 + effective_config.sensors.ray_count + len(effective_config.sensors.lookahead_distances_m),
+        }
+        _reject_incompatible_existing_run(output_dir, identity)
+        os.replace(candidate_config_path, effective_config_path)
+        if reward is not None and effective_reward_path is not None:
+            os.replace(candidate_reward_path, effective_reward_path)
+        elif (output_dir / "reward_config.json").exists() and not identity["reward_config_hash"]:
+            raise ValueError("existing reward_config.json conflicts with a reward-free run")
+        _atomic_json(output_dir / "run_identity.json", identity)
+    finally:
+        candidate_config_path.unlink(missing_ok=True)
+        candidate_reward_path.unlink(missing_ok=True)
     return effective_config_path, effective_reward_path, effective_config, reward
 
 
@@ -702,20 +759,31 @@ PAGE = r'''<!doctype html>
       }
       function renderRayDiagram() {
         const preview = rayPreview(), group = $("ray-lines"), callouts = $("ray-callouts"), summary = $("ray-summary"), validation = $("ray-validation");
-        const originX = 320, originY = 270, radius = 194, labelTop = 64, rowHeight = 24;
+        const originX = 320, originY = 270, radius = 194, labelTop = 64, centerLabelTop = 98, rowHeight = 24;
+        let leftRow = 0, rightRow = 0;
         group.replaceChildren(); callouts.replaceChildren(); summary.replaceChildren();
         const drawable = preview.entries.filter(entry => entry.valid && entry.value >= -90 && entry.value <= 90);
-        drawable.forEach((entry, drawableIndex) => {
+        drawable.forEach(entry => {
           const radians = entry.value * Math.PI / 180;
           const endX = originX - Math.sin(radians) * radius, endY = originY - Math.cos(radians) * radius;
-          const center = entry.value === 0, side = drawableIndex % 2 === 0 ? "left" : "right", row = Math.floor(drawableIndex / 2);
-          const boxX = side === "left" ? 8 : 510, boxY = labelTop + row * rowHeight, boxEdgeX = side === "left" ? 130 : 510, elbowX = side === "left" ? 144 : 496, boxCenterY = boxY + 10;
+          const center = entry.value === 0, side = center ? "center" : entry.value > 0 ? "left" : "right";
+          const row = side === "left" ? leftRow++ : side === "right" ? rightRow++ : 0;
+          const boxX = side === "left" ? 8 : side === "right" ? 510 : 259;
+          const boxY = side === "center" ? centerLabelTop : labelTop + row * rowHeight;
+          const boxEdgeX = side === "left" ? 130 : side === "right" ? 510 : originX;
+          const elbowX = side === "left" ? 144 : side === "right" ? 496 : originX;
+          const boxCenterY = boxY + 10;
+          const labelAnchor = side === "left" ? "start" : side === "right" ? "end" : "middle";
+          const labelX = side === "left" ? boxX + 8 : side === "right" ? boxX + 114 : originX;
           const line = svgNode("line", { class: `ray-line${center ? " center" : ""}`, x1: originX, y1: originY, x2: endX.toFixed(2), y2: endY.toFixed(2), "aria-label": `Ray ${entry.index}, ${formatAngle(entry.value)}` });
           const endpoint = svgNode("circle", { class: `ray-endpoint${center ? " center" : ""}`, cx: endX.toFixed(2), cy: endY.toFixed(2), r: center ? 4 : 3 });
           group.appendChild(line); group.appendChild(endpoint);
-          const leader = svgNode("polyline", { class: `ray-leader${center ? " center" : ""}`, points: `${endX.toFixed(2)},${endY.toFixed(2)} ${elbowX},${boxCenterY} ${boxEdgeX},${boxCenterY}` });
+          const leaderPoints = center
+            ? `${endX.toFixed(2)},${endY.toFixed(2)} ${originX},${boxY + 20}`
+            : `${endX.toFixed(2)},${endY.toFixed(2)} ${elbowX},${boxCenterY} ${boxEdgeX},${boxCenterY}`;
+          const leader = svgNode("polyline", { class: `ray-leader${center ? " center" : ""}`, points: leaderPoints });
           const box = svgNode("rect", { class: `ray-label-box ray-callout${center ? " center" : ""}`, x: boxX, y: boxY, width: 122, height: 20 });
-          const label = svgNode("text", { class: `ray-label ray-callout${center ? " center" : ""}`, x: side === "left" ? boxX + 8 : boxX + 114, y: boxY + 14, "text-anchor": side === "left" ? "start" : "end" });
+          const label = svgNode("text", { class: `ray-label ray-callout${center ? " center" : ""}`, x: labelX, y: boxY + 14, "text-anchor": labelAnchor });
           label.textContent = `ray_${entry.index} · ${formatAngle(entry.value)}`;
           callouts.appendChild(leader); callouts.appendChild(box); callouts.appendChild(label);
         });

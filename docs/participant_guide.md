@@ -284,10 +284,17 @@ reward_config.json    # canonical UI signal weights
 run_identity.json     # ray count, observation size, and config/reward hashes
 training_state.json   # trainer state and budget identity
 training_metrics.jsonl
+training_contract.json # ordered observation contract and training provenance
 ```
 
 The identity file should report observation size 17 for the four lookaheads
-plus ten self-state fields and three rays. Finish with:
+plus ten self-state fields and three rays. For the bundled reference trainer,
+the selected ray layout is required by the saved observation contract and the
+selected reward file is recorded in `training_provenance`. Reusing an output
+directory with different rays or weights is rejected; use a new output
+directory for a new contract. A custom participant trainer still owns its
+algorithm and must honor the forwarded `--config` and `--reward` paths itself.
+Finish with:
 
 ```bash
 make test
