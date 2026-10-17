@@ -1,4 +1,4 @@
-# Next-session handoff / updated after UI-ray implementation
+# Next-session handoff / updated after Pygame pivot
 
 ## User priority
 
@@ -50,8 +50,9 @@ The two requested participant controls are implemented and committed in
   boundaries, and dummy confirmation commands.
 
 - The preceding generic artifact/evaluation slice is `c82c3a2 feat: start generic participant evaluation boundary`.
-- Preserve unrelated dirty `.gitignore`, Unity, `participant_run/`, and
-  `ui-run/` changes; they are not part of the committed feature work.
+- Preserve unrelated dirty `.gitignore`, `participant_run/`, and `ui-run/`
+  changes; they are not part of the committed feature work. Unity is
+  intentionally retired and was removed in commit `0b40fc8`.
 - New/changed major-gap files include:
   - `racing_event/model_artifact.py`: safe declarative NumPy MLP artifact loader.
   - `tools/evaluate_participant.py`: generic artifact evaluator CLI.
@@ -69,25 +70,23 @@ The two requested participant controls are implemented and committed in
 
 - Before the latest uncommitted changes: `make test` passed 94 Python tests;
   Node replay suite passed 65 tests.
-- Current verification: `make test` passed **106 Python tests**; direct Node
-  replay suite passed **65 tests**; Python compilation, JS syntax, and the
-  longer UI/API smoke passed. After the visual/documentation slice,
-  `make test` passed **107 Python tests**, the extracted UI JavaScript passed
-  `node --check`, and a UI/API page smoke confirmed the diagram markers were
-  served. Two dummy reference runs completed 16/16 transitions: the default
-  9-ray run produced a 23-field contract, and the UI-configured
-  `[-45,-15,0,20,45]` run produced a 19-field contract plus reward/config/
-  identity snapshots. The generic evaluator CLI evaluated two tracks twice
-  deterministically, and the generic replay CLI produced a valid replay.
+- Current verification: `make test` passed **117 Python tests**; the direct
+  Node replay suite passed **65 tests**; Python compilation, JS syntax, and
+  the longer UI/API smoke passed. `make render` and the Pygame headless smoke
+  passed. The participant UI watch path also built a validated synthetic-oval
+  replay and completed its headless Pygame process with return code 0.
   Docker was not run because Docker is unavailable.
 
 ## First next steps
 
-1. Review docs for contradictory “fixed 23-value” or “reward script required” language.
+1. Manually review the Pygame window and participant-dashboard watch action on a
+   machine with a display; the container has no browser or display.
 2. Keep ray order participant-specified (the current documented behavior); changing
    it would be a contract decision.
-3. Address final ONNX/private evaluator and
-   organizer-grade resource enforcement only after decisions/assets exist.
+3. Add PPO fine-tuning/checkpoint selection around the multi-track imitation
+   baseline, then add tournament replay groups and multi-model comparison.
+4. Address final ONNX/private evaluator and organizer-grade resource enforcement
+   only after decisions/assets exist.
 
 ## Important design constraints
 
@@ -111,6 +110,8 @@ The two requested participant controls are implemented and committed in
   read-only replay renderer; the HTML viewer remains a fallback.
 - New renderer path: `racing_event/replay.py`,
   `racing_event/pygame_renderer.py`, and `tools/run_pygame.py`.
+- This pivot and the Unity removal are committed as
+  `0b40fc8 feat: pivot replay rendering to pygame`.
 - The participant UI reference watch now exports validated replay JSON and
   launches Pygame instead of building/serving HTML by default.
 - Pygame is pinned to `2.6.1`; setup checks, Docker SDL runtime packages, and
@@ -125,6 +126,10 @@ The two requested participant controls are implemented and committed in
   It finished all three deterministically with zero off-track steps:
   flowing 834 steps / 27.800 s, oval 863 / 28.767 s, tight loop 727 / 24.233 s.
 - Pygame replay JSON QA outputs are under `artifacts/replay/pygame-imitation-*.json`.
+- The UI watch smoke used `build_best_run("synthetic_oval", "participant_run/ui-rays-smoke")`;
+  replay export returned `dnf_crash` for that existing UI artifact, while the
+  Pygame renderer itself completed headlessly with return code 0. This is a
+  renderer/integration pass, not evidence that the UI artifact is a good racer.
 
 Next session should manually review the Pygame window, then add tournament
 replay groups/multi-model comparison. Do not reintroduce Unity. Keep the

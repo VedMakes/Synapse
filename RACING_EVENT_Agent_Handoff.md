@@ -1943,11 +1943,17 @@ outputs and should not be treated as final competition submissions.
 
 ### Verification
 
+- The renderer pivot and Unity removal are committed as
+  `0b40fc8 feat: pivot replay rendering to pygame`.
 - `make test`: 117 Python tests passed.
 - Node replay frontend suite: 65 tests passed.
 - Pygame dummy-SDL renderer tests: 6 tests passed.
 - `tools/run_pygame.py --headless` succeeded for the serious PPO replay and
   all three imitation replays.
+- The participant UI watch smoke exported a synthetic-oval replay and its
+  headless Pygame process exited with return code 0. The existing UI artifact
+  itself returned `dnf_crash`, so this validates renderer integration rather
+  than racer quality.
 - Generic replay export, artifact loading, and deterministic evaluation passed.
 
 ### Next session
