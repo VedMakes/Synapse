@@ -5,7 +5,8 @@
 Replay schema **1.1** (`kind: racing_event_replay`) is the first validated UI
 boundary. Python owns simulation, collisions, progress, termination, and
 physical results. Participant reward code is a training concern and is not
-executed or serialized by the replay exporter. A browser or Unity reads poses and events. Playback controls
+executed or serialized by the replay exporter. Pygame or the optional browser
+viewer reads poses and events. Playback controls
 change only a visual clock; there is no renderer-to-simulation control channel.
 
 The old `tools/run_scripted.py` output is a **legacy 1.0 smoke recording**, not
@@ -76,33 +77,27 @@ steering_command, throttle_brake, off_track, events, terminated, truncated
 No reset occurs within an evaluation replay. Future multi-episode training
 replays need explicit episode boundaries and must not interpolate teleports.
 
-## Unity adapter recipe
+## Pygame adapter recipe
 
-1. Validate the schema and track hash before displaying the replay. Build the
-   track mesh from the embedded matching boundary points. Polylines close from
-   their last unique point to the first; do not add a physical seam.
-2. Map Python `(x, y)` to Unity `(X=x, Y=visual height, Z=y)`, one unit per
-   metre. Car pivot is its geometric centre.
-3. For a car mesh with local +Z forward and +Y up, yaw degrees are
-   `90 - heading * 180/pi`. Sanity check: Python heading 0 faces Unity +X;
-   heading `pi/2` faces Unity +Z. Adapt the fixed mesh-axis offset if a model
-   has a different forward axis.
-4. Disable vehicle PhysX motion/contact outcome logic. Never simulate a rigid
-   body to "match" the replay. Set transforms directly from Python poses.
-5. Between ticks, linearly interpolate position and use shortest-angle heading
+1. Load the replay through Python `load_replay()` before opening a window. Build
+   screen-space polylines from the embedded matching boundary points. Polylines
+   close from their last unique point to the first; do not add a physical seam.
+2. Map Python metres to pixels with a fitted affine transform:
+   `screen_x = origin_x + scale * world_x` and
+   `screen_y = origin_y - scale * world_y`.
+3. Build the car rectangle from the recorded `(x, y, heading)` using forward and
+   lateral unit vectors. The car is a visual polygon, not a physics body.
+4. Between ticks, linearly interpolate position and use shortest-angle heading
    interpolation. Do not extrapolate after the last frame. Hold events and
    telemetry at the last completed tick. At an exact tick use the exact stored
    values, including the final pose.
-6. Display the recorded Python result and lap time, not a stopwatch derived
-   from Unity frames or a visual start-line crossing.
+5. Display the recorded Python result and lap time, not a stopwatch derived
+   from Pygame frames or a visual start-line crossing.
 
-Joint acceptance tests remain: compare known poses and forward axes, compare
-mesh boundary coordinates, check exact end time/events, and reject a mismatched
-version. The initial read-only adapter foundation is under `unity/` and targets
-Unity 2022.3.22f1 LTS with URP 14.0.8. It implements the DTO reader,
-structural/track-hash validation, visual clock, direct ghost transform mapping,
-and boundary-derived visual surface. A real Unity import, mesh round-trip, and
-scene screenshot have not yet been run.
+The active implementation is `racing_event/pygame_renderer.py`, launched by
+`tools/run_pygame.py`. Its dummy SDL mode is used by automated tests. The
+browser viewer remains an optional fallback and follows the same read-only
+rules.
 
 ## Storage, integrity, and memory
 

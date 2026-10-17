@@ -1883,3 +1883,80 @@ process interruption. Findings and exact commands are recorded in
 Keep the QA report with the release notes, then implement the generic model
 artifact/evaluator boundary. Do not expand the fixed PPO reference path into a
 participant requirement while doing so.
+
+## 29. SESSION HANDOFF (2026-10-17, PYGAME PIVOT AND SERIOUS RACER)
+
+### Renderer decision
+
+The Unity renderer direction is superseded and abandoned. The active local
+renderer is Pygame, consuming only validated replay schema 1.1 files. Unity
+source, package metadata, and the Unity adapter document were removed from the
+active repository. The dependency-free HTML viewer remains only as an optional
+fallback for remote/headless preview; it is not the active watch path.
+
+Active renderer files:
+
+- `racing_event/replay.py`: renderer-neutral visual clock and pose sampling.
+- `racing_event/pygame_renderer.py`: read-only Pygame drawing layer.
+- `tools/run_pygame.py`: interactive/headless entry point.
+- `tests/test_replay_clock.py` and `tests/test_pygame_renderer.py`.
+
+`tools/participant_ui.py` now exports a replay and launches the Pygame renderer
+for the reference watch action. It does not start a renderer during training.
+
+### Racer experiment
+
+The fixed PPO experiment `artifacts/pygame-serious/` trained 64 updates on the
+oval and completed a lap:
+
+- status: `finished`
+- steps: `930`
+- lap time: `31.0 s`
+- mean speed: `18.165 m/s`
+- off-track steps: `153`
+
+The experience showed that the PPO baseline was oval-specific and exploited
+runoff. Diagnostic evaluation on the other two public tracks produced crashes:
+
+- flowing: crash at step 152;
+- tight loop: crash at step 119.
+
+### Improvement and evidence
+
+Added `tools/train_scripted_imitation.py`, a serious baseline experiment that
+collects observations/actions from the existing authoritative scripted teacher
+on all three tracks and trains the fixed actor to imitate it. The resulting
+artifact is `artifacts/pygame-imitation/`.
+
+At 2,700 teacher samples and 80 epochs, deterministic evaluation produced clean
+laps on all three public tracks with zero off-track steps:
+
+| Track | Status | Steps | Lap time | Mean speed | Off-track steps |
+|---|---|---:|---:|---:|---:|
+| synthetic_flowing | finished | 834 | 27.800 s | 19.310 m/s | 0 |
+| synthetic_oval | finished | 863 | 28.767 s | 19.406 m/s | 0 |
+| synthetic_tight_loop | finished | 727 | 24.233 s | 18.955 m/s | 0 |
+
+Validated Pygame replays and headless renders are under
+`artifacts/replay/pygame-imitation-*.json`. These artifacts are local QA
+outputs and should not be treated as final competition submissions.
+
+### Verification
+
+- `make test`: 117 Python tests passed.
+- Node replay frontend suite: 65 tests passed.
+- Pygame dummy-SDL renderer tests: 6 tests passed.
+- `tools/run_pygame.py --headless` succeeded for the serious PPO replay and
+  all three imitation replays.
+- Generic replay export, artifact loading, and deterministic evaluation passed.
+
+### Next session
+
+1. Review the Pygame window manually on a machine with a display, including the
+   participant UI watch action and all three imitation replays.
+2. Add a tournament replay-group manifest and multi-model comparison view only
+   after the single-replay Pygame path is accepted.
+3. Improve the serious racer beyond teacher imitation with PPO fine-tuning,
+   checkpoint selection, and persisted per-track evaluation metrics.
+4. Define the final model submission/runtime boundary before implementing
+   competition isolation and head-to-head scoring.

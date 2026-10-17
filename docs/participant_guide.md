@@ -103,10 +103,31 @@ path after a bundled starter run; generic artifact evaluation is documented
 below.
 
 The dashboard also has a **Set up / repair Python** button. If the UI detects
-that NumPy or the reference trainer's PyTorch dependency is missing, it refuses
+that NumPy, Pygame, or the reference trainer's PyTorch dependency is missing, it refuses
 to launch a broken environment and shows the setup command instead. The first
 run should be intentionally small; repeat with the same output directory only
 when your trainer supports resuming.
+
+### Replay viewing
+
+Pygame is the active local replay renderer. It consumes only validated replay
+JSON and never steps the environment:
+
+```bash
+.venv/bin/python tools/run_pygame.py \
+  --replay participant_run/replays/synthetic_oval.json
+```
+
+For CI or a machine without a display, render one frame with dummy SDL drivers:
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  .venv/bin/python tools/run_pygame.py \
+  --replay participant_run/replays/synthetic_oval.json --headless
+```
+
+The optional HTML replay is a fallback preview. Unity is not part of the active
+participant workflow.
 
 ## Participant-owned training boundary
 
@@ -328,11 +349,11 @@ Before public release, the organizers must still:
 - select the final public route families;
 - prepare organizer-only development and final holdouts;
 - run difficulty-parity and generalization experiments;
-- red-team repository history, artifacts, previews, and Unity assets for leaks;
+- red-team repository history, artifacts, previews, and renderer assets for leaks;
 - record provenance, licenses, and contributor rights; and
 - freeze the public release ID before the participant training window.
 
-Do not place held-out geometry, seeds, previews, or derived Unity assets in the
+Do not place held-out geometry, seeds, previews, or derived renderer assets in the
 participant repository, its history, release assets, or public replays.
 
 ## Open event decisions

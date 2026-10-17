@@ -9,16 +9,17 @@ The current slice provides:
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
 - A participant-owned reward boundary over published raw transition signals.
 - A persistent `n` runs by `k` steps-per-run budget.
-- A scripted-run tool that writes a trajectory-like JSON record for later replay and Unity integration.
+- A scripted-run and replay-export path for the read-only Pygame renderer.
 - A versioned state/action contract, serializable observation normalizer, and a batched NumPy environment for headless training.
 - An optional fixed two-layer PyTorch reference baseline, masked GAE, clipped
   PPO update, safe state-dictionary artifact format, and a measured baseline
   convergence tool.
-- A validated, streaming replay export and dependency-free read-only browser
-  preview, with a documented future Unity adapter contract.
+- A validated, streaming replay export with a Pygame renderer and an optional
+  dependency-free browser fallback.
 
-Python is authoritative. Unity has a read-only renderer foundation under
-`unity/`; it does not simulate or score cars.
+Python is authoritative. Pygame is a read-only renderer that consumes validated
+replays; it does not simulate or score cars. Unity is no longer an active
+project target.
 
 ## Explicit working decisions
 
@@ -93,12 +94,15 @@ launcher, and polls its bounded progress output. It does not implement a
 second model, environment, or budget. The reward editor and ray controls are
 input/configuration UI, not a second simulation authority. The bundled starter can
 also produce a reference replay for one public map; generic participant
-artifact replay is a separate submission boundary.
+artifact replay is a separate submission boundary. The local watch action
+launches the Pygame replay renderer; the browser replay remains an explicit
+fallback for headless or remote preview.
 
 ## Setup
 
 The supported runtime is Python 3.11. The lock file uses the CPU PyTorch wheel
-index, so a GPU and CUDA installation are not required for this headless slice.
+index, so a GPU and CUDA installation are not required. Pygame uses software
+SDL drawing and is also exercised with dummy SDL drivers in CI.
 
 ```bash
 python3.11 -m venv .venv
@@ -110,11 +114,16 @@ The same dependency set is available through the `Dockerfile`.
 ## Try the first slice
 
 ```bash
-OUTPUT="$(mktemp)"
-.venv/bin/python tools/run_scripted.py --steps 120 --output "$OUTPUT"
+make render
 ```
 
-The command loads `tracks/train/synthetic_oval.json`, drives a deterministic scripted policy, and writes positions, controls, signals, and termination state to the output file.
+The command exports a schema 1.1 replay from the deterministic scripted policy
+and renders one frame through Pygame with dummy SDL drivers. For an interactive
+window, run `make render` with `SDL_VIDEODRIVER` unset and launch:
+
+```bash
+.venv/bin/python tools/run_pygame.py --replay artifacts/replay/pygame-smoke.json
+```
 
 Run the checks with the project test command:
 
@@ -141,7 +150,7 @@ The measured first benchmark is in `reports/e1_vectorized_benchmark.md`. It is
 a local baseline only. The measured PPO baseline experiment is in
 `reports/e2_baseline_convergence.md`; it covers the current synthetic fixture
 only and does not freeze public event settings. ONNX evaluation, held-out-track
-storage, ranking, and Unity playback remain separate milestones.
+storage, ranking, and tournament playback remain separate milestones.
 
 ## Trainer boundary
 
@@ -301,27 +310,27 @@ To view the retained learned E2 artifact instead of the scripted controller:
   --output artifacts/replay/index.html
 ```
 
-The exporter streams frames to an atomic JSON file. The bundler verifies
-version, tick ordering, hashes, finite values, and outcome consistency first.
-See `docs/replay_contract.md` for schema **1.1**, units, time-zero semantics,
-memory limits, checksum details, and the Unity coordinate mapping. The legacy
-scripted smoke format 1.0 is intentionally not accepted by the new UI.
+The exporter streams frames to an atomic JSON file. The renderer verifies
+version, tick ordering, hashes, finite values, and outcome consistency before
+drawing. See `docs/replay_contract.md` for schema **1.1**, units, time-zero
+semantics, memory limits, checksum details, and the Pygame coordinate mapping.
+The legacy scripted smoke format 1.0 is intentionally not accepted by the new
+renderer.
 
-The browser interpolates **only the recorded pose**, never physics. Neither
-browser nor future Unity may compute contacts, resets, rewards, progress,
-finishes, or lap times. Private held-out geometry must never be exported into
-a public preview. Checksums are integrity checks, not anti-cheat authentication.
+Pygame and the browser interpolate **only the recorded pose**, never physics.
+Neither renderer may compute contacts, resets, rewards, progress, finishes, or
+lap times. Private held-out geometry must never be exported into a public
+preview. Checksums are integrity checks, not anti-cheat authentication.
 
-### Unity renderer foundation
+### Pygame renderer
 
-The read-only Unity adapter foundation is under `unity/` and targets pinned
-Unity `2022.3.22f1` LTS with URP `14.0.8`. It validates replay schema `1.1`,
-maps Python coordinates and headings using the same contract, applies recorded
-poses directly, and builds visual track geometry from the embedded boundaries.
-It contains no vehicle physics, collision, lap timing, reward, progress, or
-finish-line logic. `GhostPresentationConfig` keeps simultaneous versus
-staggered reveal configurable without changing replay data. See
-`docs/unity_renderer_adapter.md` for the handoff and joint acceptance tests.
+`tools/run_pygame.py` is the active local renderer. It loads only validated
+schema 1.1 replays, draws the embedded track boundaries and recorded path,
+interpolates the recorded pose for smooth playback, and displays the Python
+result/events as telemetry. It never imports or steps the racing environment.
+Use `--headless` with dummy SDL drivers for CI and one-frame smoke checks. The
+HTML viewer remains an optional dependency-free fallback for remote previews;
+Unity has been retired from the active product.
 
 ### Layer checks and container preview
 
@@ -334,8 +343,9 @@ node --test tests/replay_frontend.test.cjs
 ```
 
 No browser binary is installed by the project. The JS checks use a DOM/canvas
-test double, not a visual browser test. A real browser/Unity visual parity pass
-is still required before the renderer contract is frozen for the event.
+test double, not a visual browser test. Pygame is checked through its dummy SDL
+driver; a real desktop screenshot pass remains a manual check when a display is
+available.
 
 To generate and serve a preview using the existing Python container:
 

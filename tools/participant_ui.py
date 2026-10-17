@@ -21,7 +21,7 @@ import tempfile
 from threading import Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import quote, unquote, urlparse
+from urllib.parse import unquote, urlparse
 
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
@@ -435,6 +435,7 @@ class TrainingProcess:
 
 
 PROCESS = TrainingProcess()
+RENDER_PROCESS = TrainingProcess()
 REPLAY_OUTPUTS: dict[str, Path] = {}
 REPLAY_LOCK = Lock()
 
@@ -472,7 +473,6 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
     replay_dir = output_dir / "replays"
     replay_dir.mkdir(parents=True, exist_ok=True)
     replay_path = replay_dir / f"{map_id}.json"
-    html_path = replay_dir / f"{map_id}.html"
     participant_id = f"SYNAPSE-reference-{map_id}"
     config_path = output_dir / "run_config.json"
     if not config_path.exists():
@@ -492,9 +492,7 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
             "--track", selected["path"], "--config", str(config_path),
             "--participant-id", participant_id, "--output", str(replay_path),
         ]
-        build_command = [str(python), str(ROOT / "tools" / "build_replay.py"), str(replay_path), "--output", str(html_path)]
         subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
-        subprocess.run(build_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=60)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "replay command failed").strip()
         raise RuntimeError(f"could not build SYNAPSE replay: {detail}") from exc
@@ -503,14 +501,24 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
             temporary_contract.unlink(missing_ok=True)
     with replay_path.open(encoding="utf-8") as stream:
         replay = json.load(stream)
+    renderer_python = _ready_python(require_torch=False)
+    renderer_command = [str(renderer_python), str(ROOT / "tools" / "run_pygame.py"), "--replay", str(replay_path)]
+    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+        renderer_command.append("--headless")
+    renderer = RENDER_PROCESS.start_command(
+        renderer_command,
+        kind="pygame-renderer",
+    )
     with REPLAY_LOCK:
-        REPLAY_OUTPUTS[map_id] = html_path
+        REPLAY_OUTPUTS[map_id] = replay_path
     return {
         "map_id": map_id,
         "display_name": selected["display_name"],
         "status": replay.get("result", {}).get("status"),
         "lap_time_s": replay.get("result", {}).get("lap_time_s"),
-        "url": f"/replays/{quote(map_id, safe='')}",
+        "renderer": "pygame",
+        "replay_path": str(replay_path),
+        "renderer_state": renderer.get("state"),
     }
 
 
@@ -815,7 +823,7 @@ PAGE = r'''<!doctype html>
     $("start").addEventListener("click", async () => { try { render(await request("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(formData()) })); } catch (error) { alert(error.message); } });
     $("stop").addEventListener("click", async () => { try { render(await request("/api/stop", { method: "POST" })); } catch (error) { alert(error.message); } });
     $("setup").addEventListener("click", async () => { try { render(await request("/api/setup", { method: "POST" })); } catch (error) { alert(error.message); } });
-     $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · `; const link = document.createElement("a"); link.href = result.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Open replay"; target.appendChild(link); } catch (error) { $("watch-result").textContent = error.message; } });
+     $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · Pygame renderer: ${result.renderer_state || "starting"}`; } catch (error) { $("watch-result").textContent = error.message; } });
      ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
      fields.forEach(id => $(id).addEventListener("change", refresh));
      renderRayDiagram(); refreshMaps(); refresh(); setInterval(refresh, 700);
@@ -859,7 +867,7 @@ class Handler(BaseHTTPRequestHandler):
             if replay_path is None or not replay_path.exists():
                 self._json(404, {"error": "replay has not been built for this map yet"})
             else:
-                self._send(200, "text/html; charset=utf-8", replay_path.read_bytes())
+                self._json(410, {"error": "Pygame is the active renderer; launch the local renderer from the dashboard or tools/run_pygame.py", "replay_path": str(replay_path)})
         else:
             self._json(404, {"error": "not found"})
 
@@ -928,6 +936,7 @@ def main() -> None:
         print("\nstopping participant UI")
     finally:
         PROCESS.stop()
+        RENDER_PROCESS.stop()
         server.server_close()
 
 

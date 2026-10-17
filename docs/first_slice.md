@@ -2,7 +2,8 @@
 
 ## What is implemented
 
-The current prototype proves the parts that should be stable before a trainer or Unity client is added:
+The current prototype proves the parts that should be stable before a trainer
+or local Pygame renderer is added:
 
 1. Track geometry is loaded from versioned JSON.
 2. The loader checks arclength, sample spacing, nesting, edge placement, and a SHA-256 content hash.
@@ -13,7 +14,8 @@ The current prototype proves the parts that should be stable before a trainer or
    apply UI-edited `RewardConfig` weights, while a custom participant trainer
    may apply any finite local reward function over copies of the published data.
 7. `RunBudget` persists `n` logical runs with at most `k` environment transitions per run.
-8. The scripted tool writes the versioned trajectory shape intended for later Unity playback.
+8. The replay exporter writes the versioned trajectory shape consumed by the
+   read-only Pygame renderer.
 9. Rollout diagnostics expose spawn-relative sector coverage, positive off-track
    progress, and boundary excess without changing the policy contract.
 

@@ -1,7 +1,7 @@
 """Versioned simulation configuration.
 
-The simulation reads one configuration object. Unity must not duplicate these
-values when the renderer is added.
+The simulation reads one configuration object. Renderers consume replay data
+and must not duplicate or reinterpret these values.
 """
 
 from __future__ import annotations

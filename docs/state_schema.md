@@ -1,7 +1,8 @@
 # Versioned training state schema
 
-The Python engine is authoritative. Unity and a future trainer consume this
-schema; they do not recompute physics, progress, rewards, or termination.
+The Python engine is authoritative. Pygame, the optional browser viewer, and a
+future trainer consume this schema; they do not recompute physics, progress,
+rewards, or termination.
 
 ## Contract versions
 

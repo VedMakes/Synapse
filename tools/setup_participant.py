@@ -26,9 +26,10 @@ def _python_has_dependencies(python: Path) -> tuple[bool, str]:
             [
                 str(python),
                 "-c",
-                "import importlib.util, numpy; "
+                "import os; os.environ['PYGAME_HIDE_SUPPORT_PROMPT']='1'; "
+                "import importlib.util, numpy, pygame; "
                 "torch = importlib.util.find_spec('torch'); "
-                "print(f'numpy={numpy.__version__} optional_torch={torch is not None}')",
+                "print(f'numpy={numpy.__version__} pygame={pygame.version.ver} optional_torch={torch is not None}')",
             ],
             cwd=ROOT,
             text=True,
