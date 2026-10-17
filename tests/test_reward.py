@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import tempfile
+from pathlib import Path
 import unittest
 
 from racing_event.reward import RewardConfig
@@ -17,6 +19,20 @@ class RewardConfigTests(unittest.TestCase):
             with self.subTest(value=value):
                 with self.assertRaises(ValueError):
                     RewardConfig(weights={"progress": value})
+
+    def test_weight_bounds_and_canonical_identity(self) -> None:
+        with self.assertRaises(ValueError):
+            RewardConfig(weights={"progress": 100.01})
+        with self.assertRaises(ValueError):
+            RewardConfig(weights={"progress": True})
+        first = RewardConfig(weights={"progress": 2})
+        second = RewardConfig(weights={"speed": 0, "progress": 2})
+        self.assertEqual(first.to_dict()["schema_version"], 1)
+        self.assertEqual(first.content_hash, second.content_hash)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "reward.json"
+            first.save(path)
+            self.assertEqual(RewardConfig.from_file(path).content_hash, first.content_hash)
 
 
 if __name__ == "__main__":

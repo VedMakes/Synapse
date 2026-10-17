@@ -77,6 +77,8 @@ def validate_evaluation_contract(
         raise ValueError("saved observation schema does not match the environment")
     if contract.observation.size != env.observation_size:
         raise ValueError("saved observation size does not match the environment")
+    if contract.observation.ray_angles_deg and contract.observation.ray_angles_deg != tuple(env.config.sensors.ray_angles_deg):
+        raise ValueError("saved ray angles do not match the environment")
     if contract.config_hash != env.training_contract.config_hash:
         raise ValueError("saved config hash does not match the environment")
     if not contract.track_ids or len(contract.track_ids) != len(contract.track_hashes):

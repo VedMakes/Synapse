@@ -22,6 +22,18 @@ class ObservationContractTests(unittest.TestCase):
         self.assertEqual(schema.names[:4], ("speed", "longitudinal_velocity", "lateral_velocity", "yaw_rate"))
         self.assertEqual(schema.names[-1], "local_width")
         self.assertTrue(np.all(schema.lows <= schema.highs))
+        self.assertEqual(schema.ray_angles_deg, CONFIG.sensors.ray_angles_deg)
+
+    def test_ray_layout_changes_size_and_invalid_layouts_are_rejected(self) -> None:
+        from dataclasses import replace
+        from racing_event.config import SensorConfig
+
+        smaller = replace(CONFIG, sensors=SensorConfig(ray_angles_deg=(0.0, -30.0, 30.0)))
+        self.assertEqual(build_observation_schema(smaller).size, 17)
+        for angles in ((-1.0, -1.0, 0.0), (1.0,), (0.0, 91.0), (float("nan"), 0.0)):
+            with self.subTest(angles=angles):
+                with self.assertRaises(ValueError):
+                    SensorConfig(ray_angles_deg=angles)
 
     def test_normalizer_and_contract_round_trip(self) -> None:
         schema = build_observation_schema(CONFIG)

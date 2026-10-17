@@ -6,3 +6,5 @@ __pycache__/
 budget-state*.json
 budget-state*.json.lock
 artifacts/
+participant_run/
+*.tmp

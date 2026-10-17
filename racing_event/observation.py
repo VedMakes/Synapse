@@ -53,6 +53,7 @@ class ObservationSchema:
     version: str = OBSERVATION_SCHEMA_VERSION
     dtype: str = "float32"
     normalization: str = "environment_static_bounds"
+    ray_angles_deg: tuple[float, ...] = ()
 
     @property
     def size(self) -> int:
@@ -89,6 +90,8 @@ class ObservationSchema:
             "version": self.version,
             "dtype": self.dtype,
             "normalization": self.normalization,
+            "ray_angles_deg": list(self.ray_angles_deg),
+            "ray_count": len(self.ray_angles_deg),
             "fields": [field.to_dict() for field in self.fields],
         }
 
@@ -142,7 +145,7 @@ def build_observation_schema(config: SimulationConfig) -> ObservationSchema:
             "minimum local half-width divided by five times car width",
         )
     )
-    return ObservationSchema(tuple(fields))
+    return ObservationSchema(tuple(fields), ray_angles_deg=tuple(config.sensors.ray_angles_deg))
 
 
 class RunningObservationNormalizer:
@@ -351,11 +354,15 @@ class TrainingContract:
             raise ValueError(f"unsupported training contract version: {data.get('version')!r}")
         observation_data = data.get("observation", {})
         fields = tuple(ObservationField(**field) for field in observation_data.get("fields", []))
+        ray_angles = tuple(float(value) for value in observation_data.get("ray_angles_deg", ()))
+        if "ray_count" in observation_data and observation_data["ray_count"] != len(ray_angles):
+            raise ValueError("observation ray_count does not match ray_angles_deg")
         schema = ObservationSchema(
             fields=fields,
             version=observation_data.get("version", ""),
             dtype=observation_data.get("dtype", ""),
             normalization=observation_data.get("normalization", ""),
+            ray_angles_deg=ray_angles,
         )
         if schema.version != OBSERVATION_SCHEMA_VERSION or schema.dtype != "float32":
             raise ValueError("unsupported observation schema")

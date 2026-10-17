@@ -26,7 +26,7 @@ The current prototype proves the parts that should be stable before a trainer or
 
 ## Contract currently used by the environment
 
-- Observation: 23 `float32` values for the default configuration.
+- Observation: `10 + ray_count + lookahead_count` `float32` values; the default is 23. The UI permits 1–16 unique forward rays in `[-90, 90]` degrees, including 0.
 - Action: two values in `[-1, 1]`: steering and throttle/brake.
 - Positive longitudinal action is throttle. Negative action is braking.
 - SYNAPSE owns physics, termination, raw signals, progress, and lap time. Participants own reward calculation during training.

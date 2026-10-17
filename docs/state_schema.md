@@ -28,7 +28,9 @@ the interval.
 
 ## Observation
 
-The default configuration emits 23 values in this exact order:
+The default configuration emits 23 values in this exact order. In general the
+observation size is `10 + ray_count + lookahead_count`; the selected ordered
+ray angles are serialized in observation metadata and the configuration hash.
 
 | Index | Name | Bounds | Normalization |
 |---:|---|---|---|
@@ -41,7 +43,7 @@ The default configuration emits 23 values in this exact order:
 | 6 | `previous_steering` | `[-1, 1]` | Previous steering action. |
 | 7 | `previous_longitudinal` | `[-1, 1]` | Previous signed throttle/brake action. |
 | 8 | `steering_angle` | `[-1, 1]` | Current steering angle divided by configured maximum steering angle. |
-| 9-17 | `ray_0` ... `ray_8` | `[0, 1]` | Boundary distance divided by ray maximum range. The configured ray order is `0, -15, 15, -30, 30, -60, 60, -90, 90` degrees. |
+| 9-17 | `ray_0` ... `ray_8` | `[0, 1]` | Boundary distance divided by ray maximum range. The default ray order is `0, -15, 15, -30, 30, -60, 60, -90, 90` degrees; participants may choose 1–16 unique forward angles including `0`. |
 | 18-21 | `curvature_lookahead_0` ... `curvature_lookahead_3` | `[-1, 1]` | Signed curvature multiplied by 100 and clipped, at 15, 40, 80, and 140 metres. |
 | 22 | `local_width` | `[0, 1]` | Minimum local half-width divided by five times car width. |
 

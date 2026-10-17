@@ -5,7 +5,7 @@ import unittest
 
 import numpy as np
 
-from racing_event.config import SimulationConfig
+from racing_event.config import SensorConfig, SimulationConfig
 from racing_event.env import RacingEnv
 from racing_event.vector_env import VectorizedRacingEnv
 from racing_event.track import TrackGeometry
@@ -55,6 +55,18 @@ class VectorizedEnvironmentTests(unittest.TestCase):
         self.assertEqual(scalar_info["track_id"], vector_info["track_id"][0])
         self.assertEqual(scalar_info["spawn_s"], vector_info["spawn_s"][0])
         self.assertEqual(scalar.state.__dict__, vector.state.item(0).__dict__)
+
+    def test_custom_ray_layout_preserves_scalar_vector_parity(self) -> None:
+        config = SimulationConfig(sensors=SensorConfig(ray_angles_deg=(-30.0, 0.0, 30.0)))
+        scalar = RacingEnv(TRACK, config)
+        vector = VectorizedRacingEnv(TRACK, config, n_envs=1)
+        scalar_observation, _ = scalar.reset(seed=12, evaluation=True)
+        vector_observation, _ = vector.reset(seed=12, evaluation=True)
+        self.assertEqual(scalar_observation.shape, (17,))
+        np.testing.assert_array_equal(scalar_observation, vector_observation[0])
+        scalar_step = scalar.step([0.1, 0.5])
+        vector_step = vector.step([[0.1, 0.5]])
+        np.testing.assert_array_equal(scalar_step[0], vector_step[0][0])
 
     def test_batch_seed_and_actions_are_deterministic(self) -> None:
         actions = np.asarray([[0.1, 0.6], [-0.2, 0.4], [0.0, -0.3], [0.4, 0.2]])

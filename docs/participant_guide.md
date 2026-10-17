@@ -161,6 +161,12 @@ trainer can ignore the forwarded budget values unless it uses `RunBudget` and
 the environment/rollout APIs; independent event-grade enforcement belongs in
 the future organizer evaluator/launcher.
 
+The dashboard’s normal participant path edits the nine published signal
+weights and writes a canonical `reward_config.json`; it also edits the ordered
+forward-ray list. The ray list must contain 1–16 unique finite angles in
+`[-90, 90]` degrees and must include `0`. Ray order is part of the observation
+contract, so changing it requires a compatible new run/artifact.
+
 ## Generic model artifact preview
 
 For participants who want to separate training from organizer evaluation, the

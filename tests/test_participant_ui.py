@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import unittest
 import os
+import json
 from pathlib import Path
 import sys
 import tempfile
 import time
 
-from tools.participant_ui import PAGE, TrainingProcess, build_training_command, parse_update_line, public_maps
+from tools.participant_ui import PAGE, ROOT, TrainingProcess, build_training_command, parse_update_line, public_maps
 
 
 class ParticipantUiTests(unittest.TestCase):
@@ -28,18 +29,54 @@ class ParticipantUiTests(unittest.TestCase):
         )
 
     def test_command_is_workspace_bound_and_uses_existing_cli(self) -> None:
-        command = build_training_command({"output_dir": "ui-run", "trainer": "examples/participant_train.py", "steps": 16})
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output_dir = Path(directory).resolve()
+            command = build_training_command({"output_dir": str(output_dir), "trainer": "examples/participant_train.py", "steps": 16})
         self.assertTrue(command[1].endswith("tools/train_participant.py"))
         self.assertIn("--trainer", command)
         self.assertTrue(command[command.index("--trainer") + 1].endswith("/examples/participant_train.py"))
         self.assertIn("--output-dir", command)
-        self.assertTrue(command[command.index("--output-dir") + 1].endswith("/ui-run"))
+        self.assertEqual(Path(command[command.index("--output-dir") + 1]), output_dir)
         with self.assertRaises(ValueError):
             build_training_command({"output_dir": "../../outside"})
 
     def test_page_contains_participant_contract_and_controls(self) -> None:
-        for text in ("Start / resume participant training", "Cumulative budget", "Your model and reward", "Watch reference artifact for map", "Set up / repair Python", "/api/status"):
+        for text in ("Start / resume participant training", "Cumulative budget", "Reward function · signal weights", "Forward-facing ray sensors", "Watch reference artifact for map", "Set up / repair Python", "/api/status"):
             self.assertIn(text, PAGE)
+
+    def test_ui_writes_weighted_reward_and_ray_config_snapshots(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output_dir = Path(directory).resolve()
+            command = build_training_command({
+                "output_dir": str(output_dir),
+                "trainer": "examples/participant_train.py",
+                "reward_weights": {"progress": "4.5", "crash": "-20"},
+                "ray_count": "3",
+                "ray_angles_deg": "-30,0,30",
+                "steps": 1,
+            })
+            reward_path = Path(command[command.index("--reward") + 1])
+            config_path = Path(command[command.index("--config") + 1])
+            self.assertEqual(json.loads(reward_path.read_text())["weights"]["progress"], 4.5)
+            self.assertEqual(json.loads(config_path.read_text())["sensors"]["ray_angles_deg"], [-30.0, 0.0, 30.0])
+            self.assertTrue((output_dir / "run_identity.json").exists())
+
+    def test_ui_rejects_ray_count_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            with self.assertRaisesRegex(ValueError, "ray_count"):
+                build_training_command({
+                    "output_dir": directory,
+                    "trainer": "examples/participant_train.py",
+                    "ray_count": 2,
+                    "ray_angles_deg": "-30,0,30",
+                })
+            with self.assertRaisesRegex(ValueError, "ray_count"):
+                build_training_command({
+                    "output_dir": directory,
+                    "trainer": "examples/participant_train.py",
+                    "ray_count": 3.5,
+                    "ray_angles_deg": "-30,0,30",
+                })
 
     def test_public_map_selector_has_three_development_maps(self) -> None:
         maps = public_maps()

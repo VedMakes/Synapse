@@ -1,4 +1,20 @@
 {
+  "environment": {
+    "config_hash": "06908c903ce74ed20031e5e9409660e5dd98ed3e075fda7ed673e5b976615c22",
+    "observation_size": 23,
+    "ray_angles_deg": [
+      0.0,
+      -15.0,
+      15.0,
+      -30.0,
+      30.0,
+      -60.0,
+      60.0,
+      -90.0,
+      90.0
+    ],
+    "ray_count": 9
+  },
   "manifest_version": "1",
   "maps": [
     {

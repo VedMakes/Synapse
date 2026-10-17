@@ -53,6 +53,8 @@ def evaluate(args: argparse.Namespace) -> dict[str, object]:
         "artifact_sha256": artifact.artifact_sha256,
         "environment_code_hash": engine_code_hash(),
         "config_hash": artifact.contract.config_hash,
+        "observation_size": artifact.observation_size,
+        "ray_angles_deg": list(artifact.contract.observation.ray_angles_deg),
         "deterministic": True,
         "tracks": results,
     }

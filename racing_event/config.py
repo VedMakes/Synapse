@@ -41,6 +41,36 @@ class SensorConfig:
     ray_max_range_m: float = 100.0
     lookahead_distances_m: tuple[float, ...] = (15.0, 40.0, 80.0, 140.0)
 
+    MAX_RAY_COUNT = 16
+    MIN_RAY_ANGLE_DEG = -90.0
+    MAX_RAY_ANGLE_DEG = 90.0
+
+    def __post_init__(self) -> None:
+        angles = tuple(0.0 if float(value) == 0.0 else float(value) for value in self.ray_angles_deg)
+        object.__setattr__(self, "ray_angles_deg", angles)
+        if not 1 <= len(angles) <= self.MAX_RAY_COUNT:
+            raise ValueError(f"ray_angles_deg must contain 1..{self.MAX_RAY_COUNT} angles")
+        if any(not math.isfinite(value) for value in angles):
+            raise ValueError("ray_angles_deg must contain only finite values")
+        if any(value < self.MIN_RAY_ANGLE_DEG or value > self.MAX_RAY_ANGLE_DEG for value in angles):
+            raise ValueError("ray_angles_deg must stay within [-90, 90] degrees")
+        if len(set(angles)) != len(angles):
+            raise ValueError("ray_angles_deg must not contain duplicates")
+        if 0.0 not in angles:
+            raise ValueError("ray_angles_deg must include one forward center ray at 0 degrees")
+        ray_range = float(self.ray_max_range_m)
+        object.__setattr__(self, "ray_max_range_m", ray_range)
+        if not math.isfinite(ray_range) or not 1.0 <= ray_range <= 500.0:
+            raise ValueError("ray_max_range_m must be finite and in [1, 500] metres")
+        lookaheads = tuple(float(value) for value in self.lookahead_distances_m)
+        object.__setattr__(self, "lookahead_distances_m", lookaheads)
+        if not lookaheads or any(not math.isfinite(value) or value <= 0.0 for value in lookaheads):
+            raise ValueError("lookahead_distances_m must contain positive finite values")
+
+    @property
+    def ray_count(self) -> int:
+        return len(self.ray_angles_deg)
+
 
 @dataclass(frozen=True)
 class SimulationConfig:

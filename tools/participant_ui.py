@@ -8,7 +8,9 @@ budget. Bind it to loopback only; the browser is a local presentation layer.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -20,6 +22,10 @@ from threading import Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote, unquote, urlparse
+
+from racing_event.config import SimulationConfig
+from racing_event.observation import TrainingContract
+from racing_event.reward import RewardConfig, SIGNAL_NAMES
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +98,99 @@ def parse_update_line(line: str) -> dict[str, object] | None:
     return values
 
 
+def _atomic_json(path: Path, payload: object) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _finite_float(value: object, name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{name} must be a finite number")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name} must be a finite number") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{name} must be a finite number")
+    return parsed
+
+
+def _parse_ray_angles(value: object, *, default: tuple[float, ...]) -> list[float]:
+    raw_values: object = value
+    if raw_values is None or raw_values == "":
+        raw_values = list(default)
+    if isinstance(raw_values, str):
+        raw_values = [part.strip() for part in raw_values.split(",") if part.strip()]
+    if not isinstance(raw_values, (list, tuple)):
+        raise ValueError("ray_angles_deg must be a comma-separated list or array")
+    return [_finite_float(item, "ray angle") for item in raw_values]
+
+
+def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> RewardConfig | None:
+    submitted = form.get("reward_weights")
+    if submitted is not None:
+        if not isinstance(submitted, dict):
+            raise ValueError("reward_weights must be an object")
+        return RewardConfig(weights=submitted)
+    if reward_path is None:
+        return None
+    return RewardConfig.from_file(reward_path)
+
+
+def _prepare_run_inputs(
+    form: dict[str, object], *, config: Path, output_dir: Path, reward_path: Path | None,
+) -> tuple[Path, Path | None, SimulationConfig, RewardConfig | None]:
+    base_data = json.loads(config.read_text(encoding="utf-8"))
+    if not isinstance(base_data, dict):
+        raise ValueError("config must contain a JSON object")
+    base_config = SimulationConfig.from_file(config)
+    angles = _parse_ray_angles(form.get("ray_angles_deg"), default=base_config.sensors.ray_angles_deg)
+    ray_count_value = form.get("ray_count")
+    if ray_count_value not in (None, ""):
+        if isinstance(ray_count_value, bool):
+            raise ValueError("ray_count must be a positive integer")
+        if isinstance(ray_count_value, int):
+            ray_count = ray_count_value
+        elif isinstance(ray_count_value, str) and ray_count_value.strip().isdigit():
+            ray_count = int(ray_count_value.strip(), 10)
+        else:
+            raise ValueError("ray_count must be a positive integer")
+        if isinstance(ray_count_value, bool) or ray_count != len(angles):
+            raise ValueError("ray_count must equal the number of ray angles")
+    sensors = dict(base_data.get("sensors", {}))
+    sensors["ray_angles_deg"] = angles
+    base_data["sensors"] = sensors
+    output_dir.mkdir(parents=True, exist_ok=True)
+    effective_config_path = output_dir / "run_config.json"
+    _atomic_json(effective_config_path, base_data)
+    effective_config = SimulationConfig.from_file(effective_config_path)
+    reward = _parse_reward_weights(form, reward_path)
+    effective_reward_path: Path | None = None
+    if reward is not None:
+        effective_reward_path = output_dir / "reward_config.json"
+        _atomic_json(effective_reward_path, reward.to_dict())
+    identity = {
+        "identity_version": 1,
+        "config_hash": TrainingContract.config_hash_for(effective_config),
+        "reward_config_hash": None if reward is None else reward.content_hash,
+        "ray_angles_deg": list(effective_config.sensors.ray_angles_deg),
+        "ray_count": effective_config.sensors.ray_count,
+        "observation_size": 10 + effective_config.sensors.ray_count + len(effective_config.sensors.lookahead_distances_m),
+    }
+    _atomic_json(output_dir / "run_identity.json", identity)
+    return effective_config_path, effective_reward_path, effective_config, reward
+
+
 def build_training_command(form: dict[str, object]) -> list[str]:
     def text(name: str, default: str) -> str:
         value = form.get(name, default)
@@ -144,13 +243,16 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     n_envs = positive_int("n_envs", 4)
     rollout_length = positive_int("rollout_length", 64)
     seed = positive_int("seed", 17)
+    effective_config, effective_reward, _, _ = _prepare_run_inputs(
+        form, config=config, output_dir=output_dir, reward_path=reward,
+    )
     reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
     python = _ready_python(require_torch=reference_trainer)
     command = [
         str(python),
         str(ROOT / "tools" / "train_participant.py"),
         "--trainer", str(trainer),
-        "--config", str(config),
+        "--config", str(effective_config),
         "--track-dir", str(track_dir),
         "--output-dir", str(output_dir),
         "--steps", str(steps),
@@ -159,8 +261,8 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
     ]
-    if reward is not None:
-        command[2:2] = ["--reward", str(reward)]
+    if effective_reward is not None:
+        command[2:2] = ["--reward", str(effective_reward)]
     return command
 
 
@@ -309,12 +411,15 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
             "the bundled reference starter must produce policy.pt, policy.json, and "
             "training_contract.json before its replay can be built"
         )
-    python = _ready_python()
+    python = _ready_python(require_torch=True)
     replay_dir = output_dir / "replays"
     replay_dir.mkdir(parents=True, exist_ok=True)
     replay_path = replay_dir / f"{map_id}.json"
     html_path = replay_dir / f"{map_id}.html"
     participant_id = f"SYNAPSE-reference-{map_id}"
+    config_path = output_dir / "run_config.json"
+    if not config_path.exists():
+        config_path = ROOT / "config" / "simulation.json"
     contract_payload = json.loads(contract.read_text(encoding="utf-8"))
     contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
     temporary_contract: Path | None = None
@@ -327,7 +432,7 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
         export_command = [
             str(python), str(ROOT / "tools" / "export_replay.py"),
             "--weights", str(weights), "--metadata", str(metadata), "--contract", str(temporary_contract),
-            "--track", selected["path"], "--config", str(ROOT / "config" / "simulation.json"),
+            "--track", selected["path"], "--config", str(config_path),
             "--participant-id", participant_id, "--output", str(replay_path),
         ]
         build_command = [str(python), str(ROOT / "tools" / "build_replay.py"), str(replay_path), "--output", str(html_path)]
@@ -416,8 +521,12 @@ PAGE = r'''<!doctype html>
     .watch { display: grid; gap: 9px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
     .watch label { color: var(--muted); font-size: 11px; }
     .watch select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0b141e; }
-    .watch-result { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
-    .watch-result a { color: var(--accent); }
+     .watch-result { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+     .watch-result a { color: var(--accent); }
+     .subpanel { grid-column: 1 / -1; padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: #0e1924; }
+     .subpanel h3 { margin-bottom: 10px; }
+     .weight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+     .weight-grid label { font-size: 10px; }
     footer { padding: 0 0 30px; color: var(--muted); font-size: 11px; }
     footer code { color: var(--text); }
     @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } }
@@ -428,14 +537,28 @@ PAGE = r'''<!doctype html>
 <body>
   <main class="shell">
     <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> LOCAL / PYTHON AUTHORITATIVE</div></header>
-    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose your own trainer and reward implementation, start or resume a bounded local run, and watch the metrics that help you understand the agent. SYNAPSE owns the environment boundary; your code owns the model, algorithm, and reward.</p></section>
+    <section class="hero"><div class="eyebrow">SYNAPSE participant workspace / provisional release</div><h1>Train your driver.</h1><p>Choose reward weights and forward-facing rays in the UI, then run your own trainer. SYNAPSE owns the environment boundary; your code owns the model, algorithm, and weights.</p></section>
     <section class="grid">
       <section class="panel">
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
         <div class="section">
           <div class="form-grid">
             <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
-            <label class="full">Your reward input (optional for your script)<input id="reward" value="examples/baseline_reward.json" spellcheck="false"></label>
+            <div class="subpanel"><h3>Reward function · signal weights</h3><div class="weight-grid">
+              <label>Progress<input id="reward-progress" type="number" step="0.01" value="12"></label>
+              <label>Speed<input id="reward-speed" type="number" step="0.01" value="0.5"></label>
+              <label>Curvature speed<input id="reward-curvature_matched_speed" type="number" step="0.01" value="0.25"></label>
+              <label>Off track<input id="reward-off_track" type="number" step="0.01" value="-1.5"></label>
+              <label>Crash<input id="reward-crash" type="number" step="0.01" value="-10"></label>
+              <label>Stuck<input id="reward-stuck" type="number" step="0.01" value="-8"></label>
+              <label>Lap complete<input id="reward-lap_complete" type="number" step="0.01" value="20"></label>
+              <label>Time<input id="reward-time" type="number" step="0.01" value="-0.15"></label>
+              <label>Steer smoothness<input id="reward-steer_smoothness" type="number" step="0.01" value="-0.05"></label>
+            </div></div>
+            <div class="subpanel"><h3>Forward-facing ray sensors</h3><div class="form-grid">
+              <label>Ray count<input id="ray-count" type="number" min="1" max="16" step="1" value="9"></label>
+              <label class="full">Angles in degrees, ordered as observation fields<input id="ray-angles" value="0,-15,15,-30,30,-60,60,-90,90" spellcheck="false"></label>
+            </div><p class="hint">Use 1–16 unique finite angles in [-90, 90], including 0. Order changes the observation contract.</p></div>
             <label>Training maps<input id="track-dir" value="tracks/train" spellcheck="false"></label>
             <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="2048"></label>
@@ -451,10 +574,10 @@ PAGE = r'''<!doctype html>
       <aside class="panel">
         <div class="panel-head"><h2>02 · SYNAPSE contract</h2></div>
         <div class="section contract">
-          <div class="contract-item"><strong>23-value observation</strong><span>Track-relative float32 state. No track ID or absolute progress.</span></div>
+          <div class="contract-item"><strong>Configurable observation</strong><span>10 self-state values + your ordered rays + four curvature lookaheads.</span></div>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
-          <div class="contract-item"><strong>Your model and reward</strong><span>Architecture, algorithm, weights, preprocessing, and reward code belong to your trainer.</span></div>
-          <div class="contract-item"><strong>Raw transition signals</strong><span>SYNAPSE supplies observations, bounded actions, raw signals, termination, and track identity.</span></div>
+          <div class="contract-item"><strong>UI reward function</strong><span>All nine published signals are editable as static weights; the generated file is saved with the run.</span></div>
+          <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
           <div class="watch"><label for="watch-map">Watch reference artifact for map:</label><select id="watch-map"><option>Loading SYNAPSE maps…</option></select><button id="watch">Build / watch reference replay</button><div id="watch-result" class="watch-result">The bundled starter can build a deterministic replay from its reference artifact. A generic participant artifact exporter is a separate event boundary.</div></div>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
@@ -474,9 +597,10 @@ PAGE = r'''<!doctype html>
   </main>
   <script>
     const $ = id => document.getElementById(id);
-    const fields = ["trainer", "reward", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed"];
+    const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
+    const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
     const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
-    function formData() { return { trainer: $("trainer").value, reward: $("reward").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value }; }
+    function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
     function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
     function render(data) {
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);

@@ -10,6 +10,8 @@ import tempfile
 import os
 
 from racing_event.track import TrackGeometry
+from racing_event.config import SimulationConfig
+from racing_event.observation import TrainingContract, build_observation_schema
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,10 +45,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tracks-dir", type=Path, default=ROOT / "tracks" / "train")
     parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--release-id", default="synapse-local-participant-prototype")
+    parser.add_argument("--config", type=Path, default=ROOT / "config" / "simulation.json")
     return parser.parse_args()
 
 
-def build_manifest(tracks_dir: Path, release_id: str) -> dict:
+def build_manifest(tracks_dir: Path, release_id: str, config_path: Path | None = None) -> dict:
     paths = sorted(path for path in tracks_dir.glob("*.json") if path.name != "manifest.json")
     if not paths:
         raise ValueError("no training track JSON files found")
@@ -64,18 +67,29 @@ def build_manifest(tracks_dir: Path, release_id: str) -> dict:
             "validator": "TrackGeometry.validate",
             "source_note": track.meta.get("source_note", ""),
         })
+    environment: dict[str, object] = {}
+    if config_path is not None:
+        config = SimulationConfig.from_file(config_path)
+        schema = build_observation_schema(config)
+        environment = {
+            "config_hash": TrainingContract.config_hash_for(config),
+            "observation_size": schema.size,
+            "ray_angles_deg": list(config.sensors.ray_angles_deg),
+            "ray_count": config.sensors.ray_count,
+        }
     return {
         "manifest_version": "1",
         "release_id": release_id,
         "split": "train",
         "private_tracks_included": False,
+        "environment": environment,
         "maps": maps,
     }
 
 
 def main() -> None:
     args = parse_args()
-    manifest = build_manifest(args.tracks_dir, args.release_id)
+    manifest = build_manifest(args.tracks_dir, args.release_id, args.config)
     output = args.output or args.tracks_dir.parent / "train_manifest.json"
     _atomic_write(output, manifest)
     print(f"validated {len(manifest['maps'])} public training maps")

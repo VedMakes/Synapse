@@ -40,9 +40,9 @@ These are provisional implementation decisions based on the handoff and the late
 ## Participant training launcher
 
 The first minimal participant-facing workflow is a bounded local launcher. It
-does not construct a model or reward function; it runs the participant trainer
-you select. It is a delivery prototype, not a frozen event launcher or final
-budget rule:
+does not construct a model; it runs the participant trainer you select. The
+dashboard owns the static nine-signal reward-weight file and sensor-ray layout.
+It is a delivery prototype, not a frozen event launcher or final budget rule:
 
 First prepare the project environment. This keeps the SYNAPSE environment
 dependencies inside `.venv`:
@@ -67,7 +67,9 @@ The launcher forwards the published environment inputs to the trainer script
 you select. A trainer entrypoint must accept the forwarded options
 `--track-dir`, `--config`, `--output-dir`, `--steps`, `--budget-steps`,
 `--n-envs`, `--rollout-length`, and `--seed`; `--reward` is forwarded only
-when supplied. `examples/participant_train.py` is only a runnable reference
+when supplied. The UI writes `run_config.json`, `reward_config.json`, and
+`run_identity.json` into the output directory without mutating the repository
+defaults. `examples/participant_train.py` is only a runnable reference
 starter; replace it with your own script to choose the model, algorithm,
 preprocessing, weights, and reward implementation. Run the same command again
 with the same output directory if your trainer supports resuming.
@@ -88,7 +90,8 @@ For a simple browser dashboard around the same CLI, run:
 Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
 library, binds to loopback, launches the participant-owned trainer through the
 launcher, and polls its bounded progress output. It does not implement a
-second model, reward function, environment, or budget. The bundled starter can
+second model, environment, or budget. The reward editor and ray controls are
+input/configuration UI, not a second simulation authority. The bundled starter can
 also produce a reference replay for one public map; generic participant
 artifact replay is a separate submission boundary.
 
@@ -122,7 +125,7 @@ make test
 ## Batched engine and contract
 
 `VectorizedRacingEnv` accepts an `(n_envs, 2)` action array and returns a
-fixed-size float32 observation for each environment, raw signals, events, and
+float32 observation whose size is `10 + ray_count + lookahead_count`, raw signals, events, and
 termination/truncation flags through `step_raw`. The legacy `step` method also
 returns reference weighted rewards for compatibility. The physics transition
 is batched with NumPy while track geometry remains the shared Python authority. Use

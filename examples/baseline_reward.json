@@ -1,4 +1,5 @@
 {
+  "schema_version": 1,
   "weights": {
     "progress": 12.0,
     "speed": 0.5,

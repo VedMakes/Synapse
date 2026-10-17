@@ -9,6 +9,7 @@ rollout collector.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import hashlib
 import json
 from pathlib import Path
 from typing import Mapping, Protocol
@@ -27,6 +28,8 @@ SIGNAL_NAMES = (
     "time",
     "steer_smoothness",
 )
+REWARD_SCHEMA_VERSION = 1
+REWARD_WEIGHT_LIMIT = 100.0
 
 
 class RewardFunction(Protocol):
@@ -119,30 +122,54 @@ class RewardConfig:
     })
 
     def __post_init__(self) -> None:
+        if not isinstance(self.weights, Mapping):
+            raise ValueError("weights must be a mapping")
         unknown = set(self.weights) - set(SIGNAL_NAMES)
         if unknown:
             raise ValueError(f"unknown reward signals: {sorted(unknown)}")
         normalized = {}
         for name in SIGNAL_NAMES:
+            if isinstance(self.weights.get(name, 0.0), bool):
+                raise ValueError(f"weight for {name!r} must be numeric, not bool")
             try:
                 value = float(self.weights.get(name, 0.0))
             except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError(f"weight for {name!r} must be finite") from exc
             if not np.isfinite(value):
                 raise ValueError(f"weight for {name!r} must be finite")
+            if abs(value) > REWARD_WEIGHT_LIMIT:
+                raise ValueError(f"weight for {name!r} must be within +/-{REWARD_WEIGHT_LIMIT:g}")
             normalized[name] = value
         object.__setattr__(self, "weights", normalized)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "RewardConfig":
         data = json.loads(Path(path).read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError("reward config must be a JSON object")
+        if isinstance(data, dict) and "schema_version" in data and data["schema_version"] != REWARD_SCHEMA_VERSION:
+            raise ValueError(f"unsupported reward config schema: {data['schema_version']!r}")
         weights = data.get("weights", data)
         if not isinstance(weights, dict):
             raise ValueError("reward config must contain a weights object")
         return cls(weights=weights)
 
+    def to_dict(self) -> dict[str, object]:
+        return {"schema_version": REWARD_SCHEMA_VERSION, "weights": dict(self.weights)}
+
+    @property
+    def content_hash(self) -> str:
+        encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def save(self, path: str | Path) -> None:
+        Path(path).write_text(json.dumps(self.to_dict(), indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8")
+
     def calculate(self, signals: Mapping[str, float]) -> float:
         missing = set(SIGNAL_NAMES) - set(signals)
         if missing:
             raise ValueError(f"missing reward signals: {sorted(missing)}")
-        return float(sum(self.weights[name] * float(signals[name]) for name in SIGNAL_NAMES))
+        result = float(sum(self.weights[name] * float(signals[name]) for name in SIGNAL_NAMES))
+        if not np.isfinite(result):
+            raise ValueError("weighted reward must be finite")
+        return result

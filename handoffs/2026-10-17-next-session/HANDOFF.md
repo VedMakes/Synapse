@@ -1,4 +1,4 @@
-# Next-session handoff
+# Next-session handoff / updated after UI-ray implementation
 
 ## User priority
 
@@ -12,9 +12,20 @@
 
 ## Current state
 
-- Last committed baseline: `f91d80a test: harden participant workflow from QA`.
-- Working tree now contains uncommitted major-gap work. Preserve it; inspect
-  `git diff` before changing it.
+The two requested participant controls are now implemented in the working tree:
+
+- UI edits all nine static reward signal weights, validates them to `[-100,100]`,
+  writes `reward_config.json`, and records a canonical reward hash.
+- UI edits ray count plus ordered angles. Limits: 1–16 unique finite angles,
+  `[-90,90]` degrees, and required center ray `0`. Ray order is preserved and
+  is part of the observation/config identity.
+- UI writes `run_config.json` and `run_identity.json` beside the run.
+- Observation contracts and public training manifest now expose ray metadata.
+- Scalar/vector custom-ray parity and UI/reward regression tests exist.
+
+- Last committed baseline before this slice: `c82c3a2 feat: start generic participant evaluation boundary`.
+- This slice is currently uncommitted; preserve unrelated dirty `.gitignore`,
+  Unity, `participant_run/`, and `ui-run/` changes.
 - New/changed major-gap files include:
   - `racing_event/model_artifact.py`: safe declarative NumPy MLP artifact loader.
   - `tools/evaluate_participant.py`: generic artifact evaluator CLI.
@@ -32,25 +43,19 @@
 
 - Before the latest uncommitted changes: `make test` passed 94 Python tests;
   Node replay suite passed 65 tests.
-- After artifact/process-group changes: targeted model-artifact, trajectory,
-  participant-training, and UI tests passed in separate runs.
-- The final recovery test command was aborted by the user:
-  `tests.test_participant_training.ParticipantTrainingTests.test_reference_checkpoint_recovers_after_policy_publish_failure`.
-- Do **not** claim the full suite or the new recovery test passed until rerun.
+- Current verification: `make test` passed **106 Python tests**; direct Node
+  replay suite passed **65 tests**; Python compilation, JS syntax, and targeted
+  UI smoke passed. Docker was not run because Docker is unavailable.
 
 ## First next steps
 
-1. Run `git diff --check` and Python compilation.
-2. Run the aborted recovery test, then `make test` and the Node suite.
-3. Exercise the generic artifact CLI with a tiny 23→2 MLP and one public map.
-4. Review/fix any regressions in existing reference replay/UI behavior.
-5. Implement the reward-weight editor in `tools/participant_ui.py`; keep
-   `examples/baseline_reward.json` as the serialized interchange format.
-6. Add UI/config controls for ray count and forward angles. Update
-   `config/simulation.json`, `SimulationConfig`, observation schema/contract,
-   training manifest/hash logic, and participant docs together.
-7. Add focused tests for reward editor persistence, ray bounds/order,
-   observation-size changes, contract mismatch, and bounded memory.
+1. Inspect/stage only intended changes; do not stage dirty Unity or `.gitignore` edits.
+2. Run one longer UI/API smoke and inspect `participant_run/ui-rays-smoke`.
+3. Review docs for contradictory “fixed 23-value” or “reward script required” language.
+4. Decide whether ray order should remain participant-specified (current behavior)
+   or be canonical sorted order; changing it is a contract decision.
+5. Finish/commit this slice, then address final ONNX/private evaluator and
+   organizer-grade resource enforcement only after decisions/assets exist.
 
 ## Important design constraints
 
@@ -58,8 +63,9 @@
   only the first safe generic artifact format, not the final ONNX contract.
 - Participant reward code must not run in organizer evaluation. The requested
   UI reward editor should produce static weights over the published signal set.
-- Ray angles should be forward-facing, deterministic, sorted, finite, and
-  bounded in count. Never allow an unbounded list from the UI.
+- Ray angles are forward-facing, deterministic, finite, unique, and bounded;
+  current implementation preserves participant order because order is part of
+  the observation contract. Never allow an unbounded list from the UI.
 - Keep `racing_event` internal compatibility identifiers unless a contract
   migration is explicit.
 - Local custom-trainer budget enforcement remains cooperative; organizer-grade

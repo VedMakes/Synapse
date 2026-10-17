@@ -37,6 +37,7 @@ _MANIFEST_KEYS = {
     "training_contract_sha256",
 }
 _OBSERVATION_KEYS = {"schema_version", "size", "dtype"}
+_OBSERVATION_OPTIONAL_KEYS = {"ray_angles_deg", "ray_count"}
 _ACTION_KEYS = {"schema_version", "size", "dtype", "bounds", "output_activation"}
 _PREPROCESSING_KEYS = {"kind", "mean", "scale", "clip"}
 _LAYER_KEYS = {"name", "weights", "bias", "activation"}
@@ -164,6 +165,15 @@ def _load_json(path: Path) -> dict[str, Any]:
 def _strict_keys(value: dict[str, Any], expected: set[str], name: str) -> None:
     unknown = set(value) - expected
     missing = expected - set(value)
+    if unknown:
+        raise ValueError(f"artifact.{name} has unknown fields: {sorted(unknown)}")
+    if missing:
+        raise ValueError(f"artifact.{name} is missing fields: {sorted(missing)}")
+
+
+def _required_keys(value: dict[str, Any], required: set[str], allowed: set[str], name: str) -> None:
+    unknown = set(value) - allowed
+    missing = required - set(value)
     if unknown:
         raise ValueError(f"artifact.{name} has unknown fields: {sorted(unknown)}")
     if missing:
@@ -349,7 +359,7 @@ def load_participant_artifact(
     observation = manifest["observation"]
     if not isinstance(observation, dict):
         raise ValueError("artifact.observation must be an object")
-    _strict_keys(observation, _OBSERVATION_KEYS, "observation")
+    _required_keys(observation, _OBSERVATION_KEYS, _OBSERVATION_KEYS | _OBSERVATION_OPTIONAL_KEYS, "observation")
     if observation["schema_version"] != "1.0" or observation["dtype"] != "float32":
         raise ValueError("artifact.contract: unsupported observation schema")
     if type(observation["size"]) is not int or observation["size"] <= 0:
@@ -367,6 +377,10 @@ def load_participant_artifact(
     contract, normalizer = TrainingContract.load(files["training_contract.json"])
     if contract.observation.size != observation["size"] or contract.observation.version != observation["schema_version"]:
         raise ValueError("artifact.contract: manifest and training contract disagree")
+    if "ray_angles_deg" in observation and tuple(float(value) for value in observation["ray_angles_deg"]) != contract.observation.ray_angles_deg:
+        raise ValueError("artifact.contract: manifest and training contract ray angles disagree")
+    if "ray_count" in observation and observation["ray_count"] != len(contract.observation.ray_angles_deg):
+        raise ValueError("artifact.contract: manifest ray count is inconsistent")
     if not contract.track_ids or len(contract.track_ids) != len(contract.track_hashes):
         raise ValueError("artifact.contract: training track IDs and hashes must be paired")
     if len(contract.track_hashes) != len(set(contract.track_hashes)):

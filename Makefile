@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: test e1 e2 participant-setup participant-maps participant-smoke participant-ui
+.PHONY: test e1 e2 participant-setup participant-maps participant-smoke participant-ui evaluate-participant
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -22,3 +22,6 @@ participant-smoke:
 
 participant-ui:
 	$(PYTHON) tools/participant_ui.py
+
+evaluate-participant:
+	$(PYTHON) tools/evaluate_participant.py --artifact-dir submission --track tracks/train/synthetic_oval.json --config config/simulation.json --repeats 2

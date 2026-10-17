@@ -252,6 +252,9 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "track_hashes": [track.content_hash for track in tracks],
         "config_hash": TrainingContract.config_hash_for(config),
         "reward_sha256": _sha256(args.reward),
+        "reward_config_hash": reward.content_hash,
+        "ray_angles_deg": list(config.sensors.ray_angles_deg),
+        "observation_size": env.observation_size,
         "hidden_sizes": [64, 64],
         "n_envs": args.n_envs,
         "rollout_length": args.rollout_length,
@@ -260,7 +263,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     }
     if state_path.exists():
         saved_state = json.loads(state_path.read_text(encoding="utf-8"))
-        for name in ("track_ids", "track_hashes", "config_hash", "reward_sha256", "budget_steps", "n_envs", "rollout_length"):
+        for name in (
+            "track_ids", "track_hashes", "config_hash", "reward_sha256", "budget_steps",
+            "n_envs", "rollout_length", "reward_config_hash", "ray_angles_deg", "observation_size",
+        ):
+            if name not in saved_state and name in {"reward_config_hash", "ray_angles_deg", "observation_size"}:
+                continue
             if saved_state.get(name) != state[name]:
                 raise ValueError(f"saved training state does not match {name}")
         state["updates"] = int(saved_state.get("updates", 0))
