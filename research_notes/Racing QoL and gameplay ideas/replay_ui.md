@@ -448,3 +448,16 @@ offline operation.
   and [repository](https://github.com/apache/arrow) — Apache-2.0; columnar,
   chunked, random-access/zero-copy format evidence for a future large-replay
   milestone. [License and notices](https://github.com/apache/arrow/blob/main/LICENSE.txt).
+
+## 2026-10-19 implementation update
+
+The active target is now Pygame (the Unity references above are historical).
+Single-replay Pygame has cached geometry/path drawing, visible mouse controls,
+scrubbing, exact-tick keys, recorded-event markers/jumps, keyboard help,
+resizable reserved regions and clear current/final outcome text. The dashboard
+can export either a reference or safe participant artifact and exposes both
+browser fallback and JSON-download links. Actual Chromium flow/layout QA now
+exists in `tools/check_ui_browser.py`; screenshots caught and corrected clipped
+axial SVG rays and an incorrectly oriented preview range arc. Read the latest
+handoff for evidence. Replay schema 1.1 is unchanged; follow-car cameras,
+telemetry plots, versioned replay groups and multi-ghost work remain deferred.

@@ -1966,3 +1966,37 @@ outputs and should not be treated as final competition submissions.
    checkpoint selection, and persisted per-track evaluation metrics.
 4. Define the final model submission/runtime boundary before implementing
    competition isolation and head-to-head scoring.
+
+## 2026-10-19 continuation: local participant UI and engine audit completion
+
+The authoritative latest session state is now the final section of
+`handoffs/2026-10-17-next-session/HANDOFF.md`. Read it before older next-step
+lists. Pygame remains active; Unity remains retired.
+
+- Dashboard watch now explicitly selects reference or safe NumPy artifact and
+  Pygame or browser. It exposes validated playback/download links, preserves
+  generic artifact contracts, reports headless rendering honestly, and protects
+  local start/stop/setup actions with host/origin checks. UI errors are inline,
+  active-run inputs are locked, and duplicate/process-stop races are covered.
+- Pygame has visible controls, draggable timeline/event jumps, exact-tick keys,
+  separate current/final result text, cached geometry and resizable layout.
+  Screenshot QA corrected invisible SVG axial rays and a backward range arc.
+- Evaluation now reports bounded physical diagnostics and sector crossing ticks
+  without changing simulation, replay schema 1.1 or trajectory hashes. Reference
+  model initialization is now properly seeded before construction.
+- Real Chromium QA is available through `tools/check_ui_browser.py` and the
+  optional pinned QA lockfile/Docker target. Browser flow and 390/800/1440px
+  screenshots passed; real-display Pygame and Docker builds were not run.
+- Final checks: `make test` **159 passed**; direct Node suites **72 passed**;
+  compilation, `make render`, standalone CLI/HTTP, and repeated clean imitation
+  laps on all three development tracks passed. No held-out claim is made.
+
+Code commits: `99a7287`, `aed14b2`, `63e9b46`. Existing staged `.gitignore`,
+`participant_run/`, and `ui-run/` changes were preserved and excluded. The
+dashboard was started at `http://127.0.0.1:8766/`; restart using
+`.venv/bin/python tools/participant_ui.py` if it is no longer running.
+
+Next engineering work is reference-only fine-tuning/checkpoint selection and
+coherent checkpoint recovery, then a separately versioned replay-group view.
+Final ONNX/runtime, organizer enforcement, event rules/maps and clean offline
+release rehearsal are still release blockers, not silently finalized choices.
