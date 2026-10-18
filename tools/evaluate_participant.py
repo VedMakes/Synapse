@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 import sys
@@ -12,7 +13,8 @@ if __package__ in (None, ""):
 
 from racing_event.config import SimulationConfig
 from racing_event.evaluation import evaluate_participant_artifact
-from racing_event.model_artifact import load_participant_artifact
+from racing_event.isolated_policy import IsolatedPolicy
+from racing_event.submission import load_submission
 from racing_event.track import TrackGeometry
 from racing_event.trajectory import engine_code_hash
 from racing_event.vector_env import VectorizedRacingEnv
@@ -23,7 +25,18 @@ def evaluate(args: argparse.Namespace) -> dict[str, object]:
         raise ValueError("repeats must be positive")
     if not args.tracks:
         raise ValueError("at least one --track is required")
-    artifact = load_participant_artifact(args.artifact_dir)
+    isolated = getattr(args, "isolate", False)
+    context = (
+        IsolatedPolicy(
+            args.artifact_dir, image=args.worker_image, memory_mb=args.worker_memory_mb,
+            startup_timeout=args.startup_timeout, action_timeout=args.action_timeout,
+        ) if isolated else nullcontext(load_submission(args.artifact_dir))
+    )
+    with context as artifact:
+        return _evaluate(args, artifact, isolated=isolated)
+
+
+def _evaluate(args: argparse.Namespace, artifact, *, isolated: bool) -> dict[str, object]:
     config = SimulationConfig.from_file(args.config)
     results: list[dict[str, object]] = []
     for track_path in args.tracks:
@@ -56,6 +69,11 @@ def evaluate(args: argparse.Namespace) -> dict[str, object]:
         "observation_size": artifact.observation_size,
         "ray_angles_deg": list(artifact.contract.observation.ray_angles_deg),
         "deterministic": True,
+        "inference": ({
+            "mode": "isolated_docker", "image": args.worker_image,
+            "memory_mb": args.worker_memory_mb, "cpus": 1,
+            "startup_timeout_s": args.startup_timeout, "action_timeout_s": args.action_timeout,
+        } if isolated else {"mode": "trusted_local_preview"}),
         "tracks": results,
     }
 
@@ -68,6 +86,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=2)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--output", type=Path, default=None)
+    parser.add_argument("--isolate", action="store_true", help="required for untrusted submissions; run a model-only Docker worker")
+    parser.add_argument("--worker-image", default="synapse-evaluator:v1", help="already-built organizer-controlled image; prefer an immutable digest")
+    parser.add_argument("--worker-memory-mb", type=int, default=512)
+    parser.add_argument("--startup-timeout", type=float, default=30)
+    parser.add_argument("--action-timeout", type=float, default=2)
     return parser.parse_args()
 
 
@@ -75,7 +98,7 @@ def main() -> None:
     args = parse_args()
     try:
         report = evaluate(args)
-    except (OSError, ValueError, RuntimeError) as exc:
+    except (OSError, ValueError, RuntimeError, ImportError) as exc:
         raise SystemExit(f"participant evaluation failed: {exc}") from exc
     serialized = json.dumps(report, sort_keys=True, indent=2, allow_nan=False) + "\n"
     if args.output is None:

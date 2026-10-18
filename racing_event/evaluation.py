@@ -119,9 +119,11 @@ def evaluate_participant_artifact(
     """Evaluate a validated model artifact without executing participant code."""
 
     from .model_artifact import ParticipantModelArtifact
+    from .onnx_artifact import OnnxPolicyArtifact
+    from .isolated_policy import IsolatedPolicy
 
-    if not isinstance(artifact, ParticipantModelArtifact):
-        raise TypeError("artifact must be a ParticipantModelArtifact")
+    if not isinstance(artifact, (ParticipantModelArtifact, OnnxPolicyArtifact, IsolatedPolicy)):
+        raise TypeError("artifact must be a validated participant model artifact")
     if env.reward_config is not None:
         raise ValueError("participant artifact evaluation requires an environment with reward=None")
     if artifact.manifest["environment_code_hash"] != engine_code_hash():

@@ -15,7 +15,7 @@ import numpy as np
 
 from racing_event.config import SimulationConfig
 from racing_event.evaluation import evaluate_participant_artifact, evaluate_policy, validate_evaluation_contract
-from racing_event.model_artifact import load_participant_artifact
+from racing_event.submission import load_submission
 from racing_event.observation import TrainingContract
 from racing_event.track import TrackGeometry
 from racing_event.trajectory import ReplayWriter, replay_header, replay_result
@@ -49,7 +49,7 @@ def export(args: argparse.Namespace) -> dict:
     mode = "scripted" if args.weights is None and artifact_dir is None else "evaluation"
     artifact = None
     if artifact_dir is not None:
-        artifact = load_participant_artifact(artifact_dir)
+        artifact = load_submission(artifact_dir)
     elif args.weights is None:
         if args.contract is not None or args.metadata is not None:
             raise ValueError("--contract and --metadata require --weights")
@@ -65,7 +65,13 @@ def export(args: argparse.Namespace) -> dict:
         if args.contract is None:
             raise ValueError("--weights requires --contract with saved normalizer")
         contract, normalizer = TrainingContract.load(args.contract)
-        validate_evaluation_contract(env, contract, normalizer)
+        if normalizer is not None:
+            # Trusted reference checkpoints retain resumable training state.
+            # Freeze only this loaded evaluation copy, never rewrite statistics.
+            normalizer.freeze()
+        # Evaluation may use one public or held-out track from a multi-track
+        # training contract; preserve strict physics/observation checks.
+        validate_evaluation_contract(env, contract, normalizer, require_track_match=False)
         model, _ = FixedMLPActorCritic.load_artifact(
             args.weights, args.metadata, expected_observation_size=env.observation_size,
         )

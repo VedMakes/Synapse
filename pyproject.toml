@@ -13,6 +13,9 @@ dependencies = [
   "torch>=2.7,<2.8",
 ]
 
+[project.optional-dependencies]
+submission = ["onnx==1.17.0", "onnxruntime==1.20.1"]
+
 [tool.setuptools.packages.find]
 include = ["racing_event*"]
 

@@ -37,4 +37,16 @@ RUN python -m pip install --no-cache-dir --requirement requirements-ui-qa.lock \
     && python -m playwright install chromium --only-shell
 CMD ["python", "tools/check_ui_browser.py"]
 
+# Deliberately independent of runtime: no COPY . layer, tracks, configs, runs,
+# reports, reward callbacks or organizer inputs ever enter this worker image.
+FROM python:3.11-slim AS evaluator
+WORKDIR /app
+COPY requirements-evaluator.lock /app/requirements-evaluator.lock
+RUN python -m pip install --no-cache-dir --requirement requirements-evaluator.lock
+COPY racing_event/*.py /app/racing_event/
+COPY tools/inference_worker.py /app/tools/inference_worker.py
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+USER 65534:65534
+CMD ["python", "tools/inference_worker.py", "--artifact-dir", "/model"]
+
 FROM runtime AS participant

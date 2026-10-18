@@ -245,6 +245,36 @@ class ReplayTests(unittest.TestCase):
             args.output = artifact_dir / "inside.json"
             export(args)
 
+    def test_reference_multitrack_contract_exports_one_track_without_rewriting(self) -> None:
+        from racing_event.ppo import FixedMLPActorCritic
+        from racing_event.observation import RunningObservationNormalizer
+        source = Path(self.tmp.name) / "reference"
+        source.mkdir()
+        policy = FixedMLPActorCritic(23)
+        policy.save_artifact(source / "policy.pt")
+        flowing = TrackGeometry.from_file(ROOT / "tracks/train/synthetic_flowing.json")
+        contract = TrainingContract.for_config(CONFIG, track_ids=(TRACK.track_id, flowing.track_id),
+                                             track_hashes=(TRACK.content_hash, flowing.content_hash))
+        normalizer = RunningObservationNormalizer(23)
+        normalizer.freeze()
+        contract.save(source / "training_contract.json", normalizer=normalizer)
+        before = (source / "training_contract.json").read_bytes()
+        args = argparse.Namespace(
+            track=ROOT / "tracks/train/synthetic_oval.json", config=ROOT / "config/simulation.json",
+            weights=source / "policy.pt", metadata=source / "policy.json", contract=source / "training_contract.json",
+            participant_id="multi-reference", steps=3, output=self.path,
+        )
+        export(args)
+        self.assertEqual(load_replay(self.path)["result"]["steps"], 3)
+        self.assertEqual((source / "training_contract.json").read_bytes(), before)
+        payload = json.loads(args.config.read_text())
+        payload["tick_hz"] = 60
+        changed_path = source / "changed-config.json"
+        changed_path.write_text(json.dumps(payload))
+        args.config = changed_path
+        with self.assertRaisesRegex(ValueError, "config hash"):
+            export(args)
+
     def test_real_stuck_replay_preserves_engine_outcome(self) -> None:
         config = replace(CONFIG, episode=replace(CONFIG.episode, stuck_steps=2))
         header = replay_header(TRACK, config, mode="evaluation", participant_id="stuck")
