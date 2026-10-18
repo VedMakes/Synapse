@@ -2000,3 +2000,29 @@ Next engineering work is reference-only fine-tuning/checkpoint selection and
 coherent checkpoint recovery, then a separately versioned replay-group view.
 Final ONNX/runtime, organizer enforcement, event rules/maps and clean offline
 release rehearsal are still release blockers, not silently finalized choices.
+
+## 2026-10-19 continuation: checkpoint, replay groups, and ONNX candidate
+
+The final continuation in `handoffs/2026-10-17-next-session/HANDOFF.md` now
+supersedes the engineering next-step list above. Commits `1a584de`, `91d985f`,
+`a0b233a`, and `d1aa762` add exact reference-generation resume, bounded optional
+fine-tuning/public-development best selection, separate replay-group v1.0 with
+1–4 ghosts, static-vector ONNX validation/CPU inference, and a model-only Docker
+worker/controller candidate. Multi-track best artifacts now export directly;
+dashboard replay preserves training provenance and freezes normalization only
+in its loaded evaluation copy. Participant ownership and Python authority remain.
+
+Final standalone checks: **246 Python tests run, 245 passed, 1 Docker-only skip**;
+**72 JS tests passed**; real Chromium training/replay/responsive screenshots,
+compilation, `make render`, real 35-transition full-versus-split fine-tuning,
+three-map repeated ONNX laps, and best-artifact replay passed. Pygame screenshot
+review covers 48 images; real-display QA remains separate. Read
+`reports/pygame_review_2026-10-19.md`, `reports/release_readiness_2026-10-19.md`,
+and `docs/submission_runtime.md` for evidence, exact commands and limitations.
+
+Docker CLI/socket are still unavailable here despite host installation; the
+user chose to expose host Docker. Container builds, real isolation, digest/layer
+freeze, outer organizer supervision, policy/maps/rights decisions and clean
+offline release rehearsal remain open. No untrusted or held-out evaluation is
+claimed. Existing staged `.gitignore`, `participant_run/`, and `ui-run/` work is
+preserved and excluded from these feature commits.

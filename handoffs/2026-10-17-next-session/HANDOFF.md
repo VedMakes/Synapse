@@ -274,3 +274,110 @@ Research used: `research_notes/Racing QoL and gameplay ideas/replay_ui.md`,
 `research_notes/Track sourcing and racing physics/racing_rl_controls.md`.
 Followed the notes' safe-now presentation/audit recommendations; did not adopt
 experiment-gated wall penalties, respawn changes, or new actuator/tick settings.
+
+## 2026-10-19 continuation: resume, comparison, and submission candidate
+
+This section supersedes the preceding remaining-engineering list. User asked
+to close the open items, verify Docker after host installation, and review
+Pygame screenshots. A parallel launch was interrupted; the user requested a
+retry. The retry completed with two bounded agents (worker tests and
+training/docs verification); both results were integrated, with no agents left
+running. Preserve unrelated staged `.gitignore`, `participant_run/`, `ui-run/`.
+
+### Implemented and committed
+
+- `1a584de feat: persist exact reference resume and fine-tune selection`:
+  `racing_event/reference_checkpoint.py`, runner and tests implement immutable
+  generations/atomic pointer, optimizer/normalizer/RNG/collector/environment
+  persistence, writer locking and fail-closed source/runtime identity. External
+  budget is never restored. Spent-but-uncommitted work refuses exact recovery.
+  Legacy artifacts require explicit non-exact warm-start in a new directory.
+- Optional reference `--fine-tune --warm-start <trusted source>` preserves
+  source preprocessing; no normalizer is fitted around imitation. Public-track
+  best selection uses finish count, then less off-track duration, then less
+  finished-lap time, strictly improving only. This is NOT event ranking.
+- `91d985f feat: compare bounded replay groups in pygame`: separate group v1.0,
+  1–4 ghosts, matching engine/config/track/standing tick zero, safe relative
+  files/hash/size checks, exact selected telemetry/events, visibility/path
+  toggles and explicit final holds. Single-car 1.1 is unchanged. See
+  `reports/pygame_review_2026-10-19.md` (48 reviewed images).
+- `a0b233a feat: add bounded onnx submission and isolated worker candidate`:
+  `onnx_artifact.py`, `submission.py`, `isolated_policy.py`, exporter, JSONL
+  worker, optional lock, Docker evaluator target and tests. Profile supports
+  static dense/residual float32/float64 DAGs, opset 17, CPU ORT 1.20.1, embedded
+  preprocessing and bounded resources. Full contract: `docs/submission_runtime.md`.
+  The evaluator image starts separately, never from the full source-copy runtime
+  stage. Only frozen model files mount into it; private track data stays host-side.
+- `d1aa762 fix: preserve reference provenance through dashboard replay`:
+  direct multi-track reference export, freeze only the loaded evaluation
+  normalizer copy, no temporary track-contract rewriting. Browser QA reports
+  inline watch failure immediately instead of hanging for a missing link.
+- `docs/participant_guide.md`, README/state/first-slice docs and the delivery
+  audit now distinguish implemented candidates, actual evidence and final gates.
+  `reports/release_readiness_2026-10-19.md` is the consolidated readiness report.
+
+### Actual checks
+
+- **Tests passed:** standalone `make test`, 246 run / **245 passed / 1 skipped**
+  (real Docker opt-in), 179.936 s. Optional ONNX tests ran. Log:
+  `artifacts/release-checks-2026-10-19/final-tests.log`.
+- **JS passed:** `node --test tests/participant_dashboard.test.cjs
+  tests/replay_frontend.test.cjs`, 72 passed.
+- **Syntax passed:** `.venv/bin/python -m compileall -q racing_event tools tests`
+  and `node --check racing_event/assets/replay.js`. **Lint/typecheck:** not
+  separately configured/run. `.venv/bin/python -m pip check` passed.
+- **Smoke passed:** `make render`; real Chromium flow using the local QA library
+  environment above, eight transitions, replay and 390/800/1440px, no JS errors.
+- **Real training evidence:** 35 transitions versus split 16 + 19 were exact
+  for policy/optimizer/RNG/collector/environment/contract/non-timing metrics;
+  best update 1 retained through later regressions. Genuine interruption left
+  32 spent / 16 committed and refused recovery without refund. Evidence:
+  `artifacts/participant-guide-checkpoint-smoke-20261019/results.json`.
+  Smoke source identities predate the final evaluator integration; use a new
+  run for more training, not a bypass of deliberate runtime/source checks.
+- **Replay fix confirmed:** that retained `best/` now exports a complete oval,
+  862 ticks / 28.733 s, zero off-track steps. Reviewed replay/screenshot:
+  `artifacts/release-checks-2026-10-19/best-oval.json` / `best-oval.png`.
+- **ONNX passed locally:** retained imitation export evaluated twice on every
+  development map: flowing 834 / 27.800 s, oval 863 / 28.767 s, tight loop
+  727 / 24.233 s, zero off-track steps and matching repeated trajectory hashes.
+  Report: `artifacts/release-checks-2026-10-19/onnx-evaluation.json`.
+- **Maps passed:** `tools/build_training_manifest.py --output
+  artifacts/release-checks-2026-10-19/train_manifest.json` validated three original
+  synthetic fixtures. Default manifest location is `tracks/train_manifest.json`.
+- **Useful failed attempt:** parallel heavy checks exceeded HTTP-test timeouts;
+  fresh-reference replay also exposed the normalizer freeze regression and an
+  error-label mismatch. Both code regressions were fixed and focused cases,
+  then standalone Chromium/full-suite reruns passed. Failed first log retained
+  as `full-tests.log`; do not claim it passed.
+
+### Blockers and next exact action
+
+**Docker is still absent in this session:** `docker version` returns command
+not found; no accessible socket was observed. User chose **Expose host Docker**,
+not a nested daemon. Once CLI and daemon are visible with the checkout shared
+at the same path, run:
+
+```bash
+docker build --target participant -t synapse-participant:v1 .
+docker run --rm synapse-participant:v1
+docker build --target ui-qa -t synapse-ui-qa .
+docker run --rm synapse-ui-qa
+docker build --target evaluator -t synapse-evaluator:v1 .
+SYNAPSE_TEST_DOCKER=1 SYNAPSE_TEST_DOCKER_IMAGE=synapse-evaluator:v1 \
+  .venv/bin/python -m unittest tests.test_isolated_policy -v
+```
+
+Those builds, real cgroup/security restriction checks, layer inspection and
+actual container inference are **not verified**. Protocol tests use real local
+subprocesses with the Docker launch boundary patched; they are not sandbox proof.
+Do not accept untrusted submissions yet. Add/rehearse an outer organizer job
+supervisor and freeze image/base digests before scoring use.
+
+OPEN policy remains: final budget/enforcement, ranking/DNF/retry/appeal rules,
+accepted runtime/resource profile, maps/counts/family split/private assets and
+parity/generalization experiments, platform matrix, exact dated window, licenses
+and artifact rights. Clean public snapshot, hashed offline wheelhouse and fresh
+machine rehearsal still need doing after those choices. See the readiness
+report. Never put private geometry/seeds/previews in public files/history, never
+reintroduce Unity, and never silently change physics or single-car replay 1.1.

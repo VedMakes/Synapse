@@ -91,6 +91,14 @@ loss, entropy, approximate KL, clip fraction, explained variance, and update
 throughput. Participants are not required to use this model, optimizer,
 algorithm, or artifact format.
 
+The optional reference runner now publishes immutable
+`reference_generations/g-<uuid>/` directories and one authoritative
+`reference_checkpoint.json` pointer. Model, optimizer, normalizer, RNG,
+collector/environment state, and metrics belong to one generation. Root files
+and `best/` are compatibility/selection links, not the resume authority. A spent
+budget ahead of the committed boundary is never refunded or guessed into exact
+state. See `participant_guide.md` for migration, warm-start, and selection rules.
+
 ## Participant-owned reward
 
 `VectorizedRacingEnv.step_raw` exposes the next observation, termination flags,
@@ -117,6 +125,11 @@ batches. It never imports participant code or executes participant reward
 logic. Default limits are 8 layers, width 1,024, 1,000,000 parameters, 64 MiB
 of artifact files, and 64 inference samples per call. These are implementation
 defaults for the prototype, not frozen tournament rules.
+
+The additional ONNX release-candidate format uses `manifest.json`, canonical
+`training_contract.json`, and `model.onnx`, with preprocessing embedded in the
+graph. `submission_runtime.md` specifies its static shapes, operators, limits,
+trusted-local versus isolated paths, and unverified Docker release gates.
 
 ## Deterministic evaluation
 

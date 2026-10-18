@@ -27,7 +27,10 @@ These are provisional implementation decisions based on the handoff and the late
 
 - Three training tracks are the intended first event target. Three synthetic development tracks are present; E2 currently uses the oval only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
-- Evaluation submissions will use ONNX. The model input/output contract is not implemented yet.
+- Evaluation submissions will use ONNX. A bounded static-vector profile and
+  model-only Docker worker are implemented as release candidates; actual Docker
+  verification and final event-profile acceptance are pending. See
+  `docs/submission_runtime.md`.
 - Participants own their model architecture, algorithm, preprocessing, weights,
   and reward function. The local PPO baseline is only an optional starter, not
   the event contract.
@@ -153,8 +156,9 @@ metadata, and optional running-normalization statistics.
 The measured first benchmark is in `reports/e1_vectorized_benchmark.md`. It is
 a local baseline only. The measured PPO baseline experiment is in
 `reports/e2_baseline_convergence.md`; it covers the current synthetic fixture
-only and does not freeze public event settings. ONNX evaluation, held-out-track
-storage, ranking, and tournament playback remain separate milestones.
+only and does not freeze public event settings. Held-out-track storage, final
+ranking, and event release freeze remain separate milestones; ONNX inference
+and local multi-ghost comparison now have candidate implementations.
 
 ## Trainer boundary
 
@@ -287,9 +291,12 @@ The same artifact can be exported through the existing replay schema:
   --output artifacts/replay/team-a.json
 ```
 
-This is a safe first generic artifact format, not yet the final ONNX/event
-submission contract. The evaluator still needs organizer-owned process,
-memory, CPU, wall-time, network, and private-track supervision before event use.
+This remains the first generic artifact format, not the final event contract.
+For ONNX export, the supported architecture/operator profile, optional pinned
+dependencies, and **explicit isolated organizer evaluation**, see
+[`docs/submission_runtime.md`](docs/submission_runtime.md). In-process evaluation
+is labeled trusted-local preview, not a sandbox. Actual container verification,
+outer job supervision, and event rules remain release gates.
 
 ## Replay UI boundary (Python simulation only)
 
@@ -349,6 +356,14 @@ timeline, recorded-event markers and previous/next-event jumps. Arrows seek one
 exact tick, Shift + arrows seek one second, Home/End select the endpoints,
 Space toggles playback, and `?` shows help. Seeking pauses. The header labels the
 recorded final result separately from the currently selected tick's state.
+Separate replay-group v1.0 manifests compare 1–4 recordings on the same Python
+track/config/standing-start clock, while single-car schema 1.1 stays unchanged.
+Use `tools/build_replay_group.py --help` and `tools/run_pygame.py --group ...`;
+shorter recordings explicitly hold their final pose rather than extrapolating.
+See `docs/participant_guide.md` for controls/limits and exact reference
+resume/warm-start/best-selection commands, and
+`reports/pygame_review_2026-10-19.md` for screenshot review evidence.
+
 To save a deterministic paused QA image without a desktop:
 
 ```bash

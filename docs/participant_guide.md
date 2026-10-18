@@ -56,24 +56,167 @@ The reference starter writes:
 
 ```text
 participant_run/
-  budget.json              # persistent local transition counter
-  training_state.json      # release/config/reward/map identity
-  training_metrics.jsonl   # one bounded-size record per update
-  training_report.md       # human-readable local dashboard
-  policy.pt                # reference starter artifact only
-  policy.json              # reference architecture metadata
-  training_contract.json   # environment schema and normalizer for the starter
+  budget.json                 # external persistent transition ledger
+  reference_checkpoint.json   # authoritative committed-generation pointer
+  reference_generations/      # immutable snapshots, including optimizer/RNG/env
+  training_state.json         # latest committed state (compatibility symlink)
+  training_metrics.jsonl      # latest metrics (compatibility symlink)
+  training_report.md          # human-readable local dashboard
+  policy.pt                   # latest reference weights (compatibility symlink)
+  policy.json                 # latest reference metadata (compatibility symlink)
+  training_contract.json      # latest schema/preprocessing (compatibility symlink)
 ```
 
-Run the same command again with the same `--budget-steps` and output directory
-to continue the local counter. The budget is charged per active environment
-lane, not per vector call. The final partial batch is supported. Reset and PPO
-optimizer updates are not environment transitions.
+For the bundled reference starter, run the same command again with the same
+`--budget-steps` and output directory to resume its committed state and local
+counter. The budget is charged per active environment lane, not per vector call.
+The final partial batch is supported. Resets and PPO optimizer updates are not
+environment transitions. Custom trainers define their own checkpoint lifecycle.
 
-This prototype persists the policy and normalizer but does not persist the
-PyTorch optimizer state. A process restart therefore resumes from the saved
-policy with a fresh optimizer. This is acceptable for the onboarding slice but
-must be decided before the scored event.
+## Optional reference checkpoints and fine-tuning
+
+These are local reference-PPO conveniences, not requirements on participant
+architecture, trainer, reward, preprocessing, or checkpoint format. Use
+`tools/run_reference_baseline.py` directly for the options below; the participant
+launcher/dashboard does not forward these fine-tuning options.
+
+### Exact resume of the same reference run
+
+There is no `--resume` flag. An existing `reference_checkpoint.json` selects one
+validated generation under `reference_generations/g-.../`. On the same supported
+CPU runtime, the trainer restores policy weights, Adam optimizer state,
+observation-normalizer state, collector observations, environment/lane state,
+and Torch/NumPy/Python/environment RNG state at a completed-rollout boundary.
+Keep the config/ray order, ordered training tracks, reward file, seed, lane
+count, PPO hyperparameters, cumulative budget, preprocessing, selection settings,
+and source/runtime identity unchanged. A mismatch is rejected before collection.
+`--steps` and `--max-updates` are invocation limits and may change; changing PPO
+batch boundaries can change the training trajectory even with exact recovery.
+
+Each generation contains `policy.pt`, `policy.json`, `training_contract.json`,
+`training_state.json`, `training_metrics.jsonl`, `selection_report.json`,
+`local_state.pt` (optimizer/Torch RNG), `collector.json`, and a file-hash manifest.
+The local POSIX-filesystem writer flushes and renames the complete generation,
+then atomically replaces the pointer containing its manifest hash. Generations
+are write-once; their names do not establish which one is current. The root
+policy/state/metrics/contract files are compatibility symlinks switched after
+the pointer commit. Recovery follows the pointer and can repair lagging mirrors;
+it never guesses from root files or selects another generation after corruption.
+One writer may own an output directory at a time.
+
+`budget.json` stays outside the snapshots and is **never restored or rolled
+back**. If collection spent transitions but an update/evaluation/publication was
+interrupted before committing its pointer, the ledger can be ahead of the last
+checkpoint. Exact recovery then refuses to continue; those spent transitions
+remain spent. A failure after the pointer commit can instead resume that committed
+boundary and repair the mirrors. Do not rewind the ledger or pointer to claim a
+refund. These local mechanisms do not settle event-wide budget enforcement.
+
+### Explicit non-exact warm start
+
+Legacy root-only artifacts and imitation artifacts are not exact-resume state.
+Pass `--warm-start SOURCE_DIRECTORY` into a **new output directory** to load the
+reference `policy.pt`, `policy.json`, and `training_contract.json`. If the source
+has an authoritative pointer, its committed generation is validated first.
+The source observation/action/config and ordered training-track contract must
+match the new environment; this loader is for compatible reference-format
+artifacts, not arbitrary participant models.
+
+A warm start creates a fresh optimizer, collector/environment, RNG streams, and
+local ledger. Source files are hashed for provenance and left untouched. It
+preserves the source input mapping: environment-only preprocessing stays that
+way, with no newly fitted normalizer; a saved running normalizer retains its
+statistics and is **frozen** throughout fine-tuning and evaluation. Fresh reference
+training without a warm start still uses its running reference normalizer.
+A new local ledger is not permission to reset a future cumulative event budget.
+
+`--warm-start` enables bounded fine-tuning/selection even without `--fine-tune`.
+A new `--fine-tune` run requires a warm start. For example, if this checkout has
+the retained local `artifacts/pygame-imitation` artifact, this small experiment
+uses all three current public development tracks. That retained artifact is a
+local fixture, not a promised participant-release download. Choose a new output
+path for each new experiment:
+
+```bash
+.venv/bin/python tools/run_reference_baseline.py \
+  --warm-start artifacts/pygame-imitation --fine-tune \
+  --config config/simulation.json --reward examples/baseline_reward.json \
+  --track-dir tracks/train --eval-track-dir tracks/train \
+  --steps 16 --budget-steps 35 --n-envs 2 --rollout-length 8 --seed 17 \
+  --max-updates 3 --learning-rate 0.0001 --update-epochs 1 \
+  --eval-every 1 --eval-max-steps 1200 \
+  --output-dir artifacts/reference-finetune-demo
+```
+
+Continue that new run **exactly**, without reloading the source artifact, for
+the remaining 19 transitions:
+
+```bash
+.venv/bin/python tools/run_reference_baseline.py \
+  --fine-tune \
+  --config config/simulation.json --reward examples/baseline_reward.json \
+  --track-dir tracks/train --eval-track-dir tracks/train \
+  --steps 19 --budget-steps 35 --n-envs 2 --rollout-length 8 --seed 17 \
+  --max-updates 3 --learning-rate 0.0001 --update-epochs 1 \
+  --eval-every 1 --eval-max-steps 1200 \
+  --output-dir artifacts/reference-finetune-demo
+```
+
+The first invocation performs one 16-transition update; the second performs a
+16-transition update and a partial 3-transition update. Subsequent exact resume
+does not need the source directory. These are training-transition counts;
+public-track evaluations also take time, separately from the training budget.
+
+Fine-tuning is limited to 65,536 requested transitions and 1–32 updates per
+invocation (`--max-updates` defaults to 4). The actual work stops at the first
+of the invocation step limit, update limit, or remaining cumulative budget.
+`n_envs * rollout_length` must be at most 8,192. PPO permits at most 16 positive
+update epochs and a positive learning rate at most 0.01 (default 0.0001).
+
+### Public-development best selection, not event ranking
+
+The source is evaluated at update zero, then every `--eval-every` **global**
+updates (1–32, default 1), preserving cadence across process restarts. A final
+off-cadence update is saved but not automatically evaluated. Each evaluation
+uses one deterministic fixed-start mean-action run per selected public track,
+with frozen preprocessing, no retries, and no training reward. Selection is
+lexicographic, in this order:
+
+1. More finished tracks.
+2. Less total off-track physical time across all evaluated tracks.
+3. Less total physical lap time across finished tracks.
+
+Only strict improvement replaces the best; ties and regressions retain it,
+including the original source if no update improves. This is a reference-only
+public-development heuristic, **not the event ranking, DNF policy, or evidence
+of held-out generalization**. Training return is excluded from the selection key.
+`--eval-track-dir` must contain 1–16 unique tracks whose geometry hashes belong
+to the bundled public `tracks/train` set. `--eval-max-steps` defaults to 2,400
+and permits 1–20,000 steps per track; both an evaluation and the invocation's
+projected diagnostic work must fit the 100,000-step cap. These bounded diagnostics
+make no training `RunBudget` reservations.
+
+`selection_report.json` records the rule, evaluated-generation history, per-track
+physical outcomes, and retained best generation. `best/` links to that immutable
+generation and contains its weights/metadata/contract. Root policy files and the
+dashboard's **latest saved artifact** follow the latest committed update, which
+may be worse than `best/`. Exact continuation always follows the current pointer,
+not the selected best. Export a single public track directly from the retained
+multi-track best without rewriting its contract:
+
+```bash
+.venv/bin/python tools/export_replay.py \
+  --weights my-reference-run/best/policy.pt \
+  --metadata my-reference-run/best/policy.json \
+  --contract my-reference-run/best/training_contract.json \
+  --track tracks/train/synthetic_oval.json --config config/simulation.json \
+  --participant-id reference-best --output artifacts/replay/reference-best.json
+```
+
+Create `artifacts/replay` first. The exporter still checks the saved physics,
+observation/ray semantics, and frozen preprocessing. Training-track identity is
+provenance, not a restriction against evaluating one public or held-out track.
+Never export private held-out geometry to participant-facing files.
 
 ## Optional local dashboard
 
@@ -158,6 +301,85 @@ tick zero. The window resizes down to 640×480.
 
 Use `--screenshot artifacts/replay/viewer.png --start-seconds 1` to save a
 deterministic paused PNG without a display; its parent directory must exist.
+
+### Replay-group comparison
+
+Use the standalone CLI to compare existing compatible recordings. A group is a
+separate **v1.0 manifest** referencing ordinary single-car **schema-1.1** replays;
+it does not merge, rewrite, or re-simulate them. Given two compatible recordings
+with distinct recorded participant IDs, create a new manifest beside or above
+them (the parent directory must already exist):
+
+```bash
+.venv/bin/python tools/build_replay_group.py \
+  --output artifacts/replay/oval-comparison.group.json \
+  --replays artifacts/replay/team-a-oval.json artifacts/replay/team-b-oval.json \
+  --labels "Team A" "Team B"
+
+.venv/bin/python tools/run_pygame.py \
+  --group artifacts/replay/oval-comparison.group.json
+```
+
+CLI input paths are relative to the current directory (absolute CLI locations
+also work); stored replay references are relative POSIX paths **below the
+manifest directory**. The builder refuses an existing output, including a source
+recording or symlink. Choose a new name to rebuild. Labels are optional, with
+exactly one per replay when supplied; they do not replace recorded participant
+IDs. There is no dashboard group picker or browser-group playback in this slice.
+`--group` and the single-recording `--replay` option are mutually exclusive.
+
+All recordings must have identical recorded track ID/geometry hash, engine and
+config identity, tick rate, car dimensions, and exact standing-start tick-zero
+frame. Tick zero must be on track with zero speed, lateral velocity, yaw rate,
+steer, and applied controls. Matching uses the recordings' identities, not today's
+source hash, so compatible historical recordings can be grouped together. File
+SHA-256, payload hashes, and embedded replay validation must all pass. These
+integrity checks do not authenticate provenance or decide event eligibility.
+
+| Group limit | Value |
+|---|---|
+| Ghosts / recordings | 1–4 distinct participant IDs and files |
+| Manifest size | 16 KiB |
+| Each replay | 16 MiB; existing limits of 20,001 frames and 20,000 track samples |
+| Total input | 32 MiB **including the manifest** |
+| Display label | 1–48 printable characters |
+| Stored file reference | At most 512 characters; no absolute paths, traversal, or symlinks in files/directories/ancestors |
+
+The builder assigns distinct cyan/gold/violet/green palette colors. One shared
+clock runs from the common standing start to the longest recording's last tick.
+A shorter ghost **holds its final recorded pose, telemetry, events, and result**;
+its last speed need not be zero. It never extrapolates, restarts, or interpolates
+past its end. Before the end, only position/heading interpolate; telemetry and
+events come from completed integer ticks. Results stay in manifest order,
+explicitly **unranked**, and the viewer computes no car interactions or scoring.
+
+| Control | Effect |
+|---|---|
+| **1–4**, **Tab / Shift+Tab** | Select/cycle a ghost's telemetry and event rail without changing time |
+| **V** | Hide/show the selected ghost and its path; telemetry remains selectable |
+| **T** | Toggle the selected ghost's path preference independently |
+| **P / N**, event-marker click | Seek the selected ghost's previous/next recorded event; seeking pauses |
+| **Space**, **R** | Play/pause; restart the whole group and play |
+| **Left/Right**, **Shift + arrows** | Seek one exact shared tick; one second |
+| **Home/End**, draggable timeline | Seek group endpoints; choose a shared tick |
+| **[ / ]**, **− / +** | Change playback speed |
+| **H / ?**, **Esc / Q** | Toggle help; close the viewer |
+
+For a deterministic paused headless capture, select a present ghost (numbered
+from 1), choose an exact shared tick, and optionally seek one of its events:
+
+```bash
+.venv/bin/python tools/run_pygame.py \
+  --group artifacts/replay/oval-comparison.group.json \
+  --select-ghost 2 --start-tick 0 --seek-event next --show-help \
+  --size 640x480 --screenshot artifacts/replay/oval-comparison-help.png
+```
+
+`--screenshot` implies `--headless`; its parent must exist. `--start-tick` and
+`--start-seconds` are mutually exclusive. `--seek-event` accepts `first`, `last`,
+`previous`, or `next` after setting the start position, and fails explicitly if
+no matching event exists. Use `--headless` alone for a one-frame render without
+saving a PNG. These checks exercise dummy SDL, not a physical desktop session.
 
 ## Participant-owned training boundary
 
@@ -366,9 +588,12 @@ submission/
 
 Use `tools/evaluate_participant.py` or `tools/export_replay.py --artifact-dir`
 to exercise the artifact. This preview supports feed-forward MLPs only; it is
-not yet the final ONNX/runtime submission contract. Organizer-side resource
-supervision is still required before using arbitrary participant submissions
-in an event.
+not the final event submission contract. A separate ONNX static-vector profile,
+exporter, CPU backend, and explicit model-only Docker worker are now available
+as release candidates; see [submission_runtime.md](submission_runtime.md).
+Container verification, outer job supervision, and event approval are still
+required before accepting untrusted submissions. The local dashboard/preview
+is not a sandbox.
 
 ### Physical evaluation diagnostics
 

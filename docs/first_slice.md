@@ -23,8 +23,12 @@ or local Pygame renderer is added:
 
 - The 31st and 20th dates still need month and year.
 - The exact values of `n` and `k` are not frozen.
-- ONNX input/output validation and the model execution backend are not implemented. The current environment can define the observation/action contract, but it does not yet run submitted models.
-- Participants may choose architecture, but the tournament runner still needs limits for memory, execution time, and output shape. Without limits, arbitrary ONNX graphs can compromise shared evaluation hardware.
+- A static-vector ONNX profile, validator, CPU backend, and model-only Docker
+  worker are implemented as release candidates; see `submission_runtime.md`.
+  Actual Docker verification and final event-profile approval are still pending.
+- Participants may choose supported architectures. Bounded graph/output checks
+  and worker memory/CPU/deadlines exist, but real container enforcement, an outer
+  job supervisor, and security/release rehearsal are required before event use.
 - The ranking and DNF rule must be set by the organizers. Training freedom does not make scoring a participant decision.
 - The three training tracks and five held-out tracks should be original geometry inspired by F1 circuits only after data sources and licenses are verified. Current fixtures are synthetic and intentionally not copies of real circuits.
 

@@ -2,6 +2,14 @@
 
 **Audit date:** 2026-10-17
 
+**Implementation update, 2026-10-19:** this original audit is historical. Local
+participant UI, exact reference-generation resume/fine-tuning/best retention,
+bounded replay groups, and the candidate ONNX/model-only worker now exist.
+See `reports/release_readiness_2026-10-19.md` for actual checks and remaining
+gates, and `docs/submission_runtime.md` for the proposed engineering profile.
+This does not freeze maps, ranking, budget, submission rules, or release policy;
+Docker build/isolation and clean offline delivery remain unverified.
+
 ## Verdict
 
 The repository is a strong Python engine prototype, but it is not yet a final
