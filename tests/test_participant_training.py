@@ -6,6 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import torch
+
 from tools.build_training_manifest import build_manifest
 from racing_event.observation import TrainingContract
 from tools.run_reference_baseline import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
@@ -16,6 +18,26 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ParticipantTrainingTests(unittest.TestCase):
+    def test_fresh_reference_runs_seed_initialization_before_model_creation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            policies = []
+            contracts = []
+            for index in range(2):
+                # Simulate arbitrary earlier Torch activity in the UI process.
+                torch.manual_seed(100 + index)
+                output = Path(directory) / str(index)
+                run(Namespace(
+                    reward=DEFAULT_REWARD, track_dir=DEFAULT_TRACK_DIR, tracks=None,
+                    config=DEFAULT_CONFIG, output_dir=output, budget_steps=2,
+                    steps=2, n_envs=1, rollout_length=2, seed=17,
+                ))
+                policies.append(torch.load(output / "policy.pt", weights_only=True))
+                contracts.append((output / "training_contract.json").read_bytes())
+            self.assertEqual(contracts[0], contracts[1])
+            self.assertEqual(policies[0].keys(), policies[1].keys())
+            for name in policies[0]:
+                self.assertTrue(torch.equal(policies[0][name], policies[1][name]), name)
+
     def test_public_training_manifest_has_only_valid_train_maps(self) -> None:
         manifest = build_manifest(DEFAULT_TRACK_DIR, "test-release")
         self.assertEqual(manifest["release_id"], "test-release")

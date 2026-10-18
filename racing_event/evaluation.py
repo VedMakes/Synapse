@@ -9,13 +9,14 @@ small on memory-constrained machines.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import hashlib
 from typing import Any, Callable
 
 import numpy as np
 
 from .observation import RunningObservationNormalizer, TrainingContract
+from .evaluation_audit import EvaluationAudit
 from .trajectory import engine_code_hash, replay_frame
 from .vector_env import VectorizedRacingEnv
 
@@ -39,6 +40,7 @@ class EvaluationResult:
     track_id: str
     track_hash: str
     config_hash: str
+    diagnostics: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -54,6 +56,7 @@ class EvaluationResult:
             "track_id": self.track_id,
             "track_hash": self.track_hash,
             "config_hash": self.config_hash,
+            "diagnostics": self.diagnostics,
         }
 
 
@@ -77,6 +80,14 @@ def validate_evaluation_contract(
         raise ValueError("saved observation schema does not match the environment")
     if contract.observation.size != env.observation_size:
         raise ValueError("saved observation size does not match the environment")
+    saved_schema, live_schema = contract.observation, env.observation_schema
+    if (saved_schema.version, saved_schema.dtype, saved_schema.normalization) != (
+        live_schema.version, live_schema.dtype, live_schema.normalization,
+    ) or any(
+        (saved.low, saved.high, saved.unit) != (live.low, live.high, live.unit)
+        for saved, live in zip(saved_schema.fields, live_schema.fields)
+    ):
+        raise ValueError("saved observation semantics do not match the environment")
     if contract.observation.ray_angles_deg and contract.observation.ray_angles_deg != tuple(env.config.sensors.ray_angles_deg):
         raise ValueError("saved ray angles do not match the environment")
     if contract.config_hash != env.training_contract.config_hash:
@@ -199,6 +210,8 @@ def evaluate_policy(
 
     if not isinstance(env, VectorizedRacingEnv) or env.n_envs != 1:
         raise ValueError("evaluation requires a VectorizedRacingEnv with n_envs=1")
+    if len(env.tracks) != 1:
+        raise ValueError("evaluation requires exactly one explicit track; evaluate track pools separately")
     if not callable(policy):
         raise TypeError("policy must be callable")
     if max_steps is None:
@@ -212,6 +225,8 @@ def evaluate_policy(
         raise TypeError("frame_sink must be callable")
 
     observation, _ = env.reset(evaluation=True)
+    track = env.tracks[0]
+    audit = EvaluationAudit(track.length, env.config.dt)
     if frame_sink is not None:
         track = env.tracks[int(env.track_indices[0])]
         edge = track.edge_status(
@@ -264,6 +279,14 @@ def evaluate_policy(
         off_track_steps += int(bool(info["off_track"][0]))
         crash = crash or bool(info["crash"][0])
         final_distance = float(info["distance_since_spawn"][0])
+        audit.update(
+            previous_distance=float(info["previous_distance_since_spawn"][0]),
+            distance=final_distance,
+            off_track=bool(info["off_track"][0]),
+            boundary_excess=float(info["boundary_excess_m"][0]),
+            coverage_mask=int(info["sector_coverage_mask"][0]),
+            raw_action=raw_action[0],
+        )
         if frame_sink is not None:
             frame_sink(replay_frame(
                 steps, {name: float(values[0]) for name, values in state.items()},
@@ -299,6 +322,7 @@ def evaluate_policy(
         track_id=track.track_id,
         track_hash=track.content_hash,
         config_hash=env.training_contract.config_hash,
+        diagnostics=audit.snapshot(),
     )
 
 

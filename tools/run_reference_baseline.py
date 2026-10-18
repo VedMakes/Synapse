@@ -23,7 +23,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from racing_event.budget import RunBudget, RunLimitExceeded
+from racing_event.budget import RunBudget, RunLimitExceeded, StepLimitExceeded
 from racing_event.config import SimulationConfig
 from racing_event.observation import RunningObservationNormalizer, TrainingContract
 from racing_event.ppo import FixedMLPActorCritic, PPOTrainer
@@ -229,6 +229,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         if any(path.exists() for path in partial) and not all(path.exists() for path in partial):
             for path in partial:
                 path.unlink(missing_ok=True)
+    # Seed before construction: layer initialization consumes the Torch RNG.
+    # Previously only rollout sampling was seeded, so fresh identical runs
+    # could start with different policy weights.
+    torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
     policy, normalizer, resumed = _load_or_create_policy(
         output_dir,
         env.observation_size,
@@ -236,11 +241,6 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         training_contract,
         has_used_steps=budget_status["used_steps"] > 0,
     )
-    if resumed:
-        torch.manual_seed(args.seed)
-    else:
-        torch.manual_seed(args.seed)
-        np.random.seed(args.seed)
     trainer = PPOTrainer(policy, hyperparameters)
     collector = RolloutCollector(
         env,
