@@ -9,6 +9,7 @@ from unittest.mock import patch
 import torch
 
 from tools.build_training_manifest import build_manifest
+from racing_event.budget import RunBudget
 from racing_event.observation import TrainingContract
 from tools.run_reference_baseline import DEFAULT_CONFIG, DEFAULT_REWARD, DEFAULT_TRACK_DIR, run
 from tools.train_participant import build_training_command
@@ -111,7 +112,7 @@ class ParticipantTrainingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "config does not exist"):
             build_training_command(args)
 
-    def test_reference_checkpoint_recovers_after_policy_publish_failure(self) -> None:
+    def test_reference_checkpoint_refuses_inexact_recovery_after_policy_publish_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory) / "recover"
             args = Namespace(
@@ -142,9 +143,12 @@ class ParticipantTrainingTests(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "injected"):
                     run_reference_baseline.run(args)
             self.assertTrue((output_dir / "training_state.json").exists())
-            resumed = run_reference_baseline.run(args)
-            self.assertEqual(resumed["budget_used"], 8)
-            self.assertEqual(len((output_dir / "training_metrics.jsonl").read_text().splitlines()), 1)
+            budget_bytes = (output_dir / "budget.json").read_bytes()
+            with self.assertRaisesRegex(ValueError, "spent steps retained, exact recovery refused"):
+                run_reference_baseline.run(args)
+            self.assertEqual((output_dir / "budget.json").read_bytes(), budget_bytes)
+            self.assertEqual(RunBudget.open(output_dir / "budget.json").status()["runs"][0]["used_steps"], 4)
+            self.assertEqual(len((output_dir / "training_metrics.jsonl").read_text().splitlines()), 0)
 
 
 if __name__ == "__main__":

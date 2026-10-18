@@ -1,32 +1,33 @@
-"""Run the optional local PPO reference baseline.
+"""Optional local reference PPO lifecycle; participants own their trainers/models.
 
-This command is not the participant contract. It is an inspectable example
-trainer used for smoke tests and local comparison. Participants may replace
-the model, algorithm, reward function, and training loop with their own code.
-It uses the existing Python-authoritative environment, a fixed reference PPO
-model, a declarative reference reward config, and a persistent local budget.
-Each rollout remains bounded so a multi-million-step budget is never retained
-in memory.
+Exact CPU process resume uses reference_checkpoint.json, never the dashboard
+mirrors. Legacy prototype artifacts can only be explicit non-exact warm starts
+in a new output directory. Fine-tuning preserves source preprocessing, uses a
+fresh optimizer, and selects on public development tracks (not event scoring).
 """
 
 from __future__ import annotations
 
 import argparse
 from dataclasses import replace
-import hashlib
 import json
-import os
 from pathlib import Path
-import tempfile
+import random
+import sys
 from typing import Any
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import numpy as np
 import torch
 
-from racing_event.budget import RunBudget, RunLimitExceeded, StepLimitExceeded
+from racing_event.budget import RunBudget, RunBudgetError
 from racing_event.config import SimulationConfig
+from racing_event.evaluation import evaluate_policy, validate_evaluation_contract
 from racing_event.observation import RunningObservationNormalizer, TrainingContract
 from racing_event.ppo import FixedMLPActorCritic, PPOTrainer
+from racing_event import reference_checkpoint as checkpoint
 from racing_event.reward import RewardConfig
 from racing_event.rollout import PPOHyperparameters, RolloutCollector
 from racing_event.track import TrackGeometry
@@ -37,63 +38,12 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_TRACK_DIR = ROOT / "tracks" / "train"
 DEFAULT_CONFIG = ROOT / "config" / "simulation.json"
 DEFAULT_REWARD = ROOT / "examples" / "baseline_reward.json"
-
-
-def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _atomic_json(path: Path, payload: Any) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(payload, stream, indent=2, sort_keys=True, allow_nan=False)
-            stream.write("\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _read_metrics(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    rows: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if not line.strip():
-            continue
-        try:
-            row = json.loads(line)
-        except json.JSONDecodeError:
-            # A terminated process may leave a partial final line. Committed
-            # state determines which complete rows are trusted on resume.
-            break
-        if not isinstance(row, dict):
-            break
-        rows.append(row)
-    return rows
-
-
-def _atomic_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            for row in rows:
-                stream.write(json.dumps(row, sort_keys=True, allow_nan=False) + "\n")
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+SELECTION_RULE = (
+    "reference-only public-development selection v1; not event scoring: "
+    "lexicographically maximize finish count, minimize total off-track seconds, "
+    "then minimize total physical lap seconds over finished tracks; "
+    "strict improvement only (ties/regressions retain best); training reward excluded"
+)
 
 
 def _resolve_tracks(track_dir: Path, explicit: list[Path] | None) -> list[Path]:
@@ -104,19 +54,27 @@ def _resolve_tracks(track_dir: Path, explicit: list[Path] | None) -> list[Path]:
     return paths
 
 
-def _parse_args() -> argparse.Namespace:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--reward", type=Path, default=DEFAULT_REWARD)
     parser.add_argument("--track-dir", type=Path, default=DEFAULT_TRACK_DIR)
     parser.add_argument("--tracks", type=Path, nargs="+", default=None)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=Path("participant_run"))
-    parser.add_argument("--budget-steps", type=int, default=10_000, help="provisional local budget; used only when creating a new state")
-    parser.add_argument("--steps", type=int, default=2_048, help="maximum transitions to collect in this invocation")
+    parser.add_argument("--budget-steps", type=int, default=10_000)
+    parser.add_argument("--steps", type=int, default=2_048, help="maximum training transitions in this invocation")
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--rollout-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=17)
-    return parser.parse_args()
+    parser.add_argument("--warm-start", type=Path, help="imitation/reference artifact directory; new optimizer, NOT exact source resume")
+    parser.add_argument("--fine-tune", action="store_true", help="bounded optional reference fine-tuning with public-track best selection")
+    parser.add_argument("--max-updates", type=int, help="updates per invocation; fine-tuning default 4, maximum 32")
+    parser.add_argument("--learning-rate", type=float, default=1.0e-4)
+    parser.add_argument("--update-epochs", type=int, default=4)
+    parser.add_argument("--eval-every", type=int, default=1, help="fine-tuning: evaluate update zero and every N global updates (restart-independent)")
+    parser.add_argument("--eval-max-steps", type=int, default=2400, help="fine-tuning: per-public-track evaluation cap, at most 20000")
+    parser.add_argument("--eval-track-dir", type=Path, default=DEFAULT_TRACK_DIR, help="public development tracks only (no private evaluator)")
+    return parser.parse_args(argv)
 
 
 def _open_budget(path: Path, budget_steps: int) -> tuple[RunBudget, str]:
@@ -125,83 +83,100 @@ def _open_budget(path: Path, budget_steps: int) -> tuple[RunBudget, str]:
     if path.exists():
         budget = RunBudget.open(path, max_runs=1, max_steps_per_run=budget_steps)
         status = budget.status()
-        if len(status["runs"]) > 1:
-            raise ValueError("participant prototype allows exactly one cumulative budget run")
         if status["runs"]:
             return budget, status["runs"][0]["run_id"]
     else:
-        path.parent.mkdir(parents=True, exist_ok=True)
         budget = RunBudget.create(path, max_runs=1, max_steps_per_run=budget_steps)
-    try:
-        return budget, budget.start_run()
-    except RunLimitExceeded as exc:  # pragma: no cover - guarded by the status check
-        raise ValueError("budget has no resumable run") from exc
+    return budget, budget.start_run()
 
 
-def _load_or_create_policy(
-    output_dir: Path,
-    observation_size: int,
-    hyperparameters: PPOHyperparameters,
-    expected_contract: TrainingContract,
-    *,
-    has_used_steps: bool,
-) -> tuple[FixedMLPActorCritic, RunningObservationNormalizer, bool]:
-    weights = output_dir / "policy.pt"
-    metadata = output_dir / "policy.json"
-    contract_path = output_dir / "training_contract.json"
-    if weights.exists() != metadata.exists():
-        raise ValueError("policy.pt and policy.json must be present together")
-    if weights.exists() and not contract_path.exists():
-        raise ValueError("training_contract.json is required beside a saved policy")
-    if weights.exists():
-        policy, saved_metadata = FixedMLPActorCritic.load_artifact(weights, metadata, expected_observation_size=observation_size)
-        saved_ppo = saved_metadata.get("ppo")
-        if saved_ppo is not None and saved_ppo != hyperparameters.to_dict():
-            raise ValueError("saved PPO settings do not match this invocation")
-        saved_contract, normalizer = TrainingContract.load(contract_path)
-        if saved_contract.to_dict() != expected_contract.to_dict():
-            raise ValueError("saved training contract does not match this invocation")
-        if normalizer is None or not normalizer.training:
-            raise ValueError("saved training contract must contain an unfrozen training normalizer")
-        return policy, normalizer, True
-    if has_used_steps:
-        raise ValueError("budget is already used but no resumable policy artifact exists")
-    return FixedMLPActorCritic(observation_size), RunningObservationNormalizer(observation_size), False
+def load_warm_start(source: Path, env: VectorizedRacingEnv) -> tuple[Any, Any, dict[str, Any]]:
+    """Safe declarative reference artifacts only; no import of source Python."""
+    source = source.resolve()
+    if (source / checkpoint.POINTER).exists() or (source / checkpoint.POINTER).is_symlink():
+        loaded = checkpoint.load_current(source)
+        assert loaded is not None
+        source = loaded[0]
+    policy, _ = FixedMLPActorCritic.load_artifact(
+        source / "policy.pt", source / "policy.json", expected_observation_size=env.observation_size,
+    )
+    contract, normalizer = TrainingContract.load(source / "training_contract.json")
+    validate_evaluation_contract(env, contract, normalizer)
+    if checkpoint.read_json(source / "training_contract.json") != contract.to_dict(normalizer):
+        raise ValueError("warm-start contract contains unsupported semantics")
+    if normalizer is not None:
+        if np.any(normalizer.m2 < 0):
+            raise ValueError("invalid warm-start normalizer variance")
+        normalizer.freeze()  # Preserve its mapping, rather than changing source preprocessing.
+    origin = {
+        "kind": "non-exact artifact warm start; optimizer and collector newly initialized",
+        "files": {name: checkpoint.sha256(source / name) for name in ("policy.pt", "policy.json", "training_contract.json")},
+        "preprocessing": "environment_only" if normalizer is None else "frozen_source_normalizer",
+    }
+    return policy, normalizer, origin
 
 
-def _write_report(output_dir: Path, state: dict[str, Any]) -> None:
-    metrics_path = output_dir / "training_metrics.jsonl"
-    rows = _read_metrics(metrics_path)
-    lines = [
-        "# Reference baseline training run",
-        "",
-        "This is an optional reference baseline. It is not the participant model or event contract.",
-        "",
-        "## Current state",
-        "",
-        f"- Release: `{state['release_id']}`",
-        f"- Tracks: `{', '.join(state['track_ids'])}`",
-        f"- Budget used: `{state['budget_used']}` / `{state['budget_steps']}` transitions",
-        f"- Budget remaining: `{state['budget_remaining']}`",
-        f"- Updates: `{state['updates']}`",
-         f"- Reference model: fixed two-layer MLP `{state['hidden_sizes']}`",
-        f"- Resume note: `{state['resume_note']}`",
-        "",
-        "## Update metrics",
-        "",
-        "| Update | Steps used | Mean return | Lap completion | Mean speed | Crash rate | Off-track rate | Approx. KL |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|",
-    ]
-    for row in rows:
-        def value(name: str) -> str:
-            item = row.get(name)
-            return "n/a" if item is None else f"{item:.6f}" if isinstance(item, float) else str(item)
+def evaluate_candidate(policy: Any, normalizer: Any, tracks: tuple[Any, ...],
+                       config: SimulationConfig, max_steps: int) -> dict[str, Any]:
+    """One deterministic fixed start per public track; no retries or rewards."""
+    reports = []
+    for track in tracks:
+        env = VectorizedRacingEnv(track, config, reward=None, n_envs=1)
+        report = evaluate_policy(
+            env, policy.as_policy(deterministic=True), normalizer=normalizer, max_steps=max_steps,
+        ).to_dict()
+        # The evaluator's reward is zero (reward=None); do not expose it as a score.
+        report.pop("total_reward")
+        reports.append(report)
+    return {
+        "tracks": reports,
+        "finish_count": sum(row["status"] == "finished" for row in reports),
+        "off_track_seconds": sum(row["off_track_steps"] * config.dt for row in reports),
+        "finished_lap_seconds": sum(row["lap_time_s"] for row in reports if row["status"] == "finished"),
+    }
 
-        lines.append("| " + " | ".join(value(name) for name in (
-            "update", "budget_used", "mean_episode_return", "lap_completion_rate",
-            "mean_speed_mps", "crash_rate", "off_track_rate", "approx_kl",
-        )) + " |")
-    (output_dir / "training_report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+def selection_key(report: dict[str, Any]) -> tuple[int, float, float]:
+    return (report["finish_count"], -report["off_track_seconds"], -report["finished_lap_seconds"])
+
+
+def select_candidate(previous: Any, candidate: dict[str, Any], generation: str,
+                     update: int) -> dict[str, Any]:
+    improved = previous is None or selection_key(candidate) > selection_key(previous["best_report"])
+    history = [] if previous is None else list(previous["history"])
+    history.append({"generation": generation, "update": update, "selected": improved, "report": candidate})
+    return {
+        "rule": SELECTION_RULE, "history": history,
+        "best_generation": generation if improved else previous["best_generation"],
+        "best_manifest_sha256": None if improved else previous["best_manifest_sha256"],
+        "best_report": candidate if improved else previous["best_report"],
+        "best_artifact_directory": "best",
+        "evaluation_budget": "separate bounded diagnostics; no training RunBudget reservations",
+    }
+
+
+def _selection_with_best_hash(output: Path, selection: Any) -> Any:
+    if selection is not None and selection["best_manifest_sha256"] is None:
+        # A generation cannot contain its own manifest hash. On the next commit,
+        # bind a retained best to its hash before referencing it from that commit.
+        selection = dict(selection)
+        best, _ = checkpoint.validate_generation(output, selection["best_generation"])
+        selection["best_manifest_sha256"] = checkpoint.sha256(best / "manifest.json")
+    return selection
+
+
+def _write_report(output: Path, state: dict[str, Any]) -> None:
+    text = (
+        "# Optional reference baseline\n\nParticipants own their models and training algorithms.\n\n"
+        f"- Updates: {state['updates']}\n"
+        f"- Training budget: {state['budget_used']} / {state['budget_steps']}\n"
+        f"- Resume: {state['resume_note']}\n"
+        f"- Authoritative checkpoint: `{checkpoint.POINTER}`\n"
+        "- Root policy files: latest committed dashboard mirrors, not necessarily best.\n"
+    )
+    if state["fine_tune"]:
+        text += f"- Selection: {SELECTION_RULE}\n- Best artifact: `best/`; report: `selection_report.json`\n"
+    checkpoint.atomic_bytes(output / "training_report.md", text.encode())
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -209,158 +184,218 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--steps, --n-envs, and --rollout-length must be positive")
     if args.n_envs * args.rollout_length > 8_192:
         raise ValueError("n_envs * rollout_length must be at most 8192 for the bounded reference trainer")
-    output_dir = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    track_paths = _resolve_tracks(args.track_dir, args.tracks)
+    output = args.output_dir.resolve()
+    with checkpoint.writer_lock(output):
+        return _run_locked(args, output)
+
+
+def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
+    # The tiny CPU reference model has no need for a large thread pool; fixing
+    # this also makes the numerical runtime contract independent of host cores.
+    torch.set_num_threads(1)
+    current = checkpoint.load_current(output)
+    saved_manifest = None if current is None else current[1]
+    saved_identity = None if current is None else saved_manifest["identity"]
+    fine_tune = bool(getattr(args, "fine_tune", False) or getattr(args, "warm_start", None))
+    if saved_identity is not None:
+        fine_tune = fine_tune or saved_identity["selection"] is not None
+    max_updates = getattr(args, "max_updates", None)
+    if max_updates is None:
+        max_updates = 4 if fine_tune else args.steps
+    if max_updates <= 0 or (fine_tune and (max_updates > 32 or args.steps > 65_536)):
+        raise ValueError("fine-tuning requires 1..32 updates and at most 65536 transitions per invocation")
+    hp = PPOHyperparameters(
+        rollout_length=args.rollout_length,
+        learning_rate=getattr(args, "learning_rate", 1.0e-4),
+        update_epochs=getattr(args, "update_epochs", 4),
+    )
+    if hp.update_epochs > 16 or hp.learning_rate > 0.01:
+        raise ValueError("reference updates require at most 16 epochs and learning-rate <= 0.01")
     config = SimulationConfig.from_file(args.config)
     reward = RewardConfig.from_file(args.reward)
-    tracks = tuple(TrackGeometry.from_file(path) for path in track_paths)
+    tracks = tuple(TrackGeometry.from_file(path) for path in _resolve_tracks(args.track_dir, args.tracks))
     env = VectorizedRacingEnv(tracks, config, reward, n_envs=args.n_envs)
-    training_contract = replace(
-        env.training_contract,
-        reward_config_hash=reward.content_hash,
-        reward_sha256=_sha256(args.reward),
+    env.rng = np.random.default_rng(args.seed)
+    contract = replace(
+        env.training_contract, action_distribution="tanh_normal",
+        reward_config_hash=reward.content_hash, reward_sha256=checkpoint.sha256(args.reward),
     )
-    hyperparameters = PPOHyperparameters(rollout_length=args.rollout_length)
-    budget, run_id = _open_budget(output_dir / "budget.json", args.budget_steps)
-    budget_status = budget.status(run_id)
-    if budget_status["used_steps"] == 0:
-        partial = [output_dir / name for name in ("policy.pt", "policy.json", "training_contract.json")]
-        if any(path.exists() for path in partial) and not all(path.exists() for path in partial):
-            for path in partial:
-                path.unlink(missing_ok=True)
-    # Seed before construction: layer initialization consumes the Torch RNG.
-    # Previously only rollout sampling was seeded, so fresh identical runs
-    # could start with different policy weights.
+    evaluation_tracks: tuple[Any, ...] = ()
+    selection_settings = None
+    if fine_tune:
+        eval_every = getattr(args, "eval_every", 1)
+        eval_max_steps = getattr(args, "eval_max_steps", 2400)
+        evaluation_tracks = tuple(TrackGeometry.from_file(path) for path in _resolve_tracks(
+            getattr(args, "eval_track_dir", DEFAULT_TRACK_DIR), None,
+        ))
+        if not 1 <= eval_every <= 32 or not 1 <= eval_max_steps <= 20_000 or not 1 <= len(evaluation_tracks) <= 16 or len(evaluation_tracks) * eval_max_steps > 100_000:
+            raise ValueError("evaluation cap: every 1..32 updates, 1..20000 steps/track, <=16 tracks and <=100000 total steps/evaluation")
+        public = {track.content_hash for track in (
+            TrackGeometry.from_file(path) for path in _resolve_tracks(DEFAULT_TRACK_DIR, None)
+        )}
+        if any(track.content_hash not in public for track in evaluation_tracks):
+            raise ValueError("reference selection requires public train/development tracks")
+        if len({track.track_id for track in evaluation_tracks}) != len(evaluation_tracks):
+            raise ValueError("selection tracks must be unique")
+        rollout_size = args.n_envs * args.rollout_length
+        possible_updates = min(max_updates, (args.steps + rollout_size - 1) // rollout_size)
+        evaluations_bound = int(current is None) + (possible_updates + eval_every - 1) // eval_every
+        if evaluations_bound * len(evaluation_tracks) * eval_max_steps > 100_000:
+            raise ValueError("evaluation cap: at most 100000 diagnostic steps per invocation; reduce eval-max-steps or increase eval-every")
+        selection_settings = {
+            "rule": SELECTION_RULE, "every": eval_every, "max_steps": eval_max_steps,
+            "tracks": [[track.track_id, track.content_hash] for track in evaluation_tracks],
+        }
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    policy, normalizer, resumed = _load_or_create_policy(
-        output_dir,
-        env.observation_size,
-        hyperparameters,
-        training_contract,
-        has_used_steps=budget_status["used_steps"] > 0,
-    )
-    trainer = PPOTrainer(policy, hyperparameters)
-    collector = RolloutCollector(
-        env,
-        policy.as_policy(),
-        budget,
-        run_id,
-        normalizer=normalizer,
-        seed=args.seed,
-    )
-    state_path = output_dir / "training_state.json"
-    state = {
-        "release_id": "synapse-local-participant-prototype",
-        "run_id": run_id,
-        "budget_steps": args.budget_steps,
-        "budget_used": budget_status["used_steps"],
-        "budget_remaining": budget_status["remaining_steps"],
-        "updates": 0,
-        "track_ids": [track.track_id for track in tracks],
-        "track_hashes": [track.content_hash for track in tracks],
-        "config_hash": TrainingContract.config_hash_for(config),
-        "reward_sha256": _sha256(args.reward),
-        "reward_config_hash": reward.content_hash,
-        "ray_angles_deg": list(config.sensors.ray_angles_deg),
-        "observation_size": env.observation_size,
-        "hidden_sizes": [64, 64],
-        "n_envs": args.n_envs,
-        "rollout_length": args.rollout_length,
-        "seed": args.seed,
-        "resume_note": "optimizer state is reset on process restart in this prototype",
+    random.seed(args.seed)
+    warm_start = getattr(args, "warm_start", None)
+    origin = None if saved_identity is None else saved_identity["warm_start"]
+    if warm_start is not None:
+        policy, normalizer, requested_origin = load_warm_start(warm_start, env)
+        if current is not None and requested_origin != origin:
+            raise ValueError("warm-start origin does not match this run")
+        origin = requested_origin
+    elif current is None:
+        if fine_tune:
+            raise ValueError("new fine-tuning runs require --warm-start and a new output directory")
+        policy = FixedMLPActorCritic(env.observation_size)
+        normalizer = RunningObservationNormalizer(env.observation_size)
+    identity = {
+        "runtime": checkpoint.runtime_identity(), "contract": contract.to_dict(),
+        "ppo": hp.to_dict(), "n_envs": args.n_envs, "seed": args.seed,
+        "budget_steps": args.budget_steps, "warm_start": origin,
+        "preprocessing": "running_reference_normalizer" if origin is None else origin["preprocessing"],
+        "selection": selection_settings,
     }
-    if state_path.exists():
-        saved_state = json.loads(state_path.read_text(encoding="utf-8"))
-        for name in (
-            "track_ids", "track_hashes", "config_hash", "reward_sha256", "budget_steps",
-            "n_envs", "rollout_length", "reward_config_hash", "ray_angles_deg", "observation_size",
-        ):
-            if saved_state.get(name) != state[name]:
-                raise ValueError(f"saved training state does not match {name}")
-        state["updates"] = int(saved_state.get("updates", 0))
+    if current is not None:
+        if identity != saved_identity:
+            raise ValueError("saved reference checkpoint identity does not match this invocation (config, tracks, seed, PPO, budget, preprocessing, selection or runtime)")
+        directory, manifest = current
+        if not (output / "budget.json").exists():
+            raise ValueError("external budget missing; exact recovery refused")
+        policy, metadata = FixedMLPActorCritic.load_artifact(directory / "policy.pt", directory / "policy.json", expected_observation_size=env.observation_size)
+        saved_contract, normalizer = TrainingContract.load(directory / "training_contract.json")
+        if saved_contract.to_dict() != contract.to_dict() or metadata.get("ppo") != hp.to_dict():
+            raise ValueError("checkpoint policy/contract mismatch")
+        if checkpoint.read_json(directory / "training_contract.json") != saved_contract.to_dict(normalizer):
+            raise ValueError("unsupported checkpoint contract semantics")
+        mode = identity["preprocessing"]
+        if (mode == "environment_only") != (normalizer is None) or (normalizer is not None and normalizer.training != (mode == "running_reference_normalizer")):
+            raise ValueError("checkpoint preprocessing mismatch")
+        if normalizer is not None and np.any(normalizer.m2 < 0):
+            raise ValueError("invalid checkpoint normalizer variance")
+        state = checkpoint.read_json(directory / "training_state.json")
+        metrics = [json.loads(line) for line in (directory / "training_metrics.jsonl").read_text().splitlines()]
+        selection = checkpoint.read_json(directory / "selection_report.json")
+        if not isinstance(state, dict) or not {"updates", "run_id", "budget_used", "budget_remaining", "budget_steps", "fine_tune"}.issubset(state):
+            raise ValueError("incomplete checkpoint training state")
+        if type(state["updates"]) is not int or state["updates"] < 0 or len(metrics) != state["updates"]:
+            raise ValueError("checkpoint update/metrics mismatch")
+        if (type(state["budget_used"]) is not int or state["budget_used"] < 0
+                or state["budget_steps"] != args.budget_steps
+                or state["budget_remaining"] != args.budget_steps - state["budget_used"]
+                or state["fine_tune"] != fine_tune):
+            raise ValueError("checkpoint training state/budget mismatch")
+        budget = RunBudget.open(output / "budget.json", max_runs=1, max_steps_per_run=args.budget_steps)
+        runs = budget.status()["runs"]
+        if len(runs) != 1:
+            raise ValueError("external budget has no matching run; exact recovery refused")
+        run_id = runs[0]["run_id"]
+    else:
+        budget, run_id = _open_budget(output / "budget.json", args.budget_steps)
+    status = budget.status(run_id)
+    head = budget.status()["head_hash"]
+    if current is not None:
+        if state["run_id"] != run_id or status["used_steps"] != state["budget_used"] or head != manifest["budget_head"]:
+            raise ValueError("external budget differs from committed boundary; spent steps retained, exact recovery refused (interrupted update)")
+    elif status["used_steps"]:
+        raise ValueError("external budget already spent without an authoritative checkpoint; exact recovery refused")
+    trainer = PPOTrainer(policy, hp)
+    collector = RolloutCollector(env, policy.as_policy(), budget, run_id, normalizer=normalizer, seed=args.seed)
+    if current is not None:
+        checkpoint.restore_local_state(directory / "local_state.pt", trainer)
+        optimizer_steps = state["updates"] * hp.update_epochs
+        values = trainer.optimizer.state_dict()["state"]
+        if bool(values) != bool(optimizer_steps) or any(float(item["step"]) != optimizer_steps for item in values.values()):
+            raise ValueError("optimizer step count does not match completed updates")
+        checkpoint.restore_collector(collector, checkpoint.read_json(directory / "collector.json"))
+        if fine_tune != (selection is not None):
+            raise ValueError("checkpoint selection state mismatch")
+        checkpoint.repair_mirrors(output, directory, selection)
+        selection = _selection_with_best_hash(output, selection)
+    else:
+        state = {
+            "release_id": "synapse-local-reference-v1", "run_id": run_id,
+            "budget_steps": args.budget_steps, "budget_used": 0,
+            "budget_remaining": status["remaining_steps"], "updates": 0,
+            "track_ids": [track.track_id for track in tracks], "track_hashes": [track.content_hash for track in tracks],
+            "config_hash": contract.config_hash, "reward_sha256": contract.reward_sha256,
+            "reward_config_hash": reward.content_hash, "ray_angles_deg": list(config.sensors.ray_angles_deg),
+            "observation_size": env.observation_size, "hidden_sizes": [64, 64],
+            "n_envs": args.n_envs, "rollout_length": args.rollout_length, "seed": args.seed,
+            "fine_tune": fine_tune, "preprocessing": identity["preprocessing"],
+            "resume_note": "exact completed-rollout CPU state via atomic generation pointer; external budget never rolled back",
+            "warm_start": origin,
+        }
+        metrics, selection = [], None
 
-    metrics_path = output_dir / "training_metrics.jsonl"
-    metrics_rows = _read_metrics(metrics_path)
-    if len(metrics_rows) > state["updates"]:
-        metrics_rows = metrics_rows[: state["updates"]]
-        _atomic_jsonl(metrics_path, metrics_rows)
+    def save(*, evaluate: bool) -> None:
+        nonlocal selection
+        generation = checkpoint.new_generation()
+        if evaluate:
+            candidate = evaluate_candidate(policy, normalizer, evaluation_tracks, config, selection_settings["max_steps"])
+            selection = select_candidate(selection, candidate, generation, state["updates"])
+        checkpoint.publish(
+            output, generation, policy=policy, contract=contract, normalizer=normalizer,
+            trainer=trainer, collector=collector, state=state, metrics=metrics,
+            selection=selection, identity=identity, budget_head=budget.status()["head_hash"],
+        )
+        selection = _selection_with_best_hash(output, selection)
+        _write_report(output, state)
 
-    # Publish a complete update-0 checkpoint before reserving the first
-    # transition. An interrupted later update can therefore always fall back
-    # to the last complete policy/contract pair.
-    policy_path = output_dir / "policy.pt"
-    metadata_path = output_dir / "policy.json"
-    contract_path = output_dir / "training_contract.json"
-    if not all(path.exists() for path in (policy_path, metadata_path, contract_path)):
-        training_contract.save(contract_path, normalizer=normalizer)
-        policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
-    if not state_path.exists():
-        _atomic_json(state_path, state)
-
-    remaining = budget_status["remaining_steps"]
-    target = min(args.steps, remaining)
-    if target == 0:
-        _write_report(output_dir, state)
-        print(f"budget exhausted: {budget_status['used_steps']} / {args.budget_steps} transitions")
-        return state
-
-    update_number = state["updates"]
-    transitions_per_rollout = args.n_envs * args.rollout_length
-    while target > 0:
-        batch_steps = min(transitions_per_rollout, target)
+    if current is None:
+        save(evaluate=fine_tune)
+    target = min(args.steps, status["remaining_steps"])
+    invocation_updates = 0
+    while target > 0 and invocation_updates < max_updates:
+        batch_steps = min(args.n_envs * args.rollout_length, target)
         rollout = collector.collect(batch_steps)
         ppo_metrics = trainer.update(rollout.batch)
-        update_number += 1
-        budget_status = budget.status(run_id)
-        row = {
-            "update": update_number,
-            "budget_used": budget_status["used_steps"],
-            "budget_remaining": budget_status["remaining_steps"],
-            "transitions": rollout.batch.transitions,
-            "mean_episode_return": rollout.metrics["mean_episode_return"],
-            "lap_completion_rate": rollout.metrics["lap_completion_rate"],
-            "mean_speed_mps": rollout.metrics["mean_speed_mps"],
-            "crash_rate": rollout.metrics["crash_rate"],
-            "off_track_rate": rollout.metrics["off_track_rate"],
+        status = budget.status(run_id)
+        state["updates"] += 1
+        state["budget_used"], state["budget_remaining"] = status["used_steps"], status["remaining_steps"]
+        metrics.append({
+            "update": state["updates"], "budget_used": status["used_steps"],
+            "budget_remaining": status["remaining_steps"],
+            **{name: rollout.metrics[name] for name in ("mean_episode_return", "lap_completion_rate", "mean_speed_mps", "crash_rate", "off_track_rate")},
             **ppo_metrics.to_dict(),
-        }
-        metrics_rows.append(row)
-        _atomic_jsonl(metrics_path, metrics_rows)
-        normalizer_state = normalizer
-        # Contract is written first; both writes are individually atomic, and
-        # the state file below is the committed update marker on resume.
-        training_contract.save(contract_path, normalizer=normalizer_state)
-        policy.save_artifact(policy_path, metadata_path, hyperparameters=hyperparameters)
-        state["updates"] = update_number
-        state["budget_used"] = budget_status["used_steps"]
-        state["budget_remaining"] = budget_status["remaining_steps"]
-        _atomic_json(state_path, state)
-        _write_report(output_dir, state)
-        def display(value: Any) -> str:
-            return "n/a" if value is None else f"{float(value):.3f}"
-
-        print(
-            f"update {update_number}: steps {budget_status['used_steps']}/{args.budget_steps} "
-            f"return={display(row['mean_episode_return'])} "
-            f"lap={display(row['lap_completion_rate'])} "
-            f"speed={display(row['mean_speed_mps'])} m/s "
-            f"crash={display(row['crash_rate'])} "
-            f"off_track={display(row['off_track_rate'])}"
-        )
+        })
+        invocation_updates += 1
         target -= batch_steps
+        evaluate = fine_tune and state["updates"] % selection_settings["every"] == 0
+        save(evaluate=evaluate)
+        row = metrics[-1]
+        def display(name: str) -> str:
+            value = row[name]
+            return "n/a" if value is None else f"{float(value):.3f}"
+        print(
+            f"update {state['updates']}: steps {state['budget_used']}/{args.budget_steps} "
+            f"return={display('mean_episode_return')} lap={display('lap_completion_rate')} "
+            f"speed={display('mean_speed_mps')} m/s crash={display('crash_rate')} "
+            f"off_track={display('off_track_rate')}", flush=True,
+        )
+    _write_report(output, state)
     return state
 
 
-def main() -> None:
-    args = _parse_args()
+def main(argv: list[str] | None = None) -> None:
+    args = _parse_args(argv)
     try:
         state = run(args)
-    except (OSError, ValueError, RunLimitExceeded, StepLimitExceeded) as exc:
+    except (OSError, ValueError, FloatingPointError, RunBudgetError) as exc:
         raise SystemExit(f"reference baseline could not continue: {exc}") from exc
-    print(f"saved participant run in {args.output_dir}")
-    print(f"budget remaining: {state.get('budget_remaining', 'see training_state.json')}")
+    print(f"saved reference run in {args.output_dir}; budget remaining: {state['budget_remaining']}")
 
 
 if __name__ == "__main__":
