@@ -543,7 +543,6 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
     replay_id = uuid4().hex
     replay_path = replay_dir / f"{replay_id}.json"
     html_path = replay_path.with_suffix(".html")
-    temporary_contract: Path | None = None
     try:
         export_command = [
             str(python), str(ROOT / "tools" / "export_replay.py"),
@@ -555,24 +554,13 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
             export_command += ["--artifact-dir", str(artifact_dir)]
         else:
             weights, metadata, contract = reference_files
-            contract_payload = json.loads(contract.read_text(encoding="utf-8"))
-            if not isinstance(contract_payload, dict):
-                raise ValueError("reference training_contract.json must be a JSON object")
-            # Reference evaluation expects a single-map contract. Only this temporary
-            # reference copy is adapted; generic artifacts are never rewritten.
-            contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
-            fd, temporary_name = tempfile.mkstemp(prefix=".reference-contract.", suffix=".json", dir=replay_dir)
-            temporary_contract = Path(temporary_name)
-            with os.fdopen(fd, "w", encoding="utf-8") as stream:
-                json.dump(contract_payload, stream, sort_keys=True, allow_nan=False)
-            export_command += ["--weights", str(weights), "--metadata", str(metadata), "--contract", str(temporary_contract)]
+            # The exporter supports multi-track training provenance directly;
+            # preserve it and freeze only its in-memory evaluation normalizer.
+            export_command += ["--weights", str(weights), "--metadata", str(metadata), "--contract", str(contract)]
         subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "replay command failed").strip()
         raise RuntimeError(f"could not build SYNAPSE replay: {detail}") from exc
-    finally:
-        if temporary_contract is not None:
-            temporary_contract.unlink(missing_ok=True)
     replay = load_replay(replay_path)
     build_browser_replay(replay_path, html_path)
     with REPLAY_LOCK:

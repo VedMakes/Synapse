@@ -68,8 +68,11 @@ def check() -> None:
             page.locator("#watch-map").select_option("synthetic_oval")
             page.locator("#watch").click()
             link = page.get_by_role("link", name="Open browser fallback")
-            link.wait_for(state="visible", timeout=120_000)
+            page.wait_for_function("""() => document.querySelector('#watch-error').textContent.trim()
+                || [...document.querySelectorAll('a')].some(a => a.textContent === 'Open browser fallback'
+                    && a.getClientRects().length)""", timeout=120_000)
             assert page.locator("#watch-error").inner_text() == ""
+            link.wait_for(state="visible")
             with page.expect_popup() as popup:
                 link.click()
             replay = popup.value

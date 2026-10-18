@@ -457,10 +457,14 @@ class ParticipantUiApiTests(unittest.TestCase):
 
     def test_reference_is_latest_saved_and_leaves_original_contract_intact(self) -> None:
         from racing_event.ppo import FixedMLPActorCritic
+        from racing_event.observation import RunningObservationNormalizer
 
         config = SimulationConfig.from_file(self.root / "run_config.json")
         contract, _ = TrainingContract.load(Path(self.form["artifact_dir"]) / "training_contract.json")
-        contract.save(self.root / "training_contract.json")
+        normalizer = RunningObservationNormalizer(contract.observation.size)
+        normalizer.update(np.ones((2, contract.observation.size)))
+        self.assertTrue(normalizer.training)
+        contract.save(self.root / "training_contract.json", normalizer=normalizer)
         original = (self.root / "training_contract.json").read_bytes()
         FixedMLPActorCritic(observation_size=contract.observation.size).save_artifact(self.root / "policy.pt")
         status, result = self.post("/api/watch", {**self.form, "source": "reference"})
