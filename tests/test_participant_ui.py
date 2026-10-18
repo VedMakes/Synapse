@@ -8,6 +8,7 @@ import os
 import json
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,39 @@ from tools.participant_ui import PAGE, ROOT, TrainingProcess, build_training_com
 
 
 class ParticipantUiTests(unittest.TestCase):
+    def test_standalone_cli_starts_without_pythonpath_from_another_directory(self) -> None:
+        with socket.socket() as reservation:
+            reservation.bind(("127.0.0.1", 0))
+            port = reservation.getsockname()[1]
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as directory:
+            process = subprocess.Popen(
+                [sys.executable, str(ROOT / "tools/participant_ui.py"), "--port", str(port)],
+                cwd=directory, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    if process.poll() is not None:
+                        self.fail(process.communicate()[0])
+                    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+                    try:
+                        connection.request("GET", "/api/status")
+                        response = connection.getresponse()
+                        self.assertEqual(response.status, 200)
+                        self.assertEqual(json.loads(response.read())["state"], "idle")
+                        return
+                    except ConnectionRefusedError:
+                        time.sleep(.05)
+                    finally:
+                        connection.close()
+                self.fail("standalone dashboard did not become ready")
+            finally:
+                process.terminate()
+                process.communicate(timeout=5)
+
     def test_update_line_is_parsed_for_dashboard_metrics(self) -> None:
         line = "update 3: steps 768/10000 return=-2.500 lap=0.125 speed=21.250 m/s crash=0.250 off_track=0.375"
         self.assertEqual(

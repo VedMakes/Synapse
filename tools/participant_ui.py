@@ -24,6 +24,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
 from racing_event.reward import RewardConfig
