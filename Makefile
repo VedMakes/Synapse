@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: test render e1 e2 participant-setup participant-maps participant-smoke participant-ui evaluate-participant
+.PHONY: test render e1 e2 participant-setup participant-maps participant-smoke participant-ui evaluate-participant ui-browser-check
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -27,6 +27,10 @@ participant-smoke:
 
 participant-ui:
 	$(PYTHON) tools/participant_ui.py
+
+# Optional: install requirements-ui-qa.lock and Chromium before using this.
+ui-browser-check:
+	$(PYTHON) tools/check_ui_browser.py
 
 evaluate-participant:
 	$(PYTHON) tools/evaluate_participant.py --artifact-dir submission --track tracks/train/synthetic_oval.json --config config/simulation.json --repeats 2

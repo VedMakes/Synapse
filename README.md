@@ -92,11 +92,15 @@ Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
 library, binds to loopback, launches the participant-owned trainer through the
 launcher, and polls its bounded progress output. It does not implement a
 second model, environment, or budget. The reward editor and ray controls are
-input/configuration UI, not a second simulation authority. The bundled starter can
-also produce a reference replay for one public map; generic participant
-artifact replay is a separate submission boundary. The local watch action
-launches the Pygame replay renderer; the browser replay remains an explicit
-fallback for headless or remote preview.
+input/configuration UI, not a second simulation authority. The watch panel now
+explicitly selects the **latest saved reference artifact** or a **safe NumPy
+participant artifact**, plus **Pygame** or the **browser fallback**. It requires
+the selected run's `run_config.json` so custom rays cannot silently fall back to
+the defaults. Both choices produce browser-playback and JSON-download links.
+On a headless host, Pygame is honestly labeled a one-frame check; use the browser
+link for playback. Inputs stay locked during a run, and errors appear inline.
+The dashboard executes local code: keep it on loopback. Cross-origin mutations
+and non-loopback host names are rejected; it is not a public service.
 
 ## Setup
 
@@ -229,6 +233,14 @@ The evaluator reports `finished`, `dnf_crash`, `dnf_timeout`,
 finished, physical metrics, and the trajectory digest. A repeated evaluation
 must produce the same digest; a mismatch is treated as an error.
 
+Evaluation JSON also includes a bounded `diagnostics` summary: off-track seconds
+and longest excursion, positive/off-track/backward progress, maximum boundary
+excess, stalled runs, driven sector coverage, first forward sector-crossing
+ticks, and per-channel saturation/applied-command deltas. These are physical
+audits, not extra policy inputs, rewards, DNF rules, or leaderboard scores.
+Evaluation takes one explicit track at a time, never a randomly selected pool.
+Replay schema 1.1 and its trajectory digest remain unchanged.
+
 The measured local E2 artifact is retained outside Git at
 `artifacts/e2-stable/` (`policy.pt`, `policy.json`, and
 `training_contract.json`).
@@ -332,6 +344,19 @@ Use `--headless` with dummy SDL drivers for CI and one-frame smoke checks. The
 HTML viewer remains an optional dependency-free fallback for remote previews;
 Unity has been retired from the active product.
 
+The resizable viewer has clickable playback/speed controls, a drag-to-seek
+timeline, recorded-event markers and previous/next-event jumps. Arrows seek one
+exact tick, Shift + arrows seek one second, Home/End select the endpoints,
+Space toggles playback, and `?` shows help. Seeking pauses. The header labels the
+recorded final result separately from the currently selected tick's state.
+To save a deterministic paused QA image without a desktop:
+
+```bash
+.venv/bin/python tools/run_pygame.py \
+  --replay artifacts/replay/pygame-smoke.json \
+  --start-seconds 1 --screenshot artifacts/replay/viewer.png
+```
+
 ### Layer checks and container preview
 
 `make test` runs Python simulation/export/read-back checks. If Node is available
@@ -342,10 +367,30 @@ test is explicitly **skipped**. Run them directly with:
 node --test tests/replay_frontend.test.cjs
 ```
 
-No browser binary is installed by the project. The JS checks use a DOM/canvas
-test double, not a visual browser test. Pygame is checked through its dummy SDL
-driver; a real desktop screenshot pass remains a manual check when a display is
-available.
+The default checks do not install a browser. The JS checks use a DOM/canvas
+test double; Pygame uses dummy SDL. An **optional real Chromium smoke** exercises
+custom rays/weights, a tiny reference training run, browser replay, and
+390/800/1440px layouts, saving screenshots under `artifacts/ui-polish/`:
+
+```bash
+.venv/bin/python -m pip install -r requirements-ui-qa.lock
+PLAYWRIGHT_BROWSERS_PATH=.venv/qa-browsers \
+  .venv/bin/python -m playwright install chromium --only-shell
+PLAYWRIGHT_BROWSERS_PATH=.venv/qa-browsers \
+  .venv/bin/python tools/check_ui_browser.py
+```
+
+This optional check needs Chromium's Linux system libraries and fonts. The
+`ui-qa` Docker target installs them reproducibly without changing the default
+participant image:
+
+```bash
+docker build --target ui-qa -t synapse-ui-qa .
+docker run --rm synapse-ui-qa
+```
+
+It downloads QA tools at setup/build time, not during `make test`. Real-display
+Pygame interaction is still a separate manual check.
 
 To generate and serve a preview using the existing Python container:
 

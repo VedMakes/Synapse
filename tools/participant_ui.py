@@ -22,10 +22,13 @@ from threading import Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
-from racing_event.reward import RewardConfig, SIGNAL_NAMES
+from racing_event.reward import RewardConfig
+from racing_event.trajectory import MAX_REPLAY_BYTES, load_replay
+from tools.build_replay import build as build_browser_replay
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -37,6 +40,8 @@ UPDATE_PATTERN = re.compile(
 
 
 def _workspace_path(value: str, *, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{label} must be a non-empty workspace path")
     candidate = Path(value)
     if candidate.is_absolute():
         resolved = candidate.resolve()
@@ -49,7 +54,13 @@ def _workspace_path(value: str, *, label: str) -> Path:
     return resolved
 
 
-def _ready_python(*, require_torch: bool = False) -> Path:
+def _renderer_headless() -> bool:
+    return os.environ.get("SDL_VIDEODRIVER") in ("dummy", "offscreen") or (
+        sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY")
+    )
+
+
+def _ready_python(*, require_torch: bool = False, require_pygame: bool = False, headless: bool = False) -> Path:
     candidates = [ROOT / ".venv" / "bin" / "python", Path(sys.executable)]
     checked: list[str] = []
     for candidate in candidates:
@@ -59,6 +70,12 @@ def _ready_python(*, require_torch: bool = False) -> Path:
             probe = "import numpy"
             if require_torch:
                 probe += "; import torch"
+            if require_pygame:
+                # Import alone does not prove SDL can actually open a surface.
+                probe += "; import pygame; pygame.display.init(); pygame.display.set_mode((320, 240))"
+                if not headless:
+                    probe += "; assert pygame.display.get_driver() not in ('dummy', 'offscreen'), 'SDL selected a headless driver; use Browser or an explicit dummy-driver check'"
+                probe += "; pygame.quit()"
             result = subprocess.run(
                 [str(candidate), "-c", probe],
                 cwd=ROOT,
@@ -66,6 +83,9 @@ def _ready_python(*, require_torch: bool = False) -> Path:
                 capture_output=True,
                 timeout=20,
                 check=False,
+                env={**os.environ, "PYGAME_HIDE_SUPPORT_PROMPT": "1", **(
+                    {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"} if headless else {}
+                )},
             )
         except (OSError, subprocess.SubprocessError) as exc:
             checked.append(f"{candidate}: {exc}")
@@ -77,7 +97,7 @@ def _ready_python(*, require_torch: bool = False) -> Path:
             f"{candidate}: {detail[-1] if detail else ('numpy/torch import failed' if require_torch else 'numpy import failed')}"
         )
     raise ValueError(
-        "SYNAPSE environment dependencies are not ready. Run "
+        "SYNAPSE Python/SDL readiness check failed. Run "
         f"'{sys.executable} tools/setup_participant.py', then start the UI again. "
         + " | ".join(checked)
     )
@@ -92,9 +112,12 @@ def parse_update_line(line: str) -> dict[str, object] | None:
         "budget_used": int(match.group("used")),
         "budget_steps": int(match.group("budget")),
     }
-    for name in ("return", "lap", "speed", "crash", "off_track"):
-        raw = match.group(name)
-        values[name] = None if raw == "n/a" else float(raw)
+    try:
+        for name in ("return", "lap", "speed", "crash", "off_track"):
+            raw = match.group(name)
+            values[name] = None if raw == "n/a" else _finite_float(raw, name)
+    except ValueError:
+        return None  # Malformed trainer telemetry is still logged, not authoritative.
     return values
 
 
@@ -213,6 +236,8 @@ def _prepare_run_inputs(
     sensors["ray_angles_deg"] = angles
     base_data["sensors"] = sensors
     output_dir.mkdir(parents=True, exist_ok=True)
+    for name in ("run_config.json", "reward_config.json", "run_identity.json"):
+        _workspace_path(str(output_dir / name), label=name)
     effective_config_path = output_dir / "run_config.json"
     candidate_config_path = output_dir / f".run_config.{os.getpid()}.candidate"
     candidate_reward_path = output_dir / f".reward_config.{os.getpid()}.candidate"
@@ -300,11 +325,11 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     n_envs = positive_int("n_envs", 4)
     rollout_length = positive_int("rollout_length", 64)
     seed = positive_int("seed", 17)
+    reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
+    python = _ready_python(require_torch=reference_trainer)
     effective_config, effective_reward, _, _ = _prepare_run_inputs(
         form, config=config, output_dir=output_dir, reward_path=reward,
     )
-    reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
-    python = _ready_python(require_torch=reference_trainer)
     command = [
         str(python),
         str(ROOT / "tools" / "train_participant.py"),
@@ -341,32 +366,42 @@ class TrainingProcess:
             current = dict(self._status)
             current["lines"] = list(self._status["lines"])
             current["metrics"] = dict(self._status["metrics"])
-            current["running"] = self._process is not None and self._process.poll() is None
-            if not current["running"] and current.get("state") == "stopping":
-                current["state"] = "stopped"
+            # Keep inputs frozen until the output reader has finalized this run.
+            current["running"] = self._process is not None
             return current
 
     def start(self, form: dict[str, object]) -> dict[str, object]:
-        command = build_training_command(form)
-        return self.start_command(command, kind="training")
-
-    def start_command(self, command: list[str], *, kind: str) -> dict[str, object]:
         with self._lock:
-            if self._process is not None and (self._process.poll() is None or self._status.get("state") == "stopping"):
-                raise RuntimeError("a training process is already running")
-            self._status = {
-                "state": "starting",
-                "kind": kind,
-                "lines": [],
-                "metrics": {},
-                "error": None,
-                "started_at": time.time(),
-                "command": command,
-            }
+            self._ensure_idle()
+            command = build_training_command(form)
+            self._start_locked(command, kind="training")
+        return self.snapshot()
+
+    def _ensure_idle(self) -> None:
+        if self._process is not None:
+            raise RuntimeError("a process is already running or finishing")
+
+    def start_command(self, command: list[str], *, kind: str, env: dict[str, str] | None = None) -> dict[str, object]:
+        with self._lock:
+            self._ensure_idle()
+            self._start_locked(command, kind=kind, env=env)
+        return self.snapshot()
+
+    def _start_locked(self, command: list[str], *, kind: str, env: dict[str, str] | None = None) -> None:
+        self._status = {
+            "state": "starting",
+            "kind": kind,
+            "lines": [],
+            "metrics": {},
+            "error": None,
+            "started_at": time.time(),
+            "command": command,
+        }
+        try:
             self._process = subprocess.Popen(
                 command,
                 cwd=ROOT,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                env={**os.environ, "PYTHONUNBUFFERED": "1", **(env or {})},
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
@@ -375,7 +410,9 @@ class TrainingProcess:
             )
             self._thread = Thread(target=self._read_output, args=(self._process,), daemon=True)
             self._thread.start()
-        return self.snapshot()
+        except OSError as exc:
+            self._status.update(state="failed", error=str(exc))
+            raise
 
     def stop(self) -> dict[str, object]:
         with self._lock:
@@ -405,6 +442,8 @@ class TrainingProcess:
             for raw_line in process.stdout:
                 line = raw_line.rstrip("\n")
                 with self._lock:
+                    if self._process is not process:
+                        continue
                     lines = self._status["lines"]
                     assert isinstance(lines, list)
                     lines.append(line)
@@ -412,32 +451,39 @@ class TrainingProcess:
                     parsed = parse_update_line(line)
                     if parsed is not None:
                         self._status["metrics"] = parsed
-                    self._status["state"] = "running"
+                    if self._status["state"] != "stopping":
+                        self._status["state"] = "running"
             return_code = process.wait()
             with self._lock:
+                if self._process is not process:
+                    return
                 self._status["returncode"] = return_code
-                if return_code == 0:
-                    self._status["state"] = "completed"
-                elif self._status["state"] == "stopping":
+                if self._status["state"] == "stopping":
                     self._status["state"] = "stopped"
+                elif return_code == 0:
+                    self._status["state"] = "completed"
                 else:
                     self._status["state"] = "failed"
-                    self._status["error"] = f"trainer exited with status {return_code}"
+                    self._status["error"] = f"{self._status['kind']} exited with status {return_code}"
         except Exception as exc:  # pragma: no cover - defensive process boundary
             with self._lock:
-                self._status["state"] = "failed"
-                self._status["error"] = str(exc)
+                if self._process is process:
+                    self._status["state"] = "failed"
+                    self._status["error"] = str(exc)
         finally:
             if process.stdout is not None:
                 process.stdout.close()
             with self._lock:
-                self._process = None
+                if self._process is process:
+                    self._process = None
 
 
 PROCESS = TrainingProcess()
 RENDER_PROCESS = TrainingProcess()
 REPLAY_OUTPUTS: dict[str, Path] = {}
 REPLAY_LOCK = Lock()
+# Serializes export with start/setup preparation; duplicate requests fail promptly.
+ACTION_LOCK = Lock()
 
 
 def public_maps() -> list[dict[str, str]]:
@@ -454,44 +500,69 @@ def public_maps() -> list[dict[str, str]]:
     return maps
 
 
-def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
+def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
+    """Export the explicitly selected artifact; renderers only read the result."""
+    source, renderer = form.get("source"), form.get("renderer")
+    if source not in ("reference", "artifact"):
+        raise ValueError("source must explicitly be reference or artifact")
+    if renderer not in ("pygame", "browser"):
+        raise ValueError("renderer must explicitly be pygame or browser")
+    map_id = form.get("map_id")
     if not isinstance(map_id, str) or not map_id:
         raise ValueError("map_id must be selected from the public SYNAPSE maps")
     selected = next((item for item in public_maps() if item["id"] == map_id), None)
     if selected is None:
         raise ValueError("unknown public SYNAPSE map")
-    output_dir = _workspace_path(output_dir_value, label="output_dir")
-    weights = output_dir / "policy.pt"
-    metadata = output_dir / "policy.json"
-    contract = output_dir / "training_contract.json"
-    if not all(path.exists() for path in (weights, metadata, contract)):
+    output_dir = _workspace_path(form.get("output_dir", "participant_run"), label="output_dir")
+    config_path = _workspace_path(str(output_dir / "run_config.json"), label="saved run config")
+    if not config_path.is_file():
+        raise ValueError("saved run_config.json is required; choose the run directory matching this artifact's rays/config")
+    artifact_dir = None
+    if source == "artifact":
+        artifact_dir = _workspace_path(form.get("artifact_dir"), label="artifact_dir")
+        if not artifact_dir.is_dir():
+            raise ValueError("artifact_dir must be an existing safe NumPy artifact directory")
+    reference_files = [
+        _workspace_path(str(output_dir / name), label=name)
+        for name in ("policy.pt", "policy.json", "training_contract.json")
+    ] if source == "reference" else []
+    if source == "reference" and not all(path.is_file() for path in reference_files):
         raise ValueError(
             "the bundled reference starter must produce policy.pt, policy.json, and "
             "training_contract.json before its replay can be built"
         )
-    python = _ready_python(require_torch=True)
-    replay_dir = output_dir / "replays"
+    python = _ready_python(require_torch=source == "reference")
+    replay_dir = _workspace_path(str(output_dir / "replays"), label="replay directory")
+    if artifact_dir is not None and (replay_dir == artifact_dir or artifact_dir in replay_dir.parents):
+        raise ValueError("replay directory must stay outside the participant artifact directory")
     replay_dir.mkdir(parents=True, exist_ok=True)
-    replay_path = replay_dir / f"{map_id}.json"
-    participant_id = f"SYNAPSE-reference-{map_id}"
-    config_path = output_dir / "run_config.json"
-    if not config_path.exists():
-        config_path = ROOT / "config" / "simulation.json"
-    contract_payload = json.loads(contract.read_text(encoding="utf-8"))
-    contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
+    # Opaque per-build URLs prevent one source/run from replacing another tab's replay.
+    replay_id = uuid4().hex
+    replay_path = replay_dir / f"{replay_id}.json"
+    html_path = replay_path.with_suffix(".html")
     temporary_contract: Path | None = None
-    fd, temporary_name = tempfile.mkstemp(prefix=f".{map_id}.contract.", suffix=".json", dir=replay_dir)
-    temporary_contract = Path(temporary_name)
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as stream:
-            json.dump(contract_payload, stream, sort_keys=True, indent=2, allow_nan=False)
-            stream.write("\n")
         export_command = [
             str(python), str(ROOT / "tools" / "export_replay.py"),
-            "--weights", str(weights), "--metadata", str(metadata), "--contract", str(temporary_contract),
             "--track", selected["path"], "--config", str(config_path),
-            "--participant-id", participant_id, "--output", str(replay_path),
+            "--participant-id", f"SYNAPSE-{source}-{map_id}", "--output", str(replay_path),
         ]
+        if artifact_dir is not None:
+            # The generic evaluator validates the original, hashed training contract.
+            export_command += ["--artifact-dir", str(artifact_dir)]
+        else:
+            weights, metadata, contract = reference_files
+            contract_payload = json.loads(contract.read_text(encoding="utf-8"))
+            if not isinstance(contract_payload, dict):
+                raise ValueError("reference training_contract.json must be a JSON object")
+            # Reference evaluation expects a single-map contract. Only this temporary
+            # reference copy is adapted; generic artifacts are never rewritten.
+            contract_payload["tracks"] = {"ids": [map_id], "hashes": [selected["content_hash"]]}
+            fd, temporary_name = tempfile.mkstemp(prefix=".reference-contract.", suffix=".json", dir=replay_dir)
+            temporary_contract = Path(temporary_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as stream:
+                json.dump(contract_payload, stream, sort_keys=True, allow_nan=False)
+            export_command += ["--weights", str(weights), "--metadata", str(metadata), "--contract", str(temporary_contract)]
         subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
     except subprocess.CalledProcessError as exc:
         detail = (exc.stderr or exc.stdout or "replay command failed").strip()
@@ -499,27 +570,41 @@ def build_best_run(map_id: str, output_dir_value: str) -> dict[str, object]:
     finally:
         if temporary_contract is not None:
             temporary_contract.unlink(missing_ok=True)
-    with replay_path.open(encoding="utf-8") as stream:
-        replay = json.load(stream)
-    renderer_python = _ready_python(require_torch=False)
-    renderer_command = [str(renderer_python), str(ROOT / "tools" / "run_pygame.py"), "--replay", str(replay_path)]
-    if not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
-        renderer_command.append("--headless")
-    renderer = RENDER_PROCESS.start_command(
-        renderer_command,
-        kind="pygame-renderer",
-    )
+    replay = load_replay(replay_path)
+    build_browser_replay(replay_path, html_path)
     with REPLAY_LOCK:
-        REPLAY_OUTPUTS[map_id] = replay_path
-    return {
+        REPLAY_OUTPUTS[replay_id] = replay_path
+        while len(REPLAY_OUTPUTS) > 32:
+            del REPLAY_OUTPUTS[next(iter(REPLAY_OUTPUTS))]
+    result = {
         "map_id": map_id,
+        "source": source,
+        "source_label": "Latest saved reference artifact" if source == "reference" else "Safe NumPy participant artifact",
         "display_name": selected["display_name"],
-        "status": replay.get("result", {}).get("status"),
-        "lap_time_s": replay.get("result", {}).get("lap_time_s"),
-        "renderer": "pygame",
+        "status": replay["result"]["status"],
+        "lap_time_s": replay["result"]["lap_time_s"],
+        "renderer": renderer,
+        "headless": _renderer_headless(),
         "replay_path": str(replay_path),
-        "renderer_state": renderer.get("state"),
+        "browser_url": f"/replays/{replay_id}",
+        "download_url": f"/replays/{replay_id}/download",
+        "renderer_state": "ready",
     }
+    if renderer == "pygame":
+        try:
+            headless = result["headless"]
+            renderer_python = _ready_python(require_pygame=True, headless=headless)
+            command = [str(renderer_python), str(ROOT / "tools" / "run_pygame.py"), "--replay", str(replay_path)]
+            if headless:
+                command.append("--headless")
+            snapshot = RENDER_PROCESS.start_command(command, kind="pygame-renderer", env=(
+                {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"} if headless else None
+            ))
+            result["renderer_state"] = snapshot["state"]
+        except (ValueError, RuntimeError, OSError) as exc:
+            # Keep the selected renderer honest and the validated fallback reachable.
+            result.update(renderer_state="unavailable", renderer_error=str(exc))
+    return result
 
 
 PAGE = r'''<!doctype html>
@@ -530,7 +615,8 @@ PAGE = r'''<!doctype html>
   <title>SYNAPSE · Training Console</title>
   <style>
      :root { color-scheme: dark; --bg: #05070d; --panel: #0b111b; --panel2: #101b29; --line: #20354a; --grid: #153044; --muted: #91a7bb; --text: #eef7ff; --cyan: #45f3ff; --pink: #ff3fa4; --amber: #ffd166; --acid: #b7f23a; --danger: #ff657c; --ink: #061018; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
-     * { box-sizing: border-box; }
+      * { box-sizing: border-box; }
+      [hidden] { display: none !important; }
      body { position: relative; min-height: 100vh; margin: 0; overflow-x: hidden; color: var(--text); background: radial-gradient(circle at 78% -5%, #183d49 0, transparent 34%), radial-gradient(circle at 8% 45%, #251b39 0, transparent 30%), var(--bg); line-height: 1.45; }
      body::before { position: fixed; inset: 0; z-index: 0; pointer-events: none; content: ""; opacity: .3; background-image: linear-gradient(115deg, transparent 0 46%, #45f3ff12 47%, transparent 48% 100%), repeating-linear-gradient(0deg, transparent 0 31px, #45f3ff0a 32px, transparent 33px), repeating-linear-gradient(90deg, transparent 0 31px, #ff3fa40b 32px, transparent 33px); mask-image: linear-gradient(to bottom, #000, transparent 86%); }
      body::after { position: fixed; inset: 0; z-index: 0; pointer-events: none; content: ""; opacity: .1; background: repeating-linear-gradient(180deg, transparent 0 3px, #fff 4px, transparent 5px); mix-blend-mode: screen; }
@@ -610,7 +696,7 @@ PAGE = r'''<!doctype html>
       #ray-diagram .diagram-grid { fill: url(#diagram-grid); opacity: .52; }
       #ray-diagram .range-arc { fill: none; stroke: #45f3ff38; stroke-dasharray: 5 8; stroke-width: 2; }
       #ray-diagram .range-label { fill: #91a7bb; font: 10px ui-monospace, monospace; }
-      #ray-diagram .ray-line { stroke: var(--pink); stroke-width: 2.5; opacity: .86; filter: url(#ray-glow); stroke-linecap: round; }
+       #ray-diagram .ray-line { stroke: var(--pink); stroke-width: 2.5; opacity: .86; stroke-linecap: round; }
       #ray-diagram .ray-line.center { stroke: var(--cyan); stroke-width: 3.5; }
       #ray-diagram .ray-endpoint { fill: var(--pink); stroke: #fef6ff; stroke-width: 1.5; }
       #ray-diagram .ray-endpoint.center { fill: var(--cyan); }
@@ -680,7 +766,7 @@ PAGE = r'''<!doctype html>
                    <filter id="car-shadow"><feGaussianBlur stdDeviation="5"></feGaussianBlur></filter>
                  </defs>
                  <rect class="diagram-grid" x="0" y="0" width="640" height="430"></rect>
-                 <path class="range-arc" d="M126 270 A194 194 0 0 0 514 270"></path>
+                  <path class="range-arc" d="M126 270 A194 194 0 0 1 514 270"></path>
                  <text class="range-label" x="320" y="54" text-anchor="middle">MAX RANGE / 100 M</text>
                  <g id="ray-lines" aria-hidden="true"></g>
                  <g id="ray-callouts" aria-hidden="true"></g>
@@ -708,7 +794,8 @@ PAGE = r'''<!doctype html>
             <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="64"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
           </div>
-          <div class="actions"><button id="start" class="primary">Start / resume participant training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
+          <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
+          <p id="run-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
           <p class="hint">The trainer script is yours to replace. If NumPy is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
         </div>
       </section>
@@ -720,7 +807,17 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>UI reward function</strong><span>All nine published signals are editable as static weights; the generated file is saved with the run.</span></div>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
-          <div class="watch"><label for="watch-map">Watch reference artifact for map:</label><select id="watch-map"><option>Loading SYNAPSE maps…</option></select><button id="watch">Build / watch reference replay</button><div id="watch-result" class="watch-result">The bundled starter can build a deterministic replay from its reference artifact. A generic participant artifact exporter is a separate event boundary.</div></div>
+          <div class="watch">
+            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option></select>
+            <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="participant_run/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
+            <label for="watch-map">Watch artifact for map:</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
+            <label for="watch-renderer">Read-only renderer</label><select id="watch-renderer"><option value="pygame">Pygame · local display / headless check</option><option value="browser">Browser · explicit headless / remote fallback</option></select>
+            <p id="watch-hint" class="hint">Uses the selected run's saved run_config.json, including ordered rays. Reference means latest saved, not best. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
+            <button id="watch" disabled aria-describedby="watch-hint watch-error">Build / watch replay</button>
+            <p id="watch-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
+            <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
+            <p id="renderer-status" class="watch-result" role="status" aria-live="polite"></p>
+          </div>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
         </div>
       </aside>
@@ -728,7 +825,7 @@ PAGE = r'''<!doctype html>
         <div class="panel-head"><h2>03 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
-          <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">9,? remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
+          <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
           <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
           <div id="log" class="log">Waiting for a local trainer process…</div>
         </div>
@@ -742,7 +839,8 @@ PAGE = r'''<!doctype html>
      const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
-     const svgNamespace = "http://www.w3.org/2000/svg";
+      const svgNamespace = "http://www.w3.org/2000/svg";
+      let pending = null, latestStatus = {}, actionVersion = 0, lastWatch = null;
      function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
      function rayPreview() {
@@ -752,7 +850,7 @@ PAGE = r'''<!doctype html>
        const values = entries.filter(entry => entry.valid).map(entry => entry.value);
        const rayCount = Number($("ray-count").value);
        let error = null;
-       if (!Number.isInteger(rayCount) || rayCount < 1 || rayCount > 16) error = "Ray count must be an integer from 1 to 16.";
+        if (!/^\d+$/.test($("ray-count").value.trim()) || !Number.isInteger(rayCount) || rayCount < 1 || rayCount > 16) error = "Ray count must be an integer from 1 to 16.";
        else if (entries.some(entry => !entry.valid)) error = "Every ray angle must be a finite number.";
        else if (values.length !== rayCount) error = `Count mismatch: ${rayCount} rays requested, ${values.length} angles supplied.`;
        else if (values.some(value => value < -90 || value > 90)) error = "Angles must stay within -90° to +90°.";
@@ -808,25 +906,81 @@ PAGE = r'''<!doctype html>
        $("ray-count").setAttribute("aria-invalid", preview.error ? "true" : "false"); $("ray-angles").setAttribute("aria-invalid", preview.error ? "true" : "false");
      }
      function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
-    function render(data) {
+     function render(data) {
+       latestStatus = data;
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
       $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
-      $("start").disabled = Boolean(data.running) || state === "stopping"; $("stop").disabled = !Boolean(data.running); $("setup").disabled = Boolean(data.running) || state === "stopping"; $("watch").disabled = Boolean(data.running);
-      $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
-    }
-    async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
-    async function refresh() { try { render(await request("/api/status")); } catch (error) { $("state-label").textContent = error.message; } }
-    async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.innerHTML = ""; maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); } catch (error) { $("watch-result").textContent = error.message; } }
-    $("start").addEventListener("click", async () => { try { render(await request("/api/start", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(formData()) })); } catch (error) { alert(error.message); } });
-    $("stop").addEventListener("click", async () => { try { render(await request("/api/stop", { method: "POST" })); } catch (error) { alert(error.message); } });
-    $("setup").addEventListener("click", async () => { try { render(await request("/api/setup", { method: "POST" })); } catch (error) { alert(error.message); } });
-     $("watch").addEventListener("click", async () => { try { const result = await request("/api/watch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ map_id: $("watch-map").value, output_dir: $("output-dir").value }) }); const target = $("watch-result"); target.textContent = `${result.display_name} · ${result.status || "no result"} · ${result.lap_time_s === null || result.lap_time_s === undefined ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · Pygame renderer: ${result.renderer_state || "starting"}`; } catch (error) { $("watch-result").textContent = error.message; } });
-     ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
-     fields.forEach(id => $(id).addEventListener("change", refresh));
-     renderRayDiagram(); refreshMaps(); refresh(); setInterval(refresh, 700);
+       $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
+       if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
+         $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
+       }
+       syncControls();
+     }
+     function trainingError() {
+       for (const id of ["trainer", "track-dir", "output-dir"]) if (!$(id).value.trim()) return `${id} is required.`;
+       for (const id of ["steps", "budget-steps", "n-envs", "rollout-length", "seed"]) {
+         const value = Number($(id).value);
+         if (!/^\d+$/.test($(id).value.trim()) || !Number.isSafeInteger(value) || value <= 0) return `${id} must be a positive integer.`;
+       }
+       for (const name of signalNames) {
+         const raw = $("reward-" + name).value, value = Number(raw);
+         if (!raw.trim() || !Number.isFinite(value) || value < -100 || value > 100) return `${name} weight must be finite and within [-100, 100].`;
+       }
+       return rayPreview().error;
+     }
+     function syncControls() {
+       const active = Boolean(latestStatus.running) || latestStatus.state === "stopping";
+       const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
+       fields.forEach(id => { $(id).disabled = busy; });
+       $("start").disabled = busy || Boolean(trainingError());
+       $("setup").disabled = busy;
+       $("stop").disabled = Boolean(pending) || !active || latestStatus.state === "stopping";
+       const watchBusy = busy || Boolean(latestStatus.renderer && latestStatus.renderer.running);
+       ["watch-source", "watch-map", "watch-renderer"].forEach(id => { $(id).disabled = watchBusy; });
+       $("artifact-label").hidden = $("watch-source").value !== "artifact";
+       $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
+       $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value === "artifact" && !$("artifact-dir").value.trim());
+       $("watch").textContent = pending === "watch" ? "Building replay…" : "Build / watch replay";
+       $("watch").setAttribute("aria-busy", String(pending === "watch"));
+     }
+     async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
+     async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
+     async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
+     function renderWatch(result) {
+       lastWatch = result;
+       const target = $("watch-result");
+       target.textContent = `${result.source_label} · ${result.display_name} · ${result.status} · ${result.lap_time_s == null ? "no lap time" : `${Number(result.lap_time_s).toFixed(3)} s`} · `;
+       for (const [label, url, download] of [["Open browser fallback", result.browser_url, false], ["Download replay JSON", result.download_url, true]]) {
+         const link = document.createElement("a"); link.textContent = label; link.href = url;
+         if (download) link.download = "replay.json"; else { link.target = "_blank"; link.rel = "noopener"; }
+         target.appendChild(link); target.appendChild(document.createTextNode(" · "));
+       }
+       $("renderer-status").textContent = result.renderer === "browser" ? "Browser fallback ready · open the link above on this device." : `${result.headless ? "Headless Pygame · one-frame check only; use the browser link for playback" : "Pygame on the server's local display"} · ${result.renderer_state}`;
+       if (result.renderer_error) $("watch-error").textContent = result.renderer_error;
+     }
+     async function action(name, payload = {}) {
+       if (pending || $(name).disabled) return;
+       if (name === "start" && trainingError()) return;
+       pending = name; actionVersion++;
+       const errorTarget = $(name === "watch" ? "watch-error" : "run-error"); errorTarget.textContent = "";
+       syncControls();
+       try {
+         const result = await request(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+         if (name === "watch") renderWatch(result); else render(result);
+       } catch (error) { errorTarget.textContent = error.message; errorTarget.focus(); }
+       finally { pending = null; actionVersion++; syncControls(); refresh(); }
+     }
+     $("start").addEventListener("click", () => action("start", formData()));
+     $("stop").addEventListener("click", () => action("stop"));
+     $("setup").addEventListener("click", () => action("setup"));
+     $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
+      ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
+      fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; syncControls(); }); });
+      ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+      renderRayDiagram(); render({}); refreshMaps(); refresh(); setInterval(refresh, 700);
   </script>
 </body>
 </html>'''
@@ -835,11 +989,28 @@ PAGE = r'''<!doctype html>
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def _send(self, status: int, content_type: str, body: bytes) -> None:
+    def _local_request(self, *, mutation: bool = False) -> bool:
+        # The dashboard can execute local code. Do not let a remote web page
+        # trigger setup/start/stop, or use DNS rebinding to read local results.
+        allowed = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
+        host = self.headers.get("Host", "").lower()
+        origin = self.headers.get("Origin")
+        invalid_origin = origin is not None and origin.lower() != f"http://{host}"
+        cross_site = mutation and self.headers.get("Sec-Fetch-Site") == "cross-site"
+        if host not in allowed or invalid_origin or cross_site:
+            self.close_connection = True
+            self._json(403, {"error": "dashboard requests must come from its local loopback origin"})
+            return False
+        return True
+
+    def _send(self, status: int, content_type: str, body: bytes, *, download: bool = False) -> None:
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        if download:
+            self.send_header("Content-Disposition", 'attachment; filename="replay.json"')
         self.end_headers()
         self.wfile.write(body)
 
@@ -847,11 +1018,13 @@ class Handler(BaseHTTPRequestHandler):
         self._send(status, "application/json; charset=utf-8", json.dumps(payload, allow_nan=False).encode("utf-8"))
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        if not self._local_request():
+            return
         path = urlparse(self.path).path
         if path == "/":
             self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
         elif path == "/api/status":
-            self._json(200, PROCESS.snapshot())
+            self._json(200, {**PROCESS.snapshot(), "action_busy": ACTION_LOCK.locked(), "renderer": RENDER_PROCESS.snapshot()})
         elif path == "/api/maps":
             self._json(200, public_maps())
         elif path == "/api/report":
@@ -861,56 +1034,82 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(200, "text/markdown; charset=utf-8", report.read_bytes())
         elif path.startswith("/replays/"):
-            map_id = unquote(path.removeprefix("/replays/")).strip("/")
+            replay_id, _, action = unquote(path.removeprefix("/replays/")).partition("/")
             with REPLAY_LOCK:
-                replay_path = REPLAY_OUTPUTS.get(map_id)
-            if replay_path is None or not replay_path.exists():
-                self._json(404, {"error": "replay has not been built for this map yet"})
-            else:
-                self._json(410, {"error": "Pygame is the active renderer; launch the local renderer from the dashboard or tools/run_pygame.py", "replay_path": str(replay_path)})
+                replay_path = REPLAY_OUTPUTS.get(replay_id)
+            if replay_path is None or action not in ("", "download"):
+                self._json(404, {"error": "replay link is unknown or expired; build it again"})
+                return
+            try:
+                replay_path = _workspace_path(str(replay_path), label="replay")
+                load_replay(replay_path)
+                download = action == "download"
+                target = replay_path if download else replay_path.with_suffix(".html")
+                target = _workspace_path(str(target), label="browser replay")
+                limit = MAX_REPLAY_BYTES if download else 2 * MAX_REPLAY_BYTES + 1024 * 1024
+                with target.open("rb") as stream:
+                    body = stream.read(limit + 1)
+                if len(body) > limit:
+                    raise ValueError("replay exceeds byte limit")
+                self._send(200, "application/json" if download else "text/html; charset=utf-8", body, download=download)
+            except (ValueError, OSError) as exc:
+                self._json(400, {"error": str(exc)})
         else:
             self._json(404, {"error": "not found"})
 
+    def _read_form(self) -> dict[str, object]:
+        lengths = self.headers.get_all("Content-Length", [])
+        if self.headers.get("Transfer-Encoding") or len(lengths) > 1:
+            raise ValueError("use one bounded Content-Length; transfer encoding is unsupported")
+        raw = lengths[0] if lengths else "0"
+        if not re.fullmatch(r"[0-9]{1,8}", raw.strip()):
+            raise ValueError("Content-Length must be a non-negative bounded integer")
+        length = int(raw)
+        if length > 16 * 1024:
+            raise ValueError("request is too large")
+        self.connection.settimeout(10)
+        payload = self.rfile.read(length)
+        if len(payload) != length:
+            raise ValueError("incomplete request body")
+        form = json.loads(payload.decode("utf-8")) if length else {}
+        if not isinstance(form, dict):
+            raise ValueError("request must be a JSON object")
+        return form
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
-        path = urlparse(self.path).path
-        if path == "/api/stop":
-            self._json(200, PROCESS.stop())
+        # Close even on rejected lengths, so unread bytes cannot become a request.
+        self.close_connection = True
+        if not self._local_request(mutation=True):
             return
-        if path == "/api/setup":
-            try:
-                command = [sys.executable, str(ROOT / "tools" / "setup_participant.py")]
-                self._json(200, PROCESS.start_command(command, kind="setup"))
-            except (RuntimeError, OSError, ValueError, OverflowError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path == "/api/watch":
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-                if length > 16 * 1024:
-                    raise ValueError("request is too large")
-                form = json.loads(self.rfile.read(length).decode("utf-8"))
-                if not isinstance(form, dict):
-                    raise ValueError("request must be a JSON object")
-                if PROCESS.snapshot().get("running"):
-                    raise RuntimeError("stop training before building a best-run replay")
-                result = build_best_run(form.get("map_id", ""), str(form.get("output_dir", "participant_run")))
-                self._json(200, result)
-            except (ValueError, RuntimeError, OSError, OverflowError, json.JSONDecodeError, subprocess.SubprocessError) as exc:
-                self._json(400, {"error": str(exc)})
-            return
-        if path != "/api/start":
-            self._json(404, {"error": "not found"})
-            return
+        acquired = False
         try:
-            length = int(self.headers.get("Content-Length", "0"))
-            if length > 16 * 1024:
-                raise ValueError("request is too large")
-            form = json.loads(self.rfile.read(length).decode("utf-8"))
-            if not isinstance(form, dict):
-                raise ValueError("request must be a JSON object")
-            self._json(200, PROCESS.start(form))
-        except (ValueError, RuntimeError, OSError, OverflowError, json.JSONDecodeError) as exc:
+            form = self._read_form()
+            path = urlparse(self.path).path
+            if path == "/api/stop":
+                self._json(200, PROCESS.stop())
+                return
+            if path not in ("/api/start", "/api/setup", "/api/watch"):
+                self._json(404, {"error": "not found"})
+                return
+            acquired = ACTION_LOCK.acquire(blocking=False)
+            if not acquired:
+                raise RuntimeError("a dashboard action is already in progress")
+            if path == "/api/watch":
+                if PROCESS.snapshot()["running"]:
+                    raise RuntimeError("stop training before building a replay")
+                if RENDER_PROCESS.snapshot()["running"]:
+                    raise RuntimeError("close the current Pygame replay before building another")
+                result = build_watch_replay(form)
+            elif path == "/api/setup":
+                result = PROCESS.start_command([sys.executable, str(ROOT / "tools" / "setup_participant.py")], kind="setup")
+            else:
+                result = PROCESS.start(form)
+            self._json(200, result)
+        except (ValueError, RuntimeError, OSError, OverflowError, UnicodeError, RecursionError, subprocess.SubprocessError) as exc:
             self._json(400, {"error": str(exc)})
+        finally:
+            if acquired:
+                ACTION_LOCK.release()
 
     def log_message(self, format: str, *args: object) -> None:
         print(f"[participant-ui] {format % args}")
@@ -927,6 +1126,8 @@ def main() -> None:
     args = parse_args()
     if not 1 <= args.port <= 65535:
         raise SystemExit("--port must be between 1 and 65535")
+    if args.host not in ("127.0.0.1", "localhost"):
+        raise SystemExit("participant UI executes local code; --host must be 127.0.0.1 or localhost")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
     print(f"SYNAPSE participant UI: http://{args.host}:{args.port}/")
     print("Press Ctrl-C to stop the local server.")

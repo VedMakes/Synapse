@@ -98,9 +98,26 @@ console for the same `tools/train_participant.py` command. Its run flow is:
 The dashboard is a loopback presentation/controller layer, not a network
 service or a second model, reward engine, simulator, or scoring authority. It
 launches the existing trainer and writes the selected configuration beside the
-run. The **Watch reference artifact for map** action is a reference-only replay
-path after a bundled starter run; generic artifact evaluation is documented
-below.
+run. After training, use the watch panel:
+
+1. Keep **Output directory** pointed at the selected run. Its saved
+   `run_config.json` is required, including the actual ray order used to train.
+   CLI users can save their effective config beside the run under that name.
+2. Choose **Reference · latest saved artifact**, or **Safe NumPy artifact** and
+   enter its workspace-relative artifact directory. The UI never substitutes a
+   reference model for a failed participant artifact.
+3. Choose a public map and either **Pygame** or **Browser · explicit headless /
+   remote**. The model's saved contract/config must match; generic artifact
+   contracts and weights are never rewritten.
+4. Click **Build / watch replay**. Use **Open browser fallback** to play in this
+   browser or **Download replay JSON** to keep the validated recording.
+
+“Latest saved” is not a claim of best-checkpoint selection. The UI's last 32
+replay links live for the current server session; saved files remain under the
+run's `replays/` directory. Inputs are disabled while a process/action is active,
+and validation failures appear inline rather than in blocking alert dialogs.
+The server rejects cross-origin actions and non-loopback hosts because it can
+launch local code. Do not expose it as a public training/upload service.
 
 The dashboard also has a **Set up / repair Python** button. If the UI detects
 that NumPy, Pygame, or the reference trainer's PyTorch dependency is missing, it refuses
@@ -115,7 +132,7 @@ JSON and never steps the environment:
 
 ```bash
 .venv/bin/python tools/run_pygame.py \
-  --replay participant_run/replays/synthetic_oval.json
+  --replay path/to/saved-replay.json
 ```
 
 For CI or a machine without a display, render one frame with dummy SDL drivers:
@@ -123,11 +140,24 @@ For CI or a machine without a display, render one frame with dummy SDL drivers:
 ```bash
 SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
   .venv/bin/python tools/run_pygame.py \
-  --replay participant_run/replays/synthetic_oval.json --headless
+  --replay path/to/saved-replay.json --headless
 ```
 
-The optional HTML replay is a fallback preview. Unity is not part of the active
-participant workflow.
+Pygame opens on the **server's local desktop**, not on a remote browser's device.
+Without a display, the dashboard reports a **one-frame headless check**, not a
+playing window; use its browser link for playback. An SDL failure also leaves
+the browser/download links usable. Unity is not part of the active workflow.
+
+The Pygame window has clickable play/pause, restart, speed, event navigation and
+a draggable timeline. **Left/Right** select one exact tick, **Shift + arrows**
+one second, **Home/End** the endpoints, **P/N** the previous/next recorded event,
+and **?** keyboard help. Seeking pauses. It displays recorded telemetry at the
+completed tick, while only position/heading are interpolated. Final results are
+labeled separately, so an eventual crash is not shown as the current state at
+tick zero. The window resizes down to 640×480.
+
+Use `--screenshot artifacts/replay/viewer.png --start-seconds 1` to save a
+deterministic paused PNG without a display; its parent directory must exist.
 
 ## Participant-owned training boundary
 
@@ -339,6 +369,34 @@ to exercise the artifact. This preview supports feed-forward MLPs only; it is
 not yet the final ONNX/runtime submission contract. Organizer-side resource
 supervision is still required before using arbitrary participant submissions
 in an event.
+
+### Physical evaluation diagnostics
+
+Both reference and safe-artifact evaluators return `diagnostics` version `1.0`
+beside the outcome. Compare these audits with training return before deciding
+that a driver improved:
+
+- `off_track_duration_s`, longest contiguous excursion, positive progress while
+  off track, and maximum boundary excess reveal runoff-heavy behavior;
+- `backward_progress_m`, stalled-step counts and streaks reveal reversal/stall;
+- `sector_coverage_mask/count/fraction` use the engine's 16 spawn-relative
+  reached sectors. Reset alone gives no coverage; a stationary transition can
+  reach sector zero. Coverage is not proof of forward completion;
+- `sector_first_crossing_ticks` has 16 entries for the first **forward** crossing
+  of each successive lap-length fraction, including the finish fraction. A
+  missing crossing is `null`. Backward recrossings earn no new split, and all
+  thresholds crossed during one transition retain the same integer tick;
+- saturation counts raw action components with magnitude at least one, while
+  mean action deltas use the clipped applied command. Channels are separate;
+- elapsed/off-track time is ticks times `dt`, never wall-clock time. The
+  off-track-progress fraction is `null` when no positive progress exists.
+
+These values do not change observations, rewards, termination, or ranking and
+are not inserted into replay schema 1.1. Evaluate each track separately; the
+evaluator rejects a randomly sampled track pool. Repeated deterministic hashes
+test repeatability, not unseen-track generalization. The generic multi-track
+CLI already accepts repeated `--track` options and reports every track without
+inventing a leaderboard formula.
 
 ## Maps
 

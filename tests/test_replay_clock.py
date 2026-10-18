@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import math
 import unittest
 
@@ -29,6 +30,64 @@ def replay_data() -> dict[str, object]:
 
 
 class ReplayClockTests(unittest.TestCase):
+    def test_seek_roundtrip_is_exact_across_bounded_recording(self) -> None:
+        for hz in (30, 60):
+            clock = ReplayClock(hz, 20_000)
+            for tick in range(20_001):
+                clock.seek_tick(tick)
+                self.assertEqual(clock.tick_position, tick, (hz, tick))
+            clock.seek_tick(-5)
+            self.assertEqual(clock.tick_position, 0)
+            clock.seek_tick(30_000)
+            self.assertEqual(clock.tick_position, 20_000)
+
+    def test_only_position_and_shortest_angle_interpolate_not_telemetry(self) -> None:
+        data = replay_data()
+        first, second, _ = data["frames"]
+        for index, name in enumerate(("speed", "lateral_velocity", "yaw_rate", "steer", "steering_command", "throttle_brake")):
+            first[name], second[name] = index / 10, (index + 1) / 10
+        second["off_track"] = True
+        second["events"] = ["off_track_start"]
+        second["terminated"] = True
+        second["truncated"] = True
+        before = copy.deepcopy(data)
+        clock = ReplayClock(10, 2, seconds=0.05)
+        sampled = sample_replay(data, clock)
+        self.assertEqual(sampled["pose"]["x"], 5)
+        self.assertAlmostEqual(sampled["pose"]["heading"], math.pi)
+        self.assertIs(sampled["frame"], first)
+        for name in ("speed", "lateral_velocity", "yaw_rate", "steer", "steering_command", "throttle_brake"):
+            self.assertEqual(sampled["pose"][name], first[name])
+            self.assertEqual(sampled["frame"][name], first[name])
+        self.assertFalse(sampled["frame"]["off_track"])
+        self.assertFalse(sampled["frame"]["terminated"])
+        self.assertFalse(sampled["frame"]["truncated"])
+        self.assertEqual(sampled["frame"]["events"], [])
+        clock.seek_seconds(0.1 - 1e-8)
+        self.assertEqual(sample_replay(data, clock)["frame"]["tick"], 0)
+        clock.seek_tick(1)
+        self.assertIs(sample_replay(data, clock)["frame"], second)
+        self.assertEqual(data, before)
+
+    def test_pause_restart_speed_and_end_of_recording(self) -> None:
+        clock = ReplayClock(30, 60)
+        clock.advance(1)
+        self.assertEqual(clock.seconds, 0)
+        clock.restart()
+        clock.set_speed(2)
+        clock.advance(0.25)
+        self.assertEqual(clock.tick_position, 15)
+        clock.pause()
+        clock.advance(1)
+        self.assertEqual(clock.tick_position, 15)
+        self.assertTrue(clock.toggle())
+        clock.advance(100)
+        self.assertEqual(clock.tick_position, 60)
+        self.assertFalse(clock.playing)
+        clock.restart()
+        self.assertEqual(clock.tick_position, 0)
+        self.assertTrue(clock.playing)
+
     def test_exact_ticks_and_final_frame_clamp(self) -> None:
         data = replay_data()
         clock = ReplayClock(10, 2)
@@ -58,6 +117,14 @@ class ReplayClockTests(unittest.TestCase):
             clock.set_speed(0)
         with self.assertRaises(ValueError):
             clock.seek_seconds(float("nan"))
+        for invalid in (float("inf"), float("nan"), -1):
+            with self.assertRaises(ValueError):
+                clock.advance(invalid)
+            with self.assertRaises(ValueError):
+                clock.set_speed(invalid)
+        for invalid in (1.5, True):
+            with self.assertRaises(ValueError):
+                clock.seek_tick(invalid)
 
 
 if __name__ == "__main__":

@@ -44,7 +44,12 @@ class ReplayClock:
 
     @property
     def tick_position(self) -> float:
-        return self.seconds * self.tick_hz
+        position = self.seconds * self.tick_hz
+        # A seek to e.g. tick 123 at 30 Hz can round just below 123 when
+        # converted back from seconds. Correct only floating-point roundoff,
+        # so an exact seek never selects the preceding telemetry frame.
+        nearest = round(position)
+        return float(nearest) if abs(position - nearest) <= 2 * math.ulp(position) else position
 
     def set_speed(self, speed: float) -> None:
         speed = float(speed)
@@ -86,7 +91,7 @@ class ReplayClock:
 
 
 def sample_replay(data: Mapping[str, Any], clock: ReplayClock) -> dict[str, Any]:
-    """Return an interpolated visual pose and discrete data for ``clock``."""
+    """Interpolate only position/heading; keep completed-tick telemetry exact."""
 
     frames = data["frames"]
     position = _clamp(clock.tick_position, 0.0, float(len(frames) - 1))
@@ -97,8 +102,10 @@ def sample_replay(data: Mapping[str, Any], clock: ReplayClock) -> dict[str, Any]
     second = frames[second_index]
 
     pose: dict[str, float] = {}
-    for name in ("x", "y", "speed", "lateral_velocity", "yaw_rate", "steer", "steering_command", "throttle_brake"):
+    for name in ("x", "y"):
         pose[name] = float(first[name] + (second[name] - first[name]) * alpha)
+    for name in ("speed", "lateral_velocity", "yaw_rate", "steer", "steering_command", "throttle_brake"):
+        pose[name] = float(first[name])
     pose["heading"] = float(first["heading"] + _shortest_angle_delta(first["heading"], second["heading"]) * alpha)
     return {
         "pose": pose,

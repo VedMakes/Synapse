@@ -1,13 +1,26 @@
 from __future__ import annotations
 
 import unittest
+import hashlib
+import http.client
+import io
 import os
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
+from threading import Event, Lock, Thread
 import time
+from unittest.mock import Mock, patch
 
+import numpy as np
+
+from racing_event.config import SimulationConfig
+from racing_event.observation import TrainingContract
+from racing_event.trajectory import engine_code_hash, load_replay
+from tools import participant_ui as ui
 from tools.participant_ui import PAGE, ROOT, TrainingProcess, build_training_command, parse_update_line, public_maps
 
 
@@ -46,7 +59,7 @@ class ParticipantUiTests(unittest.TestCase):
             "Cumulative budget",
             "Reward function · signal weights",
             "Forward-facing ray sensors",
-            "Watch reference artifact for map",
+            "Watch artifact for map",
             "Set up / repair Python",
             "/api/status",
             'id="ray-diagram"',
@@ -221,6 +234,354 @@ class ParticipantUiTests(unittest.TestCase):
                 time.sleep(0.02)
             with self.assertRaises(ProcessLookupError):
                 os.kill(child_pid, 0)
+
+    def test_stop_survives_trailing_metrics_and_successful_exit(self) -> None:
+        process = TrainingProcess()
+        code = (
+            "import signal, time, sys\n"
+            "def stop(*_):\n"
+            " print('update 1: steps 2/16 return=0 lap=0 speed=0 m/s crash=0 off_track=0', flush=True)\n"
+            " time.sleep(.1)\n"
+            " sys.exit(0)\n"
+            "signal.signal(signal.SIGTERM, stop)\n"
+            "print('ready', flush=True)\n"
+            "time.sleep(10)\n"
+        )
+        process.start_command([sys.executable, "-c", code], kind="test")
+        self.addCleanup(process.stop)
+        wait_for(lambda: "ready" in process.snapshot()["lines"])
+        process.stop()
+        wait_for(lambda: not process.snapshot()["running"])
+        snapshot = process.snapshot()
+        self.assertEqual(snapshot["metrics"]["budget_used"], 2)
+        self.assertEqual(snapshot["state"], "stopped")
+        self.assertEqual(snapshot["returncode"], 0)
+        self.assertIsNone(snapshot["error"])
+
+    def test_stale_output_and_completion_cannot_change_new_process(self) -> None:
+        process = TrainingProcess()
+        process.start_command([sys.executable, "-c", "import time; time.sleep(10)"], kind="new")
+        self.addCleanup(process.stop)
+        before = process.snapshot()
+        old = Mock(stdout=io.StringIO("old trailing output\n"))
+        old.wait.return_value = 0
+        process._read_output(old)
+        self.assertEqual(process.snapshot(), before)
+        process.stop()
+        wait_for(lambda: not process.snapshot()["running"])
+
+    def test_second_start_is_rejected_before_snapshot_preparation(self) -> None:
+        process = TrainingProcess()
+        process.start_command([sys.executable, "-c", "import time; time.sleep(10)"], kind="test")
+        self.addCleanup(process.stop)
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            output = Path(directory) / "must-not-be-created"
+            with patch.object(ui, "build_training_command", wraps=build_training_command) as prepare:
+                with self.assertRaisesRegex(RuntimeError, "already running"):
+                    process.start({"output_dir": str(output), "ray_angles_deg": "90,0,-90"})
+                prepare.assert_not_called()
+            self.assertFalse(output.exists())
+        process.stop()
+        wait_for(lambda: not process.snapshot()["running"])
+
+    def test_spawn_failure_is_terminal_and_can_be_retried(self) -> None:
+        process = TrainingProcess()
+        with self.assertRaises(OSError):
+            process.start_command([str(ROOT / "missing-python")], kind="test")
+        self.assertEqual(process.snapshot()["state"], "failed")
+        self.assertFalse(process.snapshot()["running"])
+        process.start_command([sys.executable, "-c", "print('retried')"], kind="test")
+        wait_for(lambda: not process.snapshot()["running"])
+        self.assertEqual(process.snapshot()["state"], "completed")
+
+    def test_malformed_metrics_do_not_drop_process_supervision(self) -> None:
+        process = TrainingProcess()
+        bad_line = "update 1: steps 2/16 return=nan lap=0 speed=0 m/s crash=0 off_track=0"
+        self.assertIsNone(parse_update_line(bad_line))
+        process.start_command([sys.executable, "-c", f"import time; print({bad_line!r}, flush=True); time.sleep(.2)"], kind="test")
+        self.addCleanup(process.stop)
+        wait_for(lambda: bad_line in process.snapshot()["lines"])
+        self.assertTrue(process.snapshot()["running"])
+        wait_for(lambda: not process.snapshot()["running"])
+        self.assertEqual(process.snapshot()["state"], "completed")
+        self.assertEqual(process.snapshot()["metrics"], {})
+
+    def test_pygame_probe_cannot_mistake_hidden_sdl_surface_for_visible_playback(self) -> None:
+        with patch.dict(os.environ, {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}):
+            with self.assertRaisesRegex(ValueError, "SDL selected a headless driver"):
+                ui._ready_python(require_pygame=True, headless=False)
+            self.assertTrue(ui._ready_python(require_pygame=True, headless=True).is_file())
+
+    @unittest.skipUnless(shutil.which("node"), "Node is optional; install it for dashboard JS checks")
+    def test_dashboard_frontend_behavior(self) -> None:
+        result = subprocess.run(
+            [shutil.which("node"), "--test", "tests/participant_dashboard.test.cjs"],
+            cwd=ROOT, capture_output=True, text=True, timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+
+def wait_for(predicate, timeout: float = 5) -> None:
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out waiting for process/request state")
+        time.sleep(.01)
+
+
+def write_watch_run(root: Path) -> dict[str, object]:
+    """A three-ray participant-owned linear model, trained on a different map."""
+    data = json.loads((ROOT / "config/simulation.json").read_text())
+    data["sensors"]["ray_angles_deg"] = [90, 0, -90]
+    data["episode"]["max_steps"] = 3
+    (root / "run_config.json").write_text(json.dumps(data))
+    config = SimulationConfig.from_file(root / "run_config.json")
+    artifact = root / "artifact"
+    artifact.mkdir()
+    track = next(item for item in public_maps() if item["id"] == "synthetic_flowing")
+    contract = TrainingContract.for_config(config, track_ids=[track["id"]], track_hashes=[track["content_hash"]])
+    contract.save(artifact / "training_contract.json")
+    size = contract.observation.size
+    np.savez(artifact / "weights.npz", w=np.zeros((2, size), dtype=np.float32), b=np.zeros(2, dtype=np.float32))
+    manifest = {
+        "format": "synapse_numpy_mlp", "format_version": 1, "environment_code_hash": engine_code_hash(),
+        "observation": {"schema_version": "1.0", "size": size, "dtype": "float32"},
+        "action": {"schema_version": "1.0", "size": 2, "dtype": "float32", "bounds": [[-1, 1], [-1, 1]], "output_activation": "tanh"},
+        "preprocessing": {"kind": "identity"},
+        "layers": [{"name": "linear", "weights": "w", "bias": "b", "activation": "tanh"}],
+        "weights_sha256": hashlib.sha256((artifact / "weights.npz").read_bytes()).hexdigest(),
+        "training_contract_sha256": hashlib.sha256((artifact / "training_contract.json").read_bytes()).hexdigest(),
+    }
+    (artifact / "manifest.json").write_text(json.dumps(manifest))
+    return {"source": "artifact", "renderer": "browser", "map_id": "synthetic_oval", "output_dir": str(root), "artifact_dir": str(artifact)}
+
+
+class ParticipantUiApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(dir=ROOT)
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.form = write_watch_run(self.root)
+        for name, value in (("PROCESS", TrainingProcess()), ("RENDER_PROCESS", TrainingProcess()), ("REPLAY_OUTPUTS", {}), ("ACTION_LOCK", Lock())):
+            patcher = patch.object(ui, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.server = ui.ThreadingHTTPServer(("127.0.0.1", 0), ui.Handler)
+        self.thread = Thread(target=self.server.serve_forever, daemon=True)
+        self.thread.start()
+        self.addCleanup(self.close_server)
+
+    def close_server(self) -> None:
+        ui.PROCESS.stop()
+        ui.RENDER_PROCESS.stop()
+        wait_for(lambda: not ui.PROCESS.snapshot()["running"] and not ui.RENDER_PROCESS.snapshot()["running"])
+        self.server.shutdown()
+        self.server.server_close()
+        self.thread.join(timeout=2)
+
+    def request(self, path, payload=None, *, method="POST", headers=None, raw=None):
+        connection = http.client.HTTPConnection(*self.server.server_address, timeout=20)
+        body = raw if raw is not None else (json.dumps(payload).encode() if payload is not None else b"")
+        connection.request(method, path, body, headers or {"Content-Type": "application/json"})
+        response = connection.getresponse()
+        result = response.status, dict(response.getheaders()), response.read()
+        connection.close()
+        return result
+
+    def post(self, path, form):
+        status, _, body = self.request(path, form)
+        return status, json.loads(body)
+
+    def test_generic_watch_exports_saved_custom_rays_without_rewriting_contract(self) -> None:
+        artifact = Path(self.form["artifact_dir"])
+        before = {path.name: path.read_bytes() for path in artifact.iterdir()}
+        status, result = self.post("/api/watch", self.form)
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["source"], "artifact")
+        self.assertEqual(result["renderer"], "browser")
+        self.assertEqual(ui.RENDER_PROCESS.snapshot()["state"], "idle")
+        replay = load_replay(result["replay_path"])
+        config = SimulationConfig.from_file(self.root / "run_config.json")
+        self.assertEqual(replay["engine"]["config_hash"], TrainingContract.config_hash_for(config))
+        self.assertEqual(replay["result"]["steps"], 3)
+        self.assertEqual(before, {path.name: path.read_bytes() for path in artifact.iterdir()})
+        code, headers, html = self.request(result["browser_url"], method="GET")
+        self.assertEqual(code, 200)
+        self.assertIn("text/html", headers["Content-Type"])
+        self.assertIn(b'id="replay-data"', html)
+        code, headers, download = self.request(result["download_url"], method="GET")
+        self.assertEqual(code, 200)
+        self.assertIn("attachment", headers["Content-Disposition"])
+        self.assertEqual(json.loads(download), replay)
+        # A later build has distinct URLs; the first remains readable.
+        status, again = self.post("/api/watch", self.form)
+        self.assertEqual(status, 200, again)
+        self.assertNotEqual(again["browser_url"], result["browser_url"])
+        self.assertEqual(self.request(result["browser_url"], method="GET")[0], 200)
+        Path(result["replay_path"]).write_text("{}")
+        self.assertEqual(self.request(result["download_url"], method="GET")[0], 400)
+
+    def test_reference_is_latest_saved_and_leaves_original_contract_intact(self) -> None:
+        from racing_event.ppo import FixedMLPActorCritic
+
+        config = SimulationConfig.from_file(self.root / "run_config.json")
+        contract, _ = TrainingContract.load(Path(self.form["artifact_dir"]) / "training_contract.json")
+        contract.save(self.root / "training_contract.json")
+        original = (self.root / "training_contract.json").read_bytes()
+        FixedMLPActorCritic(observation_size=contract.observation.size).save_artifact(self.root / "policy.pt")
+        status, result = self.post("/api/watch", {**self.form, "source": "reference"})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["source_label"], "Latest saved reference artifact")
+        self.assertEqual(load_replay(result["replay_path"])["engine"]["config_hash"], TrainingContract.config_hash_for(config))
+        self.assertEqual((self.root / "training_contract.json").read_bytes(), original)
+        self.assertFalse(list((self.root / "replays").glob(".reference-contract.*")))
+        # Even with a valid reference beside it, a bad generic artifact must fail.
+        (Path(self.form["artifact_dir"]) / "manifest.json").write_text("{}")
+        status, error = self.post("/api/watch", self.form)
+        self.assertEqual(status, 400)
+        self.assertIn("artifact", error["error"])
+
+    def test_explicit_source_renderer_and_saved_config_are_required(self) -> None:
+        for key, value in (("source", None), ("source", "scripted"), ("renderer", None), ("renderer", "unity"), ("map_id", "../outside"), ("output_dir", None), ("artifact_dir", None)):
+            with self.subTest(key=key, value=value):
+                status, result = self.post("/api/watch", {**self.form, key: value})
+                self.assertEqual(status, 400, result)
+        (self.root / "run_config.json").unlink()
+        status, result = self.post("/api/watch", self.form)
+        self.assertEqual(status, 400)
+        self.assertIn("saved run_config.json", result["error"])
+        self.assertEqual(ui.REPLAY_OUTPUTS, {})
+
+    def test_config_mismatch_is_rejected_without_changing_generic_artifact(self) -> None:
+        contract = Path(self.form["artifact_dir"]) / "training_contract.json"
+        before = contract.read_bytes()
+        config = json.loads((self.root / "run_config.json").read_text())
+        config["sensors"]["ray_angles_deg"] = [-90, 0, 90]
+        (self.root / "run_config.json").write_text(json.dumps(config))
+        status, result = self.post("/api/watch", self.form)
+        self.assertEqual(status, 400, result)
+        self.assertEqual(contract.read_bytes(), before)
+        self.assertEqual(ui.REPLAY_OUTPUTS, {})
+
+    def test_headless_pygame_is_real_one_frame_check_with_fallback_links(self) -> None:
+        with patch.dict(os.environ, {"SDL_VIDEODRIVER": "dummy", "SDL_AUDIODRIVER": "dummy"}):
+            status, result = self.post("/api/watch", {**self.form, "renderer": "pygame"})
+            self.assertEqual(status, 200, result)
+            self.assertTrue(result["headless"])
+            self.assertNotIn("renderer_error", result)
+            wait_for(lambda: not ui.RENDER_PROCESS.snapshot()["running"], timeout=10)
+        self.assertEqual(ui.RENDER_PROCESS.snapshot()["state"], "completed")
+        self.assertEqual(ui.RENDER_PROCESS.snapshot()["returncode"], 0)
+        self.assertEqual(self.request(result["browser_url"], method="GET")[0], 200)
+
+    def test_missing_pygame_readiness_keeps_explicit_renderer_and_download(self) -> None:
+        # NumPy and Pygame imports work here, but opening the selected SDL surface
+        # cannot. This proves the readiness probe goes beyond module availability.
+        with patch.dict(os.environ, {"SDL_VIDEODRIVER": "synapse-invalid-driver", "DISPLAY": ":synapse-test"}):
+            status, result = self.post("/api/watch", {**self.form, "renderer": "pygame"})
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["renderer"], "pygame")
+        self.assertEqual(result["renderer_state"], "unavailable")
+        self.assertIn("readiness check failed", result["renderer_error"])
+        self.assertIn("synapse-invalid-driver", result["renderer_error"])
+        self.assertFalse(result["headless"])
+        self.assertEqual(self.request(result["download_url"], method="GET")[0], 200)
+
+    def test_start_stop_api_and_duplicate_start_preserve_run_snapshots(self) -> None:
+        trainer = self.root / "trainer.py"
+        trainer.write_text("import time\nprint('participant ready', flush=True)\ntime.sleep(10)\n")
+        output = self.root / "training"
+        status, result = self.post("/api/start", {
+            "trainer": str(trainer), "output_dir": str(output), "steps": 1,
+            "ray_count": 3, "ray_angles_deg": "90,0,-90", "reward_weights": {"progress": 4},
+        })
+        self.assertEqual(status, 200, result)
+        wait_for(lambda: "participant ready" in ui.PROCESS.snapshot()["lines"])
+        before = {path.name: path.read_bytes() for path in output.iterdir()}
+        status, result = self.post("/api/start", {"output_dir": str(output), "ray_angles_deg": "0"})
+        self.assertEqual(status, 400, result)
+        self.assertEqual(before, {path.name: path.read_bytes() for path in output.iterdir()})
+        self.assertEqual(self.post("/api/watch", self.form)[0], 400)
+        self.assertEqual(self.post("/api/stop", {})[0], 200)
+        wait_for(lambda: not ui.PROCESS.snapshot()["running"])
+        self.assertEqual(ui.PROCESS.snapshot()["state"], "stopped")
+
+    def test_watch_does_not_export_or_spawn_while_renderer_is_active(self) -> None:
+        ui.RENDER_PROCESS.start_command([sys.executable, "-c", "import time; time.sleep(10)"], kind="renderer-test")
+        with patch.object(ui, "build_watch_replay") as export:
+            status, result = self.post("/api/watch", self.form)
+        self.assertEqual(status, 400, result)
+        self.assertIn("close the current Pygame", result["error"])
+        export.assert_not_called()
+
+    def test_request_length_and_encoding_fail_promptly_for_all_post_routes(self) -> None:
+        for route in ("/api/start", "/api/watch", "/api/setup", "/api/stop"):
+            for length in ("-1", "16385", "nonsense", "999999999999999999"):
+                with self.subTest(route=route, length=length):
+                    code, _, body = self.request(route, headers={"Content-Length": length}, raw=b"")
+                    self.assertEqual(code, 400, body)
+        for raw in (b"\xff", b"[]", b"{"):
+            self.assertEqual(self.request("/api/start", raw=raw)[0], 400)
+        self.assertEqual(self.request("/api/watch", headers={"Transfer-Encoding": "chunked"}, raw=b"0\r\n\r\n")[0], 400)
+        self.assertFalse(ui.PROCESS.snapshot()["running"])
+
+    def test_cross_origin_and_rebound_host_cannot_control_or_read_dashboard(self) -> None:
+        for headers in (
+            {"Origin": "https://untrusted.example"},
+            {"Origin": "null"},
+            {"Host": f"untrusted.example:{self.server.server_port}"},
+            {"Sec-Fetch-Site": "cross-site"},
+        ):
+            with self.subTest(headers=headers):
+                code, _, _ = self.request("/api/setup", headers=headers)
+                self.assertEqual(code, 403)
+                self.assertFalse(ui.PROCESS.snapshot()["running"])
+        code, _, _ = self.request("/api/status", method="GET", headers={"Host": "untrusted.example"})
+        self.assertEqual(code, 403)
+        code, _, _ = self.request("/api/stop", headers={"Origin": f"http://127.0.0.1:{self.server.server_port}"})
+        self.assertEqual(code, 200)
+
+    def test_watch_and_start_are_serialized_and_duplicates_rejected(self) -> None:
+        entered, release = Event(), Event()
+        def export(_form):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return {"ok": True}
+        responses = []
+        with patch.object(ui, "build_watch_replay", side_effect=export) as build:
+            first = Thread(target=lambda: responses.append(self.post("/api/watch", self.form)))
+            first.start()
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertEqual(self.post("/api/watch", self.form)[0], 400)
+                output = self.root / "must-not-be-created"
+                self.assertEqual(self.post("/api/start", {"output_dir": str(output)})[0], 400)
+                self.assertFalse(output.exists())
+                _, _, body = self.request("/api/status", method="GET")
+                self.assertTrue(json.loads(body)["action_busy"])
+                self.assertEqual(build.call_count, 1)
+            finally:
+                release.set()
+                first.join(timeout=5)
+        self.assertEqual(responses[0][0], 200)
+
+    def test_workspace_escape_and_symlinked_inputs_outputs_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            link = self.root / "outside"
+            link.symlink_to(outside, target_is_directory=True)
+            for artifact in (outside, str(link), "../../outside"):
+                status, result = self.post("/api/watch", {**self.form, "artifact_dir": artifact})
+                self.assertEqual(status, 400, result)
+                self.assertIn("workspace", result["error"])
+            (self.root / "replays").symlink_to(outside, target_is_directory=True)
+            self.assertEqual(self.post("/api/watch", self.form)[0], 400)
+            (self.root / "replays").unlink()
+            (self.root / "run_config.json").unlink()
+            (self.root / "run_config.json").symlink_to(Path(outside) / "config.json")
+            self.assertEqual(self.post("/api/watch", self.form)[0], 400)
+            with self.assertRaisesRegex(ValueError, "workspace"):
+                build_training_command({"output_dir": str(self.root)})
+            self.assertEqual(self.request("/replays/../../config/simulation.json", method="GET")[0], 404)
 
 
 if __name__ == "__main__":
