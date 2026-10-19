@@ -1,0 +1,36 @@
+{
+  "car": {
+    "drag_mps2_per_mps2": 0.008,
+    "length_m": 4.8,
+    "max_accel_mps2": 8.0,
+    "max_brake_mps2": 18.0,
+    "max_speed_mps": 80.0,
+    "max_steering_rad": 0.55,
+    "peak_lateral_accel_mps2": 28.0,
+    "runoff_grip_factor": 0.55,
+    "steering_rate_rad_s": 1.8,
+    "wheelbase_m": 2.8,
+    "width_m": 2.0
+  },
+  "episode": {
+    "backward_limit_m": 25.0,
+    "max_steps": 2400,
+    "standing_start_probability": 0.25,
+    "stuck_steps": 90
+  },
+  "sensors": {
+    "lookahead_distances_m": [
+      15,
+      40,
+      80,
+      140
+    ],
+    "ray_angles_deg": [
+      -90.0,
+      0.0,
+      90.0
+    ],
+    "ray_max_range_m": 100.0
+  },
+  "tick_hz": 30
+}

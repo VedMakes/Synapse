@@ -1,0 +1,248 @@
+{
+  "action": {
+    "bounds": [
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        -1.0,
+        1.0
+      ]
+    ],
+    "dtype": "float32",
+    "finite_inputs_required": true,
+    "names": [
+      "steering",
+      "throttle_brake"
+    ],
+    "semantics": [
+      "steering",
+      "positive throttle, zero coast, negative brake"
+    ],
+    "shape": [
+      2
+    ],
+    "version": "1.0"
+  },
+  "config_hash": "47d55dcdf1a083b6570db1ad65c205d651c907eaa51a90098d4c24f54c9c7d15",
+  "evaluation": {
+    "deterministic": true,
+    "normalizer_updates": false,
+    "policy_action": "mean",
+    "spawn": "fixed_start_line_standing_zero_noise"
+  },
+  "observation": {
+    "dtype": "float32",
+    "fields": [
+      {
+        "description": "forward speed divided by maximum speed",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "speed",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed forward velocity divided by maximum speed; reverse is disabled in v1",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "longitudinal_velocity",
+        "unit": "normalized"
+      },
+      {
+        "description": "car-frame lateral velocity divided by maximum speed",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "lateral_velocity",
+        "unit": "normalized"
+      },
+      {
+        "description": "yaw rate clipped to five radians per second",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "yaw_rate",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed offset divided by twice the local half-width",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "lateral_offset",
+        "unit": "normalized"
+      },
+      {
+        "description": "wrapped heading error divided by pi",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "heading_error",
+        "unit": "normalized"
+      },
+      {
+        "description": "previous steering command",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "previous_steering",
+        "unit": "normalized"
+      },
+      {
+        "description": "previous signed throttle/brake command",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "previous_longitudinal",
+        "unit": "normalized"
+      },
+      {
+        "description": "current steering angle divided by its configured maximum",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "steering_angle",
+        "unit": "normalized"
+      },
+      {
+        "description": "distance to the track boundary for sensor ray 0, divided by ray maximum range",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "ray_0",
+        "unit": "normalized"
+      },
+      {
+        "description": "distance to the track boundary for sensor ray 1, divided by ray maximum range",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "ray_1",
+        "unit": "normalized"
+      },
+      {
+        "description": "distance to the track boundary for sensor ray 2, divided by ray maximum range",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "ray_2",
+        "unit": "normalized"
+      },
+      {
+        "description": "distance to the track boundary for sensor ray 3, divided by ray maximum range",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "ray_3",
+        "unit": "normalized"
+      },
+      {
+        "description": "distance to the track boundary for sensor ray 4, divided by ray maximum range",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "ray_4",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed curvature feature at lookahead 15 metres",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "curvature_lookahead_0",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed curvature feature at lookahead 40 metres",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "curvature_lookahead_1",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed curvature feature at lookahead 80 metres",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "curvature_lookahead_2",
+        "unit": "normalized"
+      },
+      {
+        "description": "signed curvature feature at lookahead 140 metres",
+        "high": 1.0,
+        "low": -1.0,
+        "name": "curvature_lookahead_3",
+        "unit": "normalized"
+      },
+      {
+        "description": "minimum local half-width divided by five times car width",
+        "high": 1.0,
+        "low": 0.0,
+        "name": "local_width",
+        "unit": "normalized"
+      }
+    ],
+    "normalization": "environment_static_bounds",
+    "ray_angles_deg": [
+      -45.0,
+      -15.0,
+      0.0,
+      20.0,
+      45.0
+    ],
+    "ray_count": 5,
+    "version": "1.0"
+  },
+  "tracks": {
+    "hashes": [
+      "3c40c0e8fad93e9702f7429f1bce2f6bd9e99ea0297be5d0a0a6b9b383c9cbdd",
+      "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
+      "cbca5162d5ca168a18de1503c7b91adc1f11388c1061f405de2de0250d50beb9"
+    ],
+    "ids": [
+      "synthetic_flowing",
+      "synthetic_oval",
+      "synthetic_tight_loop"
+    ]
+  },
+  "trainer": {
+    "action_distribution": "participant_defined",
+    "normalizer": {
+      "clip": 10.0,
+      "count": 17,
+      "epsilon": 1e-08,
+      "m2": [
+        0.0004299268677109944,
+        0.0004299268677109944,
+        4.164444718930932e-07,
+        0.0014984628063300894,
+        3.987852591264927e-06,
+        0.000149257625763963,
+        1.9924359148545634,
+        2.455175831149866,
+        0.4260300919258913,
+        4.541244832123611e-06,
+        0.0004775891804888731,
+        0.023738410107729126,
+        0.0003761770441567708,
+        8.820676880898594e-06,
+        3.3666608735332938e-06,
+        3.891908795760209e-07,
+        2.6220789694058432e-05,
+        0.0,
+        0.0
+      ],
+      "mean": [
+        0.0077868026325150445,
+        0.0077868026325150445,
+        -0.00018302794577560716,
+        -0.010833743973361218,
+        -0.11079935291234184,
+        0.015097591204240044,
+        -0.3521811213782605,
+        0.3720610577284413,
+        -0.34987146275884967,
+        0.05730996653437615,
+        0.1613687925478991,
+        0.6574620464268852,
+        0.17068280104328604,
+        0.08345855290398878,
+        0.31708137252751517,
+        0.29437816844267006,
+        0.5300083651262172,
+        1.0,
+        0.5
+      ],
+      "size": 19,
+      "training": true
+    }
+  },
+  "version": "1.0"
+}

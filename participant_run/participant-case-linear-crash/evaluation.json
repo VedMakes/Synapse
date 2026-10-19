@@ -1,0 +1,48 @@
+{
+  "artifact_sha256": "6e0333dc69eb6bfdf857387b1df4d1a55af33de876dd908e15c10e7f58ae4525",
+  "config_hash": "f59c8d6b750384b8970e404dee8b6462eae7a134a025126a5ae06e5651289d9e",
+  "deterministic": true,
+  "environment_code_hash": "43f1bbc350202fbb0a83dcd6a2c17deba71a26016c9892bba24aa3995a32ab74",
+  "observation_size": 17,
+  "ray_angles_deg": [
+    -90.0,
+    0.0,
+    90.0
+  ],
+  "tracks": [
+    {
+      "repeats": [
+        {
+          "config_hash": "f59c8d6b750384b8970e404dee8b6462eae7a134a025126a5ae06e5651289d9e",
+          "crash": false,
+          "final_distance_m": 0.0,
+          "lap_time_s": null,
+          "mean_speed_mps": 0.0,
+          "off_track_steps": 0,
+          "status": "dnf_timeout",
+          "steps": 2,
+          "total_reward": 0.0,
+          "track_hash": "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
+          "track_id": "synthetic_oval",
+          "trajectory_hash": "b2da2233e3c0d1c5b53a867c51259734f02f251d6356bd5aa23f6b08412a8085"
+        },
+        {
+          "config_hash": "f59c8d6b750384b8970e404dee8b6462eae7a134a025126a5ae06e5651289d9e",
+          "crash": false,
+          "final_distance_m": 0.0,
+          "lap_time_s": null,
+          "mean_speed_mps": 0.0,
+          "off_track_steps": 0,
+          "status": "dnf_timeout",
+          "steps": 2,
+          "total_reward": 0.0,
+          "track_hash": "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
+          "track_id": "synthetic_oval",
+          "trajectory_hash": "b2da2233e3c0d1c5b53a867c51259734f02f251d6356bd5aa23f6b08412a8085"
+        }
+      ],
+      "track_hash": "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
+      "track_id": "synthetic_oval"
+    }
+  ]
+}

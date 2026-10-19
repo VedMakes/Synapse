@@ -1,0 +1,12 @@
+{
+  "config_hash": "45a9a62d5d34d65339862cb9dd6fe156ac7a60ef7ca3d44a0db4274f559bf6f6",
+  "identity_version": 1,
+  "observation_size": 17,
+  "ray_angles_deg": [
+    -30.0,
+    0.0,
+    30.0
+  ],
+  "ray_count": 3,
+  "reward_config_hash": "0e969fc2d04ad05fd15f7d1a2cadb63e9f98d3adfc98e3c1a62edaadce4ea133"
+}

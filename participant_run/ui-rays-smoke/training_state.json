@@ -1,0 +1,35 @@
+{
+  "budget_remaining": 0,
+  "budget_steps": 2,
+  "budget_used": 2,
+  "config_hash": "45a9a62d5d34d65339862cb9dd6fe156ac7a60ef7ca3d44a0db4274f559bf6f6",
+  "hidden_sizes": [
+    64,
+    64
+  ],
+  "n_envs": 1,
+  "observation_size": 17,
+  "ray_angles_deg": [
+    -30.0,
+    0.0,
+    30.0
+  ],
+  "release_id": "synapse-local-participant-prototype",
+  "resume_note": "optimizer state is reset on process restart in this prototype",
+  "reward_config_hash": "dd7f8f9cce56d4b843974391deb90563faaa79a1e6680937f1deea7d23fff7d8",
+  "reward_sha256": "4f68156cfef3dee2b3944396d8449b8887bc7546ddcbc07137023554fbbdf199",
+  "rollout_length": 2,
+  "run_id": "run-000001",
+  "seed": 17,
+  "track_hashes": [
+    "3c40c0e8fad93e9702f7429f1bce2f6bd9e99ea0297be5d0a0a6b9b383c9cbdd",
+    "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
+    "cbca5162d5ca168a18de1503c7b91adc1f11388c1061f405de2de0250d50beb9"
+  ],
+  "track_ids": [
+    "synthetic_flowing",
+    "synthetic_oval",
+    "synthetic_tight_loop"
+  ],
+  "updates": 1
+}

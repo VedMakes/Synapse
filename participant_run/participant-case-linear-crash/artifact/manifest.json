@@ -1,0 +1,45 @@
+{
+  "action": {
+    "bounds": [
+      [
+        -1.0,
+        1.0
+      ],
+      [
+        -1.0,
+        1.0
+      ]
+    ],
+    "dtype": "float32",
+    "output_activation": "tanh",
+    "schema_version": "1.0",
+    "size": 2
+  },
+  "environment_code_hash": "43f1bbc350202fbb0a83dcd6a2c17deba71a26016c9892bba24aa3995a32ab74",
+  "format": "synapse_numpy_mlp",
+  "format_version": 1,
+  "layers": [
+    {
+      "activation": "tanh",
+      "bias": "layer_0_bias",
+      "name": "layer_0",
+      "weights": "layer_0_weights"
+    }
+  ],
+  "observation": {
+    "dtype": "float32",
+    "ray_angles_deg": [
+      -90.0,
+      0.0,
+      90.0
+    ],
+    "ray_count": 3,
+    "schema_version": "1.0",
+    "size": 17
+  },
+  "preprocessing": {
+    "kind": "identity"
+  },
+  "training_contract_sha256": "8d281fd653bc3e7129085d172738e6be4a32b49d6dcb9e62d00a9964f94ef803",
+  "weights_sha256": "a6a0387223d5d3e0af69c26ce69ce4465e912eeb691d818ca28389000d912de0"
+}

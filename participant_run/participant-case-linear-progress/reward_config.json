@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "weights": {
+    "crash": -5.0,
+    "curvature_matched_speed": 0.0,
+    "lap_complete": 0.0,
+    "off_track": 0.0,
+    "progress": 4.0,
+    "speed": 0.0,
+    "steer_smoothness": 0.0,
+    "stuck": 0.0,
+    "time": -0.1
+  }
+}
