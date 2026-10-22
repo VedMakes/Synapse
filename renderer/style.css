@@ -157,6 +157,23 @@ body {
   margin-bottom: 24px;
 }
 
+.live-connect-row {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0 18px;
+}
+
+.live-connect-row input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid rgba(69, 243, 255, 0.3);
+  border-radius: 8px;
+  background: rgba(3, 9, 18, 0.75);
+  color: var(--text);
+  padding: 10px 11px;
+  font: 12px var(--mono);
+}
+
 .primary-btn {
   width: 100%;
   padding: 14px 24px;

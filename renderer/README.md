@@ -79,6 +79,29 @@ Open Chrome, Edge, or Firefox and navigate to:
 
 *(The built-in sample replays load automatically on launch!)*
 
+### Live Python race mode
+
+The renderer also has a read-only live adapter. Start the Python live runner
+from the repository root, then open the renderer with the printed WebSocket
+URL:
+
+```bash
+python -m http.server 8765 --bind 127.0.0.1 --directory renderer
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant racer-a submissions/racer-a \
+  --entrant racer-b submissions/racer-b \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live/oval
+```
+
+Open `http://127.0.0.1:8765/?live=ws://127.0.0.1:8766/live/v1`, or paste that
+WebSocket URL into **Connect Live**. Python owns every action, physics step,
+event, and result. The browser only receives state packets, interpolates
+received poses for presentation, and shows `STALE` if packets stop arriving.
+Replay controls are disabled in live mode. The live stream is not a replay and
+does not send actions back to Python.
+
 ---
 
 ## 🏎️ How to Generate Dual-Car Replays for Any Track

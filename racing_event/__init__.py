@@ -7,6 +7,8 @@ from .env import RacingEnv
 from .evaluation import EvaluationResult, evaluate_policy, validate_evaluation_contract
 from .evaluation import evaluate_participant_artifact
 from .model_artifact import ArtifactLimits, ParticipantModelArtifact, load_participant_artifact
+from .live_race import LiveRaceOptions, LiveRaceReport, run_live_onnx_race
+from .live_protocol import LiveStatePublisher
 from .observation import (
     ObservationSchema,
     RunningObservationNormalizer,
@@ -14,6 +16,7 @@ from .observation import (
     build_observation_schema,
 )
 from .reward import RewardConfig, RewardFunction, evaluate_reward_function
+from .race import RaceEntrant, RaceReport, run_onnx_race
 from .rollout import PPOHyperparameters, RolloutBatch, RolloutCollector, RolloutResult
 from .track import TrackGeometry
 from .vector_env import RacingVectorEnv, VectorizedRacingEnv
@@ -44,6 +47,13 @@ __all__ = [
     "evaluate_policy",
     "validate_evaluation_contract",
     "evaluate_participant_artifact",
+    "RaceEntrant",
+    "RaceReport",
+    "run_onnx_race",
+    "LiveRaceOptions",
+    "LiveRaceReport",
+    "LiveStatePublisher",
+    "run_live_onnx_race",
 ]
 
 if importlib.util.find_spec("torch") is not None:

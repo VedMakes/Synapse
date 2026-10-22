@@ -11,6 +11,7 @@
    ============================================================ */
 
 import * as THREE from 'three';
+import { connectLive, parseLiveMessage } from './live_source.js';
 
 // ============================================================
 // PHASE 1: Data Ingestion & Interpolation Engine
@@ -781,6 +782,15 @@ let scene, camera, renderer3d, clock;
 let replayA = null, replayB = null;
 let carModelA = null, carModelB = null;
 let trackGroup = null;
+let liveMode = false;
+let liveSocket = null;
+let liveRunId = null;
+let liveLastSeq = -1;
+let liveCars = [];
+let liveEnded = false;
+let liveLastPacketAt = 0;
+let liveStaleShown = false;
+let livePhysicsHz = 30;
 
 // Settings & Modes
 let playing = false;
@@ -812,6 +822,8 @@ const fileA = document.getElementById('file-a');
 const fileB = document.getElementById('file-b');
 const btnLoad = document.getElementById('btn-load');
 const btnQuickLoad = document.getElementById('btn-quick-load');
+const liveUrl = document.getElementById('live-url');
+const btnLiveConnect = document.getElementById('btn-live-connect');
 const btnClosePicker = document.getElementById('btn-close-picker');
 const btnOpenPicker = document.getElementById('btn-open-picker');
 const pickerError = document.getElementById('picker-error');
@@ -830,6 +842,7 @@ const broadcastAlert = document.getElementById('broadcast-alert');
 const alertText = document.getElementById('alert-text');
 const overlapIndicator = document.getElementById('overlap-indicator');
 const towerSector = document.getElementById('tower-sector');
+const towerSession = document.getElementById('tower-session');
 
 // Winner Victory Screen Modal Elements
 const winnerModal = document.getElementById('winner-modal');
@@ -870,6 +883,151 @@ function formatTime(s) {
   const sec = Math.floor((ms % 60000) / 1000);
   const mil = ms % 1000;
   return `${String(min).padStart(2, '0')}:${String(sec).padStart(2, '0')}.${String(mil).padStart(3, '0')}`;
+}
+
+function liveInitialFrame(track) {
+  const point = track.centerline?.[0] || [0, 0];
+  return {
+    x: Number(point[0]) || 0,
+    y: Number(point[1]) || 0,
+    heading: Number(track.heading?.[0]) || 0,
+    speed: 0,
+    lateral_velocity: 0,
+    yaw_rate: 0,
+    steer: 0,
+    steering_command: 0,
+    throttle_brake: 0,
+    off_track: false,
+    events: [],
+    tick: 0,
+    terminated: false,
+    truncated: false,
+  };
+}
+
+function liveReplayShell(track, entrant) {
+  const participantId = entrant?.participant_id || 'Unknown Racer';
+  return {
+    participantId,
+    tickHz: livePhysicsHz,
+    car: { length_m: 4.8, width_m: 2.0 },
+    track,
+    frames: [liveInitialFrame(track)],
+    result: {},
+  };
+}
+
+function setLiveControls(enabled) {
+  for (const control of [btnPlay, btnRestart, btnStepBack, btnStepFwd, scrubber, trackSwitcher]) {
+    if (control) control.disabled = enabled;
+  }
+  if (towerSession) towerSession.textContent = enabled ? 'LIVE' : 'RACE';
+}
+
+function handleLiveHello(message) {
+  liveMode = true;
+  liveEnded = false;
+  liveRunId = message.run_id;
+  liveLastSeq = -1;
+  livePhysicsHz = message.physics_hz;
+  liveCars = [];
+  winnerShownForCurrentRace = false;
+  currentTime = 0;
+  maxTime = 0;
+  lastLeader = null;
+  lastOffTrackA = false;
+  lastOffTrackB = false;
+  replayA = liveReplayShell(message.track, message.entrants[0]);
+  replayB = liveReplayShell(message.track, message.entrants[1] || { participant_id: 'Waiting' });
+  replayA.tickHz = livePhysicsHz;
+  replayB.tickHz = livePhysicsHz;
+  setLiveControls(true);
+  startRace();
+  if (timeTotal) timeTotal.textContent = 'LIVE';
+  showAlert('LIVE PYTHON RACE CONNECTED — GREEN FLAG', 'info', 3000);
+}
+
+function handleLiveState(message) {
+  liveCars = message.cars.slice(0, 2).map((car) => ({
+    ...car,
+    finished: car.status === 'finished',
+    tick: message.tick,
+  }));
+  currentTime = message.sim_time_s;
+  maxTime = Math.max(maxTime, currentTime);
+  liveLastPacketAt = performance.now();
+  liveStaleShown = false;
+  if (towerSession) towerSession.textContent = 'LIVE';
+  for (const [index, car] of liveCars.entries()) {
+    const target = index === 0 ? replayA : replayB;
+    if (!target) continue;
+    target.participantId = car.label || car.participant_id;
+    target.frames = [{ ...car, tick: message.tick }];
+    target.result = { status: car.status, steps: message.tick, elapsed_s: message.sim_time_s };
+  }
+}
+
+function handleLiveEnd(message) {
+  liveEnded = true;
+  currentTime = message.sim_time_s;
+  maxTime = Math.max(maxTime, currentTime);
+  for (const [index, result] of message.results.entries()) {
+    const target = index === 0 ? replayA : replayB;
+    if (!target) continue;
+    target.result = {
+      status: result.status,
+      steps: result.steps,
+      elapsed_s: message.sim_time_s,
+      lap_time_s: result.lap_time_s,
+    };
+    if (liveCars[index]) liveCars[index].status = result.status;
+  }
+  if (towerSession) towerSession.textContent = 'ENDED';
+  showAlert('CHECKERED FLAG — LIVE PYTHON RACE FINISHED', 'info', 4000);
+  if (!winnerShownForCurrentRace) {
+    winnerShownForCurrentRace = true;
+    setTimeout(() => showWinnerScreen(), 250);
+  }
+}
+
+function startLiveConnection(url) {
+  try {
+    if (liveSocket) liveSocket.close();
+    liveRunId = null;
+    liveLastSeq = -1;
+    liveLastPacketAt = performance.now();
+    loadStatus.textContent = 'Connecting to live Python race…';
+    loadingOverlay.style.display = 'flex';
+    loadingOverlay.classList.remove('hidden');
+    liveSocket = connectLive(url, {
+      onOpen: () => showAlert('LIVE SOCKET OPEN — WAITING FOR PYTHON HELLO', 'info', 2500),
+      onMessage: (raw) => {
+        try {
+          const parsed = parseLiveMessage(raw, { runId: liveRunId, seq: liveLastSeq });
+          if (parsed.kind === 'synapse.live.hello') {
+            handleLiveHello(parsed.message);
+          } else if (parsed.kind === 'synapse.live.state') {
+            liveLastSeq = parsed.seq;
+            handleLiveState(parsed.message);
+          } else if (parsed.kind === 'synapse.live.end') {
+            liveLastSeq = parsed.seq;
+            handleLiveEnd(parsed.message);
+          }
+        } catch (error) {
+          console.error('Live packet rejected:', error);
+          showAlert(`LIVE PACKET ERROR: ${error.message}`, 'danger', 4000);
+        }
+      },
+      onError: () => showAlert('LIVE SOCKET ERROR', 'danger', 3000),
+      onClose: () => {
+        if (!liveEnded) showAlert('LIVE SOCKET CLOSED', 'warn', 3000);
+      },
+    });
+  } catch (error) {
+    showAlert(`LIVE CONNECTION FAILED: ${error.message}`, 'danger', 4000);
+    loadingOverlay.classList.add('hidden');
+    setTimeout(() => { loadingOverlay.style.display = 'none'; }, 400);
+  }
 }
 
 /** Initialize Three.js WebGL Renderer, Camera, Lights for a vibrant sunlit F1 Grid. */
@@ -968,14 +1126,14 @@ function loadRaceIntoScene() {
   // Determine race duration
   const durA = replayA.frames.length > 1 ? (replayA.frames.length - 1) / replayA.tickHz : 0;
   const durB = replayB.frames.length > 1 ? (replayB.frames.length - 1) / replayB.tickHz : 0;
-  maxTime = Math.max(durA, durB);
+  if (!liveMode) maxTime = Math.max(durA, durB);
 
   // Update HUD text
   document.getElementById('p1-name').textContent = replayA.participantId.toUpperCase();
   document.getElementById('p2-name').textContent = replayB.participantId.toUpperCase();
   document.getElementById('telem-name-a').textContent = replayA.participantId.toUpperCase();
   document.getElementById('telem-name-b').textContent = replayB.participantId.toUpperCase();
-  timeTotal.textContent = formatTime(maxTime);
+  timeTotal.textContent = liveMode ? 'LIVE' : formatTime(maxTime);
 
   const trackId = replayA.track.meta?.id || replayA.track.meta?.track_id || 'CIRCUIT';
   const trackTag = document.getElementById('track-name-tag');
@@ -1006,8 +1164,10 @@ function loadRaceIntoScene() {
 
 /** Update car positions, rotations, wheel animations, telemetry, and overlap wireframe. */
 function updateCars(timeS, dt) {
-  const sA = sampleAtTime(replayA.frames, replayA.tickHz, timeS);
-  const sB = sampleAtTime(replayB.frames, replayB.tickHz, timeS);
+  const fallbackA = sampleAtTime(replayA.frames, replayA.tickHz, timeS);
+  const fallbackB = sampleAtTime(replayB.frames, replayB.tickHz, timeS);
+  const sA = liveMode ? (liveCars[0] || fallbackA) : fallbackA;
+  const sB = liveMode ? (liveCars[1] || fallbackB) : fallbackB;
 
   // --- 1. Compute Exact Heading Angles ---
   const rotYA = Math.atan2(Math.cos(sA.heading), -Math.sin(sA.heading));
@@ -1413,7 +1573,7 @@ function animate() {
 
   const dt = clock.getDelta();
 
-  if (playing && maxTime > 0) {
+  if (!liveMode && playing && maxTime > 0) {
     currentTime += dt * playbackSpeed;
     if (currentTime >= maxTime) {
       currentTime = maxTime;
@@ -1429,7 +1589,16 @@ function animate() {
     }
   }
 
-  if (scrubber && maxTime > 0) {
+  if (liveMode && !liveEnded && liveLastPacketAt > 0) {
+    const staleAfterMs = Math.max(250, (3 / livePhysicsHz) * 1000);
+    if (performance.now() - liveLastPacketAt > staleAfterMs && !liveStaleShown) {
+      liveStaleShown = true;
+      if (towerSession) towerSession.textContent = 'STALE';
+      showAlert('LIVE STREAM STALE — HOLDING LAST AUTHORITATIVE STATE', 'warn', 2500);
+    }
+  }
+
+  if (!liveMode && scrubber && maxTime > 0) {
     scrubber.value = (currentTime / maxTime) * 1000;
   }
   if (timeCurrent) timeCurrent.textContent = formatTime(currentTime);
@@ -1589,6 +1758,7 @@ async function loadTrack(trackKey) {
 
 // Play / Pause
 btnPlay.addEventListener('click', () => {
+  if (liveMode) return;
   if (currentTime >= maxTime) {
     currentTime = 0;
     winnerShownForCurrentRace = false;
@@ -1600,6 +1770,7 @@ btnPlay.addEventListener('click', () => {
 
 // Restart
 btnRestart.addEventListener('click', () => {
+  if (liveMode) return;
   currentTime = 0;
   playing = false;
   winnerShownForCurrentRace = false;
@@ -1611,6 +1782,7 @@ btnRestart.addEventListener('click', () => {
 // Step Back / Forward 1 Second
 if (btnStepBack) {
   btnStepBack.addEventListener('click', () => {
+    if (liveMode) return;
     currentTime = Math.max(0, currentTime - 1.0);
     if (currentTime < maxTime - 0.1) {
       winnerShownForCurrentRace = false;
@@ -1620,12 +1792,14 @@ if (btnStepBack) {
 }
 if (btnStepFwd) {
   btnStepFwd.addEventListener('click', () => {
+    if (liveMode) return;
     currentTime = Math.min(maxTime, currentTime + 1.0);
   });
 }
 
 // Scrubber seek
 scrubber.addEventListener('input', () => {
+  if (liveMode) return;
   currentTime = (scrubber.value / 1000) * maxTime;
   if (currentTime < maxTime - 0.1) {
     winnerShownForCurrentRace = false;
@@ -1664,6 +1838,7 @@ btnLanes.addEventListener('click', () => {
 // Track Switcher Dropdown
 if (trackSwitcher) {
   trackSwitcher.addEventListener('change', (e) => {
+    if (liveMode) return;
     loadTrack(e.target.value);
   });
 }
@@ -1787,6 +1962,19 @@ btnQuickLoad.addEventListener('click', async () => {
   }
 });
 
+if (btnLiveConnect) {
+  btnLiveConnect.addEventListener('click', () => {
+    const url = liveUrl?.value?.trim();
+    if (!url) {
+      pickerError.textContent = 'Enter a live WebSocket URL.';
+      return;
+    }
+    pickerError.textContent = '';
+    filePicker.style.display = 'none';
+    startLiveConnection(url);
+  });
+}
+
 /** Start the race and transition loading overlay. */
 function startRace() {
   loadStatus.textContent = 'Building 3D Circuit & F1 Models…';
@@ -1809,6 +1997,11 @@ function startRace() {
 
 // Auto-Launch on Load
 async function autoInit() {
+  const liveQuery = new URLSearchParams(window.location.search).get('live');
+  if (liveQuery) {
+    startLiveConnection(liveQuery);
+    return;
+  }
   // 1. Check embedded data (for single-file bundled HTML distributions)
   const dataA = document.getElementById('replay-data-a');
   const dataB = document.getElementById('replay-data-b');

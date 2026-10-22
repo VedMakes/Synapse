@@ -16,6 +16,10 @@ The current slice provides:
   convergence tool.
 - A validated, streaming replay export with a Pygame renderer and an optional
   dependency-free browser fallback.
+- A bounded ONNX ghost-race interface that evaluates multiple model artifacts
+  on shared tracks and can emit compatible replay groups.
+- A fixed-rate live ONNX heat path that runs fresh model actions during the
+  Python simulation and streams read-only state to the browser renderer.
 
 Python is authoritative. Pygame is a read-only renderer that consumes validated
 replays; it does not simulate or score cars. Unity is no longer an active
@@ -158,7 +162,17 @@ a local baseline only. The measured PPO baseline experiment is in
 `reports/e2_baseline_convergence.md`; it covers the current synthetic fixture
 only and does not freeze public event settings. Held-out-track storage, final
 ranking, and event release freeze remain separate milestones; ONNX inference
-and local multi-ghost comparison now have candidate implementations.
+and local multi-ghost comparison now have a non-renderer race interface. See
+[`docs/submission_runtime.md`](docs/submission_runtime.md). It does not change
+the renderer directory or the single-car replay schema.
+
+For live actions rather than replay playback, install
+`requirements-live.lock`, serve `renderer/`, and run
+`tools/run_live_onnx.py`. The initial profile is 30 Hz physics/control with a
+20 ms candidate action budget and strict late-action DNF. Open the renderer
+with `?live=ws://127.0.0.1:8766/live/v1`. The browser is presentation-only;
+Python remains authoritative for observations, actions, physics, events, and
+results.
 
 ## Trainer boundary
 

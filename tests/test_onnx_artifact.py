@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import numpy as np
 
@@ -133,6 +134,20 @@ class OnnxArtifactTests(unittest.TestCase):
         self.mutate(change)
         with self.assertRaisesRegex(ValueError, "external"):
             load_submission(self.target)
+
+    def test_rejects_onnx_normalizer_before_constructing_declared_arrays(self):
+        path = self.target / "training_contract.json"
+        contract = json.loads(path.read_text())
+        contract["trainer"]["normalizer"] = {"size": 10**12}
+        path.write_text(json.dumps(contract))
+        manifest_path = self.target / "manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["training_contract_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        manifest_path.write_text(json.dumps(manifest))
+        with mock.patch("racing_event.observation.RunningObservationNormalizer.from_state_dict") as construct:
+            with self.assertRaisesRegex(ValueError, "no separate normalizer"):
+                load_submission(self.target)
+        construct.assert_not_called()
 
     def test_rejects_unapproved_operators_domains_dynamic_shapes_and_nonfinite_data(self):
         original = (self.target / "model.onnx").read_bytes()

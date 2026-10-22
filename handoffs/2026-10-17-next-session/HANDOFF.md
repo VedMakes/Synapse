@@ -381,3 +381,129 @@ and artifact rights. Clean public snapshot, hashed offline wheelhouse and fresh
 machine rehearsal still need doing after those choices. See the readiness
 report. Never put private geometry/seeds/previews in public files/history, never
 reintroduce Unity, and never silently change physics or single-car replay 1.1.
+
+## 2026-10-23 continuation: live ONNX inference and actions
+
+### User goal
+
+Move the competition from replay-driven model comparison to live model
+inference and live actions. ONNX policies must be called during the race;
+Python must remain authoritative for observations, actions, fixed-step physics,
+termination, timing, and results. Renderer changes must stay minimal because
+`renderer/` is owned by another team.
+
+### Implemented state
+
+- Added `racing_event/live_race.py` with a fixed-rate live heat scheduler.
+  It supports 1 to 4 independent ghost entrants, shared fixed-start track
+  state, concurrent batch-one ONNX calls, a 30 Hz physics/control default,
+  configurable integer action holding, monotonic release/deadline timing, and
+  `strict_scored`/`trusted_live` late-action profiles.
+- The strict profile marks an entrant `dnf_inference` on a late, missing,
+  malformed, non-finite, out-of-range, or failed action. Trusted-live may hold
+  the last action for one interval for local demos only.
+- Sessions are loaded, contract-validated, and warmed before tick zero. Live
+  reports include artifact/model/contract hashes, fixed tick rate, action
+  budget, latency percentiles, release jitter, deadline misses, inference
+  failures, and per-entrant trajectory hashes. Output is `live-race.json`,
+  not a replay.
+- Added `racing_event/live_protocol.py`: loopback WebSocket text JSON protocol
+  with `hello`, latest-only `state`, and reliable `end` messages. State
+  publishing never blocks the physics loop; slow clients lose intermediate
+  presentation packets, not simulation transitions. The renderer sends no
+  actions or control commands.
+- Added `tools/run_live_onnx.py` and `make live-onnx-race`. The CLI prints the
+  actual WebSocket endpoint, supports `--isolate`, `--policy-budget-ms`,
+  `--control-hz`, `--late-policy`, `--no-pace`, and a new output directory.
+- Added `requirements-live.lock` and the `live` optional dependency in
+  `pyproject.toml`, pinned to `websockets==15.0.1` with the existing ONNX
+  runtime dependencies.
+- Added minimal browser live integration only: `renderer/live_source.js`, a
+  Connect Live URL control in `renderer/index.html`, live handling in
+  `renderer/app.js`, and small styles/docs. Replay controls remain unchanged
+  for replay mode and are disabled in live mode. The browser validates packets,
+  displays stale status, interpolates only received poses, and never simulates.
+- The previous non-renderer ONNX multi-model replay orchestration remains in
+  `racing_event/race.py` and `tools/run_onnx_race.py`; live mode is a separate
+  path and does not alter replay schema 1.1.
+
+### Research
+
+Research notes and the implementation report are saved at:
+
+- `research_notes/Live ONNX race inference/onnx_realtime.md`
+- `research_notes/Live ONNX race inference/live_racing_loops.md`
+- `research_notes/Live ONNX race inference/live_state_transport.md`
+- `reports/Live ONNX race inference.md`
+
+The chosen design follows fixed-step/action-barrier patterns from racing and
+robotics projects, ONNX Runtime session/thread guidance, and latest-only
+WebSocket backpressure handling. The initial live event profile is 30 Hz with
+a 20 ms candidate action budget; this budget still requires organizer-hardware
+p99.9 measurement before it becomes a final scored rule.
+
+### Checks from this session
+
+- **Passed:** `.venv/bin/python -m unittest tests.test_live_race
+  tests.test_onnx_race tests.test_onnx_artifact -v` — 17 tests.
+- **Passed:** `node --test tests/live_source.test.cjs
+  tests/participant_dashboard.test.cjs tests/replay_frontend.test.cjs` — 74
+  tests.
+- **Passed:** `.venv/bin/python -m py_compile racing_event/*.py tools/*.py
+  tests/*.py`, `node --check renderer/app.js`, `node --check
+  renderer/live_source.js`, `.venv/bin/python -m pip check`, and `git diff
+  --check`.
+- **Passed:** `make render` after live changes.
+- **Passed:** live CLI smoke with two ONNX entrants, `--max-steps 10`,
+  `--port 0`, and `--no-pace`; report showed 30/30 Hz, 10 steps per entrant,
+  zero deadline misses, and an actual dynamically assigned WebSocket endpoint.
+- **Passed:** real local WebSocket smoke; client received hello, ordered live
+  states, and end, with final state delivery preserved before end.
+- **Passed earlier in this session:** full `make test` — 254 tests, 253
+  passed, 1 Docker integration skipped, before the final small callback/jitter
+  and JavaScript live-source test additions.
+- **Not currently claimable:** a fresh full `make test` after the final small
+  live changes. Two later attempts exceeded the 360 s and 600 s tool limits
+  while running the long reference-checkpoint portion. Re-run it if a full
+  suite result is required; focused current checks above pass.
+- **Not run:** Docker build/real isolated live heat, browser screenshot/manual
+  display review, or organizer-grade p99.9 deadline measurement. Docker was
+  already absent in the prior handoff and remains a release gate.
+
+### Usage
+
+Install live dependencies:
+
+```bash
+.venv/bin/python -m pip install -r requirements-live.lock
+```
+
+Serve the owned renderer separately:
+
+```bash
+python -m http.server 8765 --bind 127.0.0.1 --directory renderer
+```
+
+Run a live heat:
+
+```bash
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant team-a submissions/team-a \
+  --entrant team-b submissions/team-b \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live/oval
+```
+
+Open the printed endpoint through the browser, for example:
+`http://127.0.0.1:8765/?live=ws://127.0.0.1:8766/live/v1`.
+Omit `--emit-replays`; live reports do not embed track geometry.
+
+### Next exact action
+
+Review/stage only the intended live-race, prior ONNX race, research, docs,
+tests, and minimal renderer files; preserve the unrelated dirty `.gitignore`.
+Create the requested commit. Then, if event-grade live scoring is desired,
+re-run the full Python suite with a longer tool allowance, build/verify the
+Docker evaluator, and measure p99.9 end-to-end isolated action latency before
+freezing the 20 ms budget or any final DNF/ranking policy.
