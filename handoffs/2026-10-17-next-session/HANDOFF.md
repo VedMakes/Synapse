@@ -503,7 +503,9 @@ Omit `--emit-replays`; live reports do not embed track geometry.
 
 Review/stage only the intended live-race, prior ONNX race, research, docs,
 tests, and minimal renderer files; preserve the unrelated dirty `.gitignore`.
-Create the requested commit. Then, if event-grade live scoring is desired,
+The implementation and handoff are committed in `3e2d063 feat: run live ONNX
+race heats`. The unrelated `.gitignore` change remains unstaged. Then, if
+event-grade live scoring is desired,
 re-run the full Python suite with a longer tool allowance, build/verify the
 Docker evaluator, and measure p99.9 end-to-end isolated action latency before
 freezing the 20 ms budget or any final DNF/ranking policy.
