@@ -217,6 +217,7 @@ def run_live_onnx_race(
     worker_memory_mb: int = 512,
     output_dir: str | Path | None = None,
     on_started: Callable[[str], None] | None = None,
+    on_telemetry: Callable[[dict[str, Any]], None] | None = None,
 ) -> LiveRaceReport:
     """Run one live heat and publish state after every real physics tick."""
 
@@ -255,7 +256,10 @@ def run_live_onnx_race(
                 raise ValueError("entrant environment code hash does not match evaluator")
             validate_evaluation_contract(env, policy.contract, policy.normalizer, require_track_match=False)
             policies.append(policy)
-            artifact_summaries.append(_artifact_summary(entrant, policy))
+            summary = _artifact_summary(entrant, policy)
+            summary["artifact_bytes"] = sum(path.stat().st_size for path in source.iterdir() if path.is_file())
+            summary["model_bytes"] = (source / "model.onnx").stat().st_size
+            artifact_summaries.append(summary)
 
         # Model/session construction and one representative inference happen
         # before the measured live clock starts.
@@ -426,6 +430,24 @@ def run_live_onnx_race(
                         statuses[index] = _result_status(env, index, info, bool(terminated[index]), bool(truncated[index]))
                         active[index] = False
             publish_state()
+            if on_telemetry is not None:
+                on_telemetry({
+                    "kind": "live_tick",
+                    "tick": sim_tick,
+                    "sim_time_s": sim_tick / resolved["physics_hz"],
+                    "entrants": [
+                        {
+                            "participant_id": entrants[index].participant_id,
+                            "label": entrants[index].display_label,
+                            "status": statuses[index],
+                            "latency_ms": latency_values[index][-1] if latency_values[index] else None,
+                            "deadline_misses": deadline_misses[index],
+                            "inference_failures": inference_failures[index],
+                            "model_mb": round(artifact_summaries[index]["model_bytes"] / (1024 * 1024), 3),
+                        }
+                        for index in range(len(entrants))
+                    ],
+                })
 
         for index in range(len(entrants)):
             if statuses[index] == "running":

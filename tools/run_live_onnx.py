@@ -54,6 +54,10 @@ def run(args: argparse.Namespace):
         print(f"Live WebSocket endpoint: {endpoint}", flush=True)
         print(f"Open the renderer with ?live={endpoint}; the browser is presentation-only.", flush=True)
 
+    def telemetry(value: dict[str, object]) -> None:
+        if args.telemetry_stdout:
+            print("LIVE_TELEMETRY " + json.dumps(value, sort_keys=True, separators=(",", ":")), flush=True)
+
     try:
         report = run_live_onnx_race(
             entrants,
@@ -66,6 +70,7 @@ def run(args: argparse.Namespace):
             worker_memory_mb=args.worker_memory_mb,
             output_dir=args.output_dir,
             on_started=announce,
+            on_telemetry=telemetry,
         )
         return report
     finally:
@@ -97,6 +102,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--startup-timeout", type=float, default=30.0)
     parser.add_argument("--action-timeout", type=float, default=None)
     parser.add_argument("--end-grace-seconds", type=float, default=0.25)
+    parser.add_argument("--telemetry-stdout", action="store_true", help="emit one bounded LIVE_TELEMETRY JSON line per simulation tick")
     return parser.parse_args()
 
 

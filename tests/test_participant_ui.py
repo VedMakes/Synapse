@@ -22,7 +22,17 @@ from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
 from racing_event.trajectory import engine_code_hash, load_replay
 from tools import participant_ui as ui
-from tools.participant_ui import PAGE, ROOT, TrainingProcess, build_training_command, parse_update_line, public_maps
+from tools.participant_ui import (
+    LIVE_TELEMETRY_PREFIX,
+    PAGE,
+    ROOT,
+    TrainingProcess,
+    build_live_race_command,
+    build_training_command,
+    parse_live_telemetry_line,
+    parse_update_line,
+    public_maps,
+)
 
 
 class ParticipantUiTests(unittest.TestCase):
@@ -110,8 +120,51 @@ class ParticipantUiTests(unittest.TestCase):
             "ray-endpoint",
             "car-wheel",
             "Positive angles sweep left",
+            "Start live heat",
+            "Shared race process",
+            "model-file sizes",
         ):
             self.assertIn(text, PAGE)
+
+    def test_live_telemetry_line_parser_accepts_ticks_and_rejects_untrusted_lines(self) -> None:
+        payload = {
+            "kind": "live_tick",
+            "tick": 4,
+            "entrants": [{"participant_id": "alpha", "model_mb": 1.25}],
+        }
+        self.assertEqual(parse_live_telemetry_line(LIVE_TELEMETRY_PREFIX + json.dumps(payload)), payload)
+        self.assertIsNone(parse_live_telemetry_line("ordinary trainer output"))
+        self.assertIsNone(parse_live_telemetry_line(LIVE_TELEMETRY_PREFIX + "not-json"))
+        self.assertIsNone(parse_live_telemetry_line(LIVE_TELEMETRY_PREFIX + json.dumps({"kind": "other", "entrants": []})))
+
+    def test_live_race_command_is_workspace_bound_and_emits_telemetry(self) -> None:
+        artifact = ROOT / "artifacts" / "onnx-imitation"
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory, patch.object(ui, "_ready_python", return_value=Path(sys.executable)):
+            output = Path(directory) / "heat"
+            command = build_live_race_command({
+                "participant_a": "alpha",
+                "participant_b": "beta",
+                "artifact_a": str(artifact),
+                "artifact_b": str(artifact),
+                "race_output": str(output),
+                "race_max_steps": "12",
+                "race_budget_ms": "7.5",
+                "race_port": "8777",
+                "race_late_policy": "trusted_live",
+                "race_isolate": True,
+            })
+        self.assertIn("--telemetry-stdout", command)
+        self.assertIn("--isolate", command)
+        self.assertEqual(command[command.index("--max-steps") + 1], "12")
+        self.assertEqual(command[command.index("--policy-budget-ms") + 1], "7.5")
+        self.assertEqual(command[command.index("--port") + 1], "8777")
+        with self.assertRaisesRegex(ValueError, "different"):
+            build_live_race_command({"participant_a": "same", "participant_b": "same", "artifact_a": str(artifact), "artifact_b": str(artifact)})
+
+    def test_process_resource_snapshot_reports_a_process_tree(self) -> None:
+        snapshot = ui._process_resource_snapshot(os.getpid())
+        self.assertIn(snapshot["scope"], {"process_tree", "child_processes"})
+        self.assertGreaterEqual(snapshot["pids"], 1)
 
     def test_ui_writes_weighted_reward_and_ray_config_snapshots(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
@@ -396,7 +449,7 @@ class ParticipantUiApiTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         self.form = write_watch_run(self.root)
-        for name, value in (("PROCESS", TrainingProcess()), ("RENDER_PROCESS", TrainingProcess()), ("REPLAY_OUTPUTS", {}), ("ACTION_LOCK", Lock())):
+        for name, value in (("PROCESS", TrainingProcess()), ("RACE_PROCESS", TrainingProcess()), ("RENDER_PROCESS", TrainingProcess()), ("REPLAY_OUTPUTS", {}), ("ACTION_LOCK", Lock())):
             patcher = patch.object(ui, name, value)
             patcher.start()
             self.addCleanup(patcher.stop)
@@ -407,8 +460,9 @@ class ParticipantUiApiTests(unittest.TestCase):
 
     def close_server(self) -> None:
         ui.PROCESS.stop()
+        ui.RACE_PROCESS.stop()
         ui.RENDER_PROCESS.stop()
-        wait_for(lambda: not ui.PROCESS.snapshot()["running"] and not ui.RENDER_PROCESS.snapshot()["running"])
+        wait_for(lambda: not ui.PROCESS.snapshot()["running"] and not ui.RACE_PROCESS.snapshot()["running"] and not ui.RENDER_PROCESS.snapshot()["running"])
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=2)
@@ -544,6 +598,20 @@ class ParticipantUiApiTests(unittest.TestCase):
         wait_for(lambda: not ui.PROCESS.snapshot()["running"])
         self.assertEqual(ui.PROCESS.snapshot()["state"], "stopped")
 
+    def test_live_race_api_supervises_command_and_exposes_telemetry(self) -> None:
+        command = [sys.executable, "-c", "import time; print('Live WebSocket endpoint: ws://127.0.0.1:8777/live/v1', flush=True); print('LIVE_TELEMETRY {\"kind\":\"live_tick\",\"entrants\":[]}', flush=True); time.sleep(10)"]
+        with patch.object(ui, "build_live_race_command", return_value=command):
+            status, result = self.post("/api/race/start", {"ignored": True})
+        self.assertEqual(status, 200, result)
+        wait_for(lambda: ui.RACE_PROCESS.snapshot()["telemetry"].get("kind") == "live_tick")
+        snapshot = ui.RACE_PROCESS.snapshot()
+        self.assertTrue(snapshot["running"])
+        self.assertEqual(snapshot["telemetry"]["kind"], "live_tick")
+        self.assertTrue(any(line.startswith("Live WebSocket endpoint:") for line in snapshot["lines"]))
+        stop_status, _ = self.post("/api/race/stop", {})
+        self.assertEqual(stop_status, 200)
+        wait_for(lambda: not ui.RACE_PROCESS.snapshot()["running"])
+
     def test_watch_does_not_export_or_spawn_while_renderer_is_active(self) -> None:
         ui.RENDER_PROCESS.start_command([sys.executable, "-c", "import time; time.sleep(10)"], kind="renderer-test")
         with patch.object(ui, "build_watch_replay") as export:
@@ -553,7 +621,7 @@ class ParticipantUiApiTests(unittest.TestCase):
         export.assert_not_called()
 
     def test_request_length_and_encoding_fail_promptly_for_all_post_routes(self) -> None:
-        for route in ("/api/start", "/api/watch", "/api/setup", "/api/stop"):
+        for route in ("/api/start", "/api/watch", "/api/setup", "/api/stop", "/api/race/start", "/api/race/stop"):
             for length in ("-1", "16385", "nonsense", "999999999999999999"):
                 with self.subTest(route=route, length=length):
                     code, _, body = self.request(route, headers={"Content-Length": length}, raw=b"")

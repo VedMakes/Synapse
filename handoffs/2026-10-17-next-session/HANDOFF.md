@@ -509,3 +509,91 @@ event-grade live scoring is desired,
 re-run the full Python suite with a longer tool allowance, build/verify the
 Docker evaluator, and measure p99.9 end-to-end isolated action latency before
 freezing the 20 ms budget or any final DNF/ranking policy.
+
+## 2026-10-24 continuation: participant live-heat dashboard
+
+### User goal
+
+Add an easy participant-facing side-by-side live race flow to the existing
+training UI. The requested presentation is motorsport/broadcast inspired
+without directly naming the protected F1 brand. The UI must start and stop a
+live ONNX heat, show model telemetry and resource information in the terminal,
+and keep Python/ONNX/physics authoritative. `renderer/` remains owned by the
+other team; only the existing live renderer contract is consumed.
+
+### Implemented state
+
+- `tools/participant_ui.py` now has a separate `RACE_PROCESS` supervisor and
+  `/api/race/start` / `/api/race/stop` endpoints. Training, replay watch, and
+  live heat processes remain separate and cannot be started over one another.
+- The participant dashboard contains a full-width “Grid control / live heat”
+  panel with two racer IDs, two ONNX artifact paths, track/config/output,
+  WebSocket port, action budget, tick count, strict/trusted late policy, and
+  optional organizer isolation. Controls freeze while the heat is active.
+- The embedded dashboard renders two side-by-side cyan/amber racer tiles with
+  status, latest inference latency, deadline misses, inference failures, and
+  model-file size. A terminal panel keeps the bounded child output, including
+  parsed `LIVE_TELEMETRY` lines and the live WebSocket endpoint.
+- Resource sampling uses the supervised Linux process tree without adding a
+  dependency: RSS, peak RSS, PID count, and thread count are exposed through
+  `/api/status`. Runtime RSS is intentionally labeled shared across the race
+  process; model-file sizes are shown per racer rather than misrepresented as
+  isolated per-model RSS.
+- `tools/run_live_onnx.py` emits optional `LIVE_TELEMETRY {...}` lines with
+  per-entrant status, latency, deadline misses, inference failures, and model
+  file size. The live runner remains authoritative and still writes only
+  `live-race.json`, not a replay.
+- `racing_event/live_race.py` includes `artifact_bytes` and `model_bytes` in
+  live entrant summaries and sends `model_mb` in per-tick telemetry.
+- Added focused tests for telemetry parsing, live command construction,
+  process-tree resource reporting, race API supervision, embedded dashboard
+  race controls, and live telemetry/resource rendering.
+
+### Actual checks
+
+- **Passed:** `.venv/bin/python -m unittest discover -s tests -v` via `make
+  test`: **258 tests passed, 1 Docker integration skipped**. This is the
+  project’s configured full Python suite.
+- **Passed:** `node --test tests/*.test.cjs`: **75 tests passed**.
+- **Passed:** `node --test tests/participant_dashboard.test.cjs`: 8 tests
+  passed, including live heat single-flight/resource rendering.
+- **Passed:** `.venv/bin/python -m unittest tests.test_participant_ui.ParticipantUiTests
+  tests.test_participant_ui.ParticipantUiApiTests.test_live_race_api_supervises_command_and_exposes_telemetry
+  -v`: 25 tests passed.
+- **Passed:** Python compilation for modified Python/test files and `git diff
+  --check`.
+- **Passed:** `make render`.
+- **Passed:** live ONNX CLI smoke with two real `artifacts/onnx-imitation`
+  entrants, 8 ticks, telemetry stdout, dynamically assigned port, and a
+  generated `live-race.json`; both entrants reached `dnf_timeout` at the
+  configured step limit and emitted 8 telemetry lines. Model files were
+  reported as 23,727 bytes each.
+- **Not runnable as requested:** `python3 -m pytest -q` failed immediately
+  because the system interpreter has no `pytest` module and no project
+  dependencies. The repository’s actual configured suite is `make test`, which
+  passed above using `.venv/bin/python` and unittest.
+- **Not run:** Docker build/real isolated live heat, real-browser screenshot
+  review, and organizer-grade p99.9 memory/latency measurement. Docker remains
+  unavailable and the browser is not required by the default test suite.
+
+### Current working tree and commit state
+
+- Current intended edits are still uncommitted in:
+  - `tools/participant_ui.py`
+  - `tools/run_live_onnx.py`
+  - `racing_event/live_race.py`
+  - `tests/test_participant_ui.py`
+  - `tests/participant_dashboard.test.cjs`
+- `.gitignore` has an unrelated pre-existing dirty change and must remain
+  unstaged.
+- The preceding live implementation remains committed in `3e2d063`; the
+  participant dashboard/resource-monitoring slice still needs its own focused
+  commit.
+
+### Next exact action
+
+Inspect the final diff once more, stage only the five intended implementation
+and test files plus this handoff, leave `.gitignore` untouched, create a
+conventional feature commit, and report the commit hash. Do not claim Docker,
+browser display, or separate per-model runtime RSS verification beyond the
+evidence above.

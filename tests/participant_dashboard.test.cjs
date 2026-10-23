@@ -76,7 +76,9 @@ async function dashboard() {
 
 function response(body, ok = true) { return { ok, json: async () => body }; }
 const runFields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", "reward-progress", "reward-steer_smoothness"];
+const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
 function assertFrozen(h, expected) { for (const id of runFields) assert.equal(h.el(id).disabled, expected, id); }
+function assertRaceFrozen(h, expected) { for (const id of raceFields) assert.equal(h.el(id).disabled, expected, id); }
 
 test("initial budget, explicit renderer/source controls and ordered live ray preview", async () => {
   const h = await dashboard();
@@ -197,4 +199,37 @@ test("stale status polls cannot unfreeze an in-flight watch or start", async () 
   assert.equal(h.el("watch-error").focused, true);
   assert.match(h.el("watch-error").textContent, /failed validation/);
   assert.equal(h.el("watch").disabled, false);
+});
+
+test("live heat starts as a single-flight race action and renders telemetry/resource status", async () => {
+  const h = await dashboard();
+  const first = h.click("race-start");
+  assertRaceFrozen(h, true);
+  const calls = h.calls.filter(call => call.url === "/api/race/start");
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.participant_a, "racer-alpha");
+  assert.equal(payload.participant_b, "racer-beta");
+  await h.click("race-start");
+  assert.equal(h.calls.filter(call => call.url === "/api/race/start").length, 1);
+  h.setStatus({ race: { state: "starting", running: true, lines: [], telemetry: {}, resources: {} } });
+  h.resolve("/api/race/start", { state: "starting", running: true, lines: ["Live WebSocket endpoint: ws://127.0.0.1:8777/live/v1"] });
+  await first; await flush();
+  assertRaceFrozen(h, true);
+  assert.equal(h.el("race-state-chip").textContent, "starting");
+  h.setStatus({ race: { state: "running", running: true, lines: ["LIVE_TELEMETRY tick=4"], resources: { rss_mb: 42.5, peak_rss_mb: 48.1, pids: 3, threads: 5 }, telemetry: { entrants: [
+    { label: "Alpha", status: "running", latency_ms: 3.25, model_mb: 1.5, deadline_misses: 1, inference_failures: 0 },
+    { label: "Beta", status: "dnf_inference", latency_ms: 22.0, model_mb: 2.5, deadline_misses: 2, inference_failures: 1 },
+  ] } } });
+  await h.poll();
+  assert.equal(h.el("race-latency-a").textContent, "3.25 ms");
+  assert.equal(h.el("race-model-a").textContent, "1.500 MB");
+  assert.equal(h.el("race-deadlines-b").textContent, "2");
+  assert.match(h.el("race-resource").textContent, /42\.5 MB/);
+  assert.match(h.el("race-terminal").textContent, /LIVE_TELEMETRY/);
+  assert.equal(h.el("race-stop").disabled, false);
+  h.setStatus({ race: { state: "stopped", running: false, lines: [], telemetry: {}, resources: {} } });
+  await h.poll();
+  assertRaceFrozen(h, false);
+  assert.equal(h.el("race-start").disabled, false);
 });

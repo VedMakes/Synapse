@@ -14,11 +14,12 @@ import math
 import os
 from pathlib import Path
 import re
+import resource
 import signal
 import subprocess
 import sys
 import tempfile
-from threading import Lock, Thread
+from threading import Event, Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import unquote, urlparse
@@ -40,6 +41,7 @@ UPDATE_PATTERN = re.compile(
     r"return=(?P<return>\S+)\s+lap=(?P<lap>\S+)\s+speed=(?P<speed>\S+)\s+m/s\s+"
     r"crash=(?P<crash>\S+)\s+off_track=(?P<off_track>\S+)"
 )
+LIVE_TELEMETRY_PREFIX = "LIVE_TELEMETRY "
 
 
 def _workspace_path(value: str, *, label: str) -> Path:
@@ -63,7 +65,7 @@ def _renderer_headless() -> bool:
     )
 
 
-def _ready_python(*, require_torch: bool = False, require_pygame: bool = False, headless: bool = False) -> Path:
+def _ready_python(*, require_torch: bool = False, require_pygame: bool = False, require_live: bool = False, headless: bool = False) -> Path:
     candidates = [ROOT / ".venv" / "bin" / "python", Path(sys.executable)]
     checked: list[str] = []
     for candidate in candidates:
@@ -73,6 +75,8 @@ def _ready_python(*, require_torch: bool = False, require_pygame: bool = False, 
             probe = "import numpy"
             if require_torch:
                 probe += "; import torch"
+            if require_live:
+                probe += "; import onnxruntime; import websockets"
             if require_pygame:
                 # Import alone does not prove SDL can actually open a surface.
                 probe += "; import pygame; pygame.display.init(); pygame.display.set_mode((320, 240))"
@@ -122,6 +126,71 @@ def parse_update_line(line: str) -> dict[str, object] | None:
     except ValueError:
         return None  # Malformed trainer telemetry is still logged, not authoritative.
     return values
+
+
+def parse_live_telemetry_line(line: str) -> dict[str, object] | None:
+    """Parse one bounded live-race telemetry line emitted by the runner."""
+    if not line.startswith(LIVE_TELEMETRY_PREFIX):
+        return None
+    try:
+        value = json.loads(line[len(LIVE_TELEMETRY_PREFIX):])
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or value.get("kind") != "live_tick":
+        return None
+    if not isinstance(value.get("entrants"), list):
+        return None
+    return value
+
+
+def _process_resource_snapshot(pid: int) -> dict[str, object]:
+    """Return Linux process-tree resource telemetry without a new dependency."""
+    if not sys.platform.startswith("linux"):
+        usage = resource.getrusage(resource.RUSAGE_CHILDREN)
+        return {"scope": "child_processes", "rss_mb": None, "peak_rss_mb": usage.ru_maxrss / 1024.0, "pids": 1}
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return {"scope": "process_tree", "rss_mb": None, "peak_rss_mb": None, "pids": 0}
+    pids = {str(pid)}
+    changed = True
+    while changed:
+        changed = False
+        for entry in proc.glob("[0-9]*"):
+            status = entry / "status"
+            try:
+                data = status.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            parent = next((line.split(":", 1)[1].strip() for line in data.splitlines() if line.startswith("PPid:")), None)
+            if parent in pids and entry.name not in pids:
+                pids.add(entry.name)
+                changed = True
+    rss_kb = 0
+    peak_kb = 0
+    threads = 0
+    for value in pids:
+        try:
+            data = (proc / value / "status").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        fields = {}
+        for line in data.splitlines():
+            if ":" in line:
+                key, raw = line.split(":", 1)
+                fields[key] = raw.strip()
+        try:
+            rss_kb += int(fields.get("VmRSS", "0 kB").split()[0])
+            peak_kb += int(fields.get("VmHWM", "0 kB").split()[0])
+            threads += int(fields.get("Threads", "0"))
+        except (ValueError, IndexError):
+            continue
+    return {
+        "scope": "process_tree",
+        "rss_mb": round(rss_kb / 1024.0, 2),
+        "peak_rss_mb": round(peak_kb / 1024.0, 2),
+        "pids": len(pids),
+        "threads": threads,
+    }
 
 
 def _atomic_json(path: Path, payload: object) -> None:
@@ -351,15 +420,89 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     return command
 
 
+def build_live_race_command(form: dict[str, object]) -> list[str]:
+    """Build the participant-facing two-model live heat command."""
+    def text(name: str, default: str = "") -> str:
+        value = form.get(name, default)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value.strip()
+
+    def positive_number(name: str, default: float) -> float:
+        value = form.get(name, default)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a positive finite number") from exc
+        if not math.isfinite(parsed) or parsed <= 0:
+            raise ValueError(f"{name} must be a positive finite number")
+        return parsed
+
+    def positive_int(name: str, default: int) -> int:
+        value = form.get(name, default)
+        if isinstance(value, bool):
+            raise ValueError(f"{name} must be a positive integer")
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(f"{name} must be a positive integer") from exc
+        if str(value).strip() not in (str(parsed),) and not isinstance(value, int):
+            raise ValueError(f"{name} must be a positive integer")
+        if parsed <= 0:
+            raise ValueError(f"{name} must be a positive integer")
+        return parsed
+
+    participant_a = text("participant_a", "Racer Alpha")
+    participant_b = text("participant_b", "Racer Beta")
+    if participant_a == participant_b:
+        raise ValueError("participant IDs must be different")
+    artifact_a = _workspace_path(text("artifact_a"), label="model A artifact")
+    artifact_b = _workspace_path(text("artifact_b"), label="model B artifact")
+    if not artifact_a.is_dir() or not artifact_b.is_dir():
+        raise ValueError("both model artifacts must be existing directories")
+    track = _workspace_path(text("race_track", "tracks/train/synthetic_oval.json"), label="race track")
+    config = _workspace_path(text("race_config", "config/simulation.json"), label="race config")
+    output_dir = _workspace_path(text("race_output", "artifacts/live/ui-heat"), label="race output")
+    if not track.is_file():
+        raise ValueError(f"race track does not exist: {track}")
+    if not config.is_file():
+        raise ValueError(f"race config does not exist: {config}")
+    if output_dir.exists():
+        raise ValueError("race output already exists; choose a new output directory")
+    python = _ready_python(require_live=True)
+    budget_ms = positive_number("race_budget_ms", 20.0)
+    max_steps = positive_int("race_max_steps", 2400)
+    port = positive_int("race_port", 8767)
+    late_policy = form.get("race_late_policy", "strict_scored")
+    if late_policy not in ("strict_scored", "trusted_live"):
+        raise ValueError("race_late_policy must be strict_scored or trusted_live")
+    command = [
+        str(python), str(ROOT / "tools" / "run_live_onnx.py"),
+        "--entrant", participant_a, str(artifact_a),
+        "--entrant", participant_b, str(artifact_b),
+        "--track", str(track), "--config", str(config),
+        "--output-dir", str(output_dir), "--port", str(port),
+        "--policy-budget-ms", str(budget_ms), "--max-steps", str(max_steps),
+        "--late-policy", str(late_policy), "--telemetry-stdout",
+    ]
+    if form.get("race_isolate") in (True, "true", "1", 1):
+        command.append("--isolate")
+    return command
+
+
 class TrainingProcess:
     def __init__(self) -> None:
         self._lock = Lock()
         self._process: subprocess.Popen[str] | None = None
         self._thread: Thread | None = None
+        self._resource_thread: Thread | None = None
+        self._resource_stop = Event()
         self._status: dict[str, object] = {
             "state": "idle",
             "lines": [],
             "metrics": {},
+            "telemetry": {},
+            "resources": {},
             "error": None,
             "started_at": None,
         }
@@ -369,6 +512,8 @@ class TrainingProcess:
             current = dict(self._status)
             current["lines"] = list(self._status["lines"])
             current["metrics"] = dict(self._status["metrics"])
+            current["telemetry"] = dict(self._status["telemetry"])
+            current["resources"] = dict(self._status["resources"])
             # Keep inputs frozen until the output reader has finalized this run.
             current["running"] = self._process is not None
             return current
@@ -396,6 +541,8 @@ class TrainingProcess:
             "kind": kind,
             "lines": [],
             "metrics": {},
+            "telemetry": {},
+            "resources": {},
             "error": None,
             "started_at": time.time(),
             "command": command,
@@ -411,6 +558,9 @@ class TrainingProcess:
                 bufsize=1,
                 start_new_session=True,
             )
+            self._resource_stop.clear()
+            self._resource_thread = Thread(target=self._sample_resources, args=(self._process,), daemon=True)
+            self._resource_thread.start()
             self._thread = Thread(target=self._read_output, args=(self._process,), daemon=True)
             self._thread.start()
         except OSError as exc:
@@ -454,6 +604,9 @@ class TrainingProcess:
                     parsed = parse_update_line(line)
                     if parsed is not None:
                         self._status["metrics"] = parsed
+                    live = parse_live_telemetry_line(line)
+                    if live is not None:
+                        self._status["telemetry"] = live
                     if self._status["state"] != "stopping":
                         self._status["state"] = "running"
             return_code = process.wait()
@@ -474,14 +627,28 @@ class TrainingProcess:
                     self._status["state"] = "failed"
                     self._status["error"] = str(exc)
         finally:
+            self._resource_stop.set()
             if process.stdout is not None:
                 process.stdout.close()
             with self._lock:
                 if self._process is process:
                     self._process = None
 
+    def _sample_resources(self, process: subprocess.Popen[str]) -> None:
+        while not self._resource_stop.wait(0.25):
+            snapshot = _process_resource_snapshot(process.pid)
+            with self._lock:
+                if self._process is not process:
+                    return
+                self._status["resources"] = snapshot
+        snapshot = _process_resource_snapshot(process.pid)
+        with self._lock:
+            if self._process is process:
+                self._status["resources"] = snapshot
+
 
 PROCESS = TrainingProcess()
+RACE_PROCESS = TrainingProcess()
 RENDER_PROCESS = TrainingProcess()
 REPLAY_OUTPUTS: dict[str, Path] = {}
 REPLAY_LOCK = Lock()
@@ -675,6 +842,22 @@ PAGE = r'''<!doctype html>
     .watch select { width: 100%; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 7px; color: var(--text); background: #0b141e; }
      .watch-result { color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
       .watch-result a { color: var(--cyan); }
+      .race-panel { grid-column: 1 / -1; }
+      .race-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 17px; }
+      .race-tile { padding: 14px; border: 1px solid var(--line); border-radius: 4px; background: #08121e; }
+      .race-tile.cyan-tile { border-color: #45f3ff66; box-shadow: inset 0 0 25px #45f3ff0d; }
+      .race-tile.amber-tile { border-color: #ffd16666; box-shadow: inset 0 0 25px #ffd1660d; }
+      .race-tile-head { display: flex; justify-content: space-between; gap: 10px; color: var(--text); font: 800 12px ui-monospace, monospace; letter-spacing: .08em; }
+      .race-tile-head strong { color: var(--acid); font-size: 10px; }
+       .race-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 12px; color: var(--muted); font: 10px ui-monospace, monospace; }
+      .race-stats b { display: block; margin-top: 3px; color: var(--cyan); font-size: 14px; }
+      .amber-tile .race-stats b { color: var(--amber); }
+      .race-resource { margin-top: 13px; padding: 9px 11px; border: 1px solid #29465a; color: var(--muted); background: #07101a; font: 11px ui-monospace, monospace; }
+      .race-check { display: flex; align-items: center; grid-template-columns: auto 1fr; gap: 9px; min-height: 42px; padding: 9px 11px; border: 1px solid var(--line); background: #060c14d9; }
+      .race-check input { width: auto; min-height: auto; }
+      .button-link { display: inline-flex; align-items: center; border: 1px solid #2e6074; border-radius: 4px; padding: 11px 16px; color: var(--cyan); background: linear-gradient(135deg, #14283a, #0d1825); font-weight: 800; letter-spacing: .03em; text-transform: uppercase; text-decoration: none; }
+      .button-link:hover { border-color: var(--cyan); box-shadow: 0 0 18px #45f3ff26; }
+      .race-terminal { min-height: 150px; max-height: 250px; }
       .subpanel { grid-column: 1 / -1; padding: 12px; border: 1px solid var(--line); border-radius: 3px; background: #0a131f; box-shadow: inset 0 0 20px #0000002b; }
       .subpanel h3 { margin-bottom: 10px; }
       .weight-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
@@ -719,14 +902,14 @@ PAGE = r'''<!doctype html>
       footer code { color: var(--cyan); }
      @media (max-width: 800px) { .grid { grid-template-columns: 1fr; } .hero::after { display: none; } }
       @media (max-width: 700px) { #ray-diagram .ray-callout, #ray-diagram .ray-leader, #ray-diagram .range-label { display: none; } }
-      @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics, .weight-grid { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } }
+       @media (max-width: 520px) { .shell { width: min(100% - 22px, 1180px); } .form-grid, .metrics, .weight-grid, .race-grid { grid-template-columns: 1fr; } label.full { grid-column: auto; } header { min-height: 70px; } .read-only { max-width: 120px; text-align: right; line-height: 1.5; } }
      @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .001ms !important; scroll-behavior: auto !important; } body::before, body::after { opacity: .12; } }
   </style>
 </head>
 <body>
   <main class="shell">
     <header><div class="brand"><span class="brand-mark">S/</span> SYNAPSE <span style="color:var(--muted);font-size:10px;letter-spacing:.04em">NIGHT SHIFT / TRAINING CONSOLE</span></div><div class="read-only"><span>●</span> TOUGE NIGHT // LOOPBACK</div></header>
-    <section class="hero"><div class="eyebrow">PROJECT SYNAPSE / TOUGE NIGHT / PROVISIONAL RELEASE</div><h1>Tune the line. Own the run.</h1><p>Set the signal mix, lay out your forward sensors, then launch your own trainer. SYNAPSE owns the road and the physics; your code owns the driver, algorithm, and weights.</p><div class="hero-stamp"><span>RUN MODE: LOCAL</span><span>TELEMETRY: LIVE</span><span>RAYS: CONFIGURABLE</span></div></section>
+     <section class="hero"><div class="eyebrow">PROJECT SYNAPSE / GRID CONTROL / PROVISIONAL RELEASE</div><h1>Own the line. Take the flag.</h1><p>Prepare your driver, then put two validated ONNX models on the same live circuit. Python owns the road, the clock, and every action; this console gives you the pit wall view.</p><div class="hero-stamp"><span>RUN MODE: LOCAL</span><span>TELEMETRY: LIVE</span><span>GRID: SIDE BY SIDE</span></div></section>
     <section class="grid">
       <section class="panel">
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
@@ -812,8 +995,35 @@ PAGE = r'''<!doctype html>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
         </div>
       </aside>
-      <section class="panel">
-        <div class="panel-head"><h2>03 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
+       <section class="panel race-panel">
+         <div class="panel-head"><h2>03 · Grid control / live heat</h2><span id="race-state-chip" class="status-chip">idle</span></div>
+         <div class="section">
+           <div class="form-grid">
+             <label>Racer Alpha ID<input id="participant-a" value="racer-alpha" spellcheck="false"></label>
+             <label>Racer Beta ID<input id="participant-b" value="racer-beta" spellcheck="false"></label>
+             <label>Model A artifact<input id="artifact-a" value="artifacts/onnx-imitation" spellcheck="false"></label>
+             <label>Model B artifact<input id="artifact-b" value="artifacts/onnx-imitation" spellcheck="false"></label>
+             <label>Race circuit<input id="race-track" value="tracks/train/synthetic_oval.json" spellcheck="false"></label>
+             <label>Race config<input id="race-config" value="config/simulation.json" spellcheck="false"></label>
+             <label>Output directory<input id="race-output" value="artifacts/live/ui-heat" spellcheck="false"></label>
+             <label>WebSocket port<input id="race-port" type="number" min="1" max="65535" step="1" value="8767"></label>
+             <label>Action budget (ms)<input id="race-budget-ms" type="number" min="1" step="0.1" value="20"></label>
+             <label>Live ticks<input id="race-max-steps" type="number" min="1" step="1" value="2400"></label>
+             <label>Late action policy<select id="race-late-policy"><option value="strict_scored">Strict scored / DNF late action</option><option value="trusted_live">Demo hold-last action</option></select></label>
+             <label class="race-check"><input id="race-isolate" type="checkbox"> Run model workers in organizer isolation</label>
+           </div>
+           <div class="actions"><button id="race-start" class="primary">Start live heat</button><button id="race-stop" disabled>Red flag / stop heat</button><a id="race-open" class="button-link" href="#" target="_blank" rel="noopener" hidden>Open broadcast view</a></div>
+           <p id="race-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
+           <div class="race-grid">
+              <div class="race-tile cyan-tile"><div class="race-tile-head"><span id="race-name-a">RACER ALPHA</span><strong id="race-status-a">READY</strong></div><div class="race-stats"><span>LATENCY <b id="race-latency-a">—</b></span><span>MODEL FILE <b id="race-model-a">—</b></span><span>DEADLINES <b id="race-deadlines-a">0</b></span><span>FAILURES <b id="race-failures-a">0</b></span></div></div>
+              <div class="race-tile amber-tile"><div class="race-tile-head"><span id="race-name-b">RACER BETA</span><strong id="race-status-b">READY</strong></div><div class="race-stats"><span>LATENCY <b id="race-latency-b">—</b></span><span>MODEL FILE <b id="race-model-b">—</b></span><span>DEADLINES <b id="race-deadlines-b">0</b></span><span>FAILURES <b id="race-failures-b">0</b></span></div></div>
+           </div>
+            <div class="race-resource" id="race-resource">Shared race process: waiting for telemetry. Runtime RSS is shared; model-file sizes are shown per racer.</div>
+           <div id="race-terminal" class="log race-terminal">Grid control idle. Choose two model artifacts and start a live heat.</div>
+         </div>
+       </section>
+       <section class="panel">
+         <div class="panel-head"><h2>04 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
@@ -827,12 +1037,14 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
      const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
-     const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+       const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+       const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
       const svgNamespace = "http://www.w3.org/2000/svg";
-      let pending = null, latestStatus = {}, actionVersion = 0, lastWatch = null;
-     function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
+      function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+      function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
      function rayPreview() {
        const raw = $("ray-angles").value.trim();
@@ -896,19 +1108,40 @@ PAGE = r'''<!doctype html>
        validation.textContent = preview.error || `Layout valid: ${preview.values.length} ordered rays. The cyan line is 0° forward.`;
        $("ray-count").setAttribute("aria-invalid", preview.error ? "true" : "false"); $("ray-angles").setAttribute("aria-invalid", preview.error ? "true" : "false");
      }
-     function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
-     function render(data) {
-       latestStatus = data;
+      function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
+      function renderRace(data) {
+        latestRace = data || {};
+        const telemetry = latestRace.telemetry || {}, entrants = telemetry.entrants || [];
+        $("race-state-chip").textContent = latestRace.state || "idle";
+        $("race-terminal").textContent = (latestRace.lines || []).join("\n") || "Grid control idle. Choose two model artifacts and start a live heat.";
+        $("race-terminal").scrollTop = $("race-terminal").scrollHeight;
+        const resource = latestRace.resources || {};
+        $("race-resource").textContent = resource.rss_mb == null ? `Shared race process: ${resource.scope || "waiting"}. Runtime RSS is shared; model-file sizes are shown per racer.` : `Shared race process RSS ${Number(resource.rss_mb).toFixed(1)} MB · peak ${Number(resource.peak_rss_mb || 0).toFixed(1)} MB · ${resource.pids || 0} PIDs · ${resource.threads || 0} threads · per-racer model file sizes below`;
+        [0, 1].forEach(index => {
+          const entrant = entrants[index] || {}, suffix = index === 0 ? "a" : "b";
+          $(`race-name-${suffix}`).textContent = String(entrant.label || (index === 0 ? $("participant-a").value : $("participant-b").value) || "RACER").toUpperCase();
+          $(`race-status-${suffix}`).textContent = String(entrant.status || "READY").toUpperCase();
+          $(`race-latency-${suffix}`).textContent = entrant.latency_ms == null ? "—" : `${Number(entrant.latency_ms).toFixed(2)} ms`;
+          $(`race-model-${suffix}`).textContent = entrant.model_mb == null ? "—" : `${Number(entrant.model_mb).toFixed(3)} MB`;
+          $(`race-deadlines-${suffix}`).textContent = entrant.deadline_misses ?? 0;
+          $(`race-failures-${suffix}`).textContent = entrant.inference_failures ?? 0;
+        });
+        const endpointLine = (latestRace.lines || []).find(line => line.startsWith("Live WebSocket endpoint:"));
+        if (endpointLine) { const endpoint = endpointLine.split(": ").slice(1).join(": "); const link = $("race-open"); link.href = `http://127.0.0.1:8765/?live=${encodeURIComponent(endpoint)}`; link.hidden = false; }
+      }
+      function render(data) {
+        latestStatus = data;
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
       $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
        $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
-       if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
+        if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
          $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
-       }
-       syncControls();
+        }
+        renderRace(data.race || {});
+        syncControls();
      }
      function trainingError() {
        for (const id of ["trainer", "track-dir", "output-dir"]) if (!$(id).value.trim()) return `${id} is required.`;
@@ -922,10 +1155,13 @@ PAGE = r'''<!doctype html>
        }
        return rayPreview().error;
      }
-     function syncControls() {
-       const active = Boolean(latestStatus.running) || latestStatus.state === "stopping";
-       const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
-       fields.forEach(id => { $(id).disabled = busy; });
+      function syncControls() {
+        const active = Boolean(latestStatus.running) || latestStatus.state === "stopping";
+        const raceActive = Boolean(latestRace.running) || latestRace.state === "stopping";
+        const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
+        const raceBusy = Boolean(pending) || raceActive || active || Boolean(latestStatus.action_busy);
+        fields.forEach(id => { $(id).disabled = busy; });
+        raceFields.forEach(id => { $(id).disabled = raceBusy; });
        $("start").disabled = busy || Boolean(trainingError());
        $("setup").disabled = busy;
        $("stop").disabled = Boolean(pending) || !active || latestStatus.state === "stopping";
@@ -933,10 +1169,21 @@ PAGE = r'''<!doctype html>
        ["watch-source", "watch-map", "watch-renderer"].forEach(id => { $(id).disabled = watchBusy; });
        $("artifact-label").hidden = $("watch-source").value !== "artifact";
        $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
-       $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value === "artifact" && !$("artifact-dir").value.trim());
+        $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value === "artifact" && !$("artifact-dir").value.trim());
+        $("race-start").disabled = raceBusy || Boolean(raceValidation());
+        $("race-stop").disabled = Boolean(pending) || !raceActive || latestRace.state === "stopping";
+        $("race-start").setAttribute("aria-busy", String(pending === "race/start"));
        $("watch").textContent = pending === "watch" ? "Building replay…" : "Build / watch replay";
        $("watch").setAttribute("aria-busy", String(pending === "watch"));
-     }
+      }
+      function raceValidation() {
+        const ids = [$("participant-a").value.trim(), $("participant-b").value.trim()];
+        if (!ids[0] || !ids[1] || ids[0] === ids[1]) return "Use two different racer IDs.";
+        for (const id of ["artifact-a", "artifact-b", "race-track", "race-config", "race-output"]) if (!$(id).value.trim()) return `${id} is required.`;
+        for (const id of ["race-port", "race-max-steps"]) if (!/^\d+$/.test($(id).value.trim()) || Number($(id).value) <= 0) return `${id} must be a positive integer.`;
+        if (!Number.isFinite(Number($("race-budget-ms").value)) || Number($("race-budget-ms").value) <= 0) return "Action budget must be positive.";
+        return "";
+      }
      async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
      async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
      async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
@@ -952,25 +1199,29 @@ PAGE = r'''<!doctype html>
        $("renderer-status").textContent = result.renderer === "browser" ? "Browser fallback ready · open the link above on this device." : `${result.headless ? "Headless Pygame · one-frame check only; use the browser link for playback" : "Pygame on the server's local display"} · ${result.renderer_state}`;
        if (result.renderer_error) $("watch-error").textContent = result.renderer_error;
      }
-     async function action(name, payload = {}) {
-       if (pending || $(name).disabled) return;
+      async function action(name, payload = {}) {
+        const actionButton = name === "race/start" ? $("race-start") : name === "race/stop" ? $("race-stop") : $(name);
+        if (pending || actionButton.disabled) return;
        if (name === "start" && trainingError()) return;
        pending = name; actionVersion++;
-       const errorTarget = $(name === "watch" ? "watch-error" : "run-error"); errorTarget.textContent = "";
+        const errorTarget = $(name === "watch" ? "watch-error" : name.startsWith("race/") ? "race-error" : "run-error"); errorTarget.textContent = "";
        syncControls();
        try {
          const result = await request(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-         if (name === "watch") renderWatch(result); else render(result);
+          if (name === "watch") renderWatch(result); else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
        } catch (error) { errorTarget.textContent = error.message; errorTarget.focus(); }
        finally { pending = null; actionVersion++; syncControls(); refresh(); }
      }
-     $("start").addEventListener("click", () => action("start", formData()));
-     $("stop").addEventListener("click", () => action("stop"));
-     $("setup").addEventListener("click", () => action("setup"));
+      $("start").addEventListener("click", () => action("start", formData()));
+      $("stop").addEventListener("click", () => action("stop"));
+      $("setup").addEventListener("click", () => action("setup"));
+      $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
+      $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
       ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
       fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; syncControls(); }); });
-      ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+       ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+       raceFields.forEach(id => $(id).addEventListener("input", () => { $("race-error").textContent = raceValidation(); syncControls(); }));
       renderRayDiagram(); render({}); refreshMaps(); refresh(); setInterval(refresh, 700);
   </script>
 </body>
@@ -1015,7 +1266,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
         elif path == "/api/status":
-            self._json(200, {**PROCESS.snapshot(), "action_busy": ACTION_LOCK.locked(), "renderer": RENDER_PROCESS.snapshot()})
+            self._json(200, {
+                **PROCESS.snapshot(),
+                "action_busy": ACTION_LOCK.locked(),
+                "renderer": RENDER_PROCESS.snapshot(),
+                "race": RACE_PROCESS.snapshot(),
+            })
         elif path == "/api/maps":
             self._json(200, public_maps())
         elif path == "/api/report":
@@ -1079,7 +1335,10 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/stop":
                 self._json(200, PROCESS.stop())
                 return
-            if path not in ("/api/start", "/api/setup", "/api/watch"):
+            if path == "/api/race/stop":
+                self._json(200, RACE_PROCESS.stop())
+                return
+            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/race/start"):
                 self._json(404, {"error": "not found"})
                 return
             acquired = ACTION_LOCK.acquire(blocking=False)
@@ -1088,9 +1347,15 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/watch":
                 if PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop training before building a replay")
+                if RACE_PROCESS.snapshot()["running"]:
+                    raise RuntimeError("stop the live heat before building a replay")
                 if RENDER_PROCESS.snapshot()["running"]:
                     raise RuntimeError("close the current Pygame replay before building another")
                 result = build_watch_replay(form)
+            elif path == "/api/race/start":
+                if PROCESS.snapshot()["running"]:
+                    raise RuntimeError("stop training before starting a live heat")
+                result = RACE_PROCESS.start_command(build_live_race_command(form), kind="live-race")
             elif path == "/api/setup":
                 result = PROCESS.start_command([sys.executable, str(ROOT / "tools" / "setup_participant.py")], kind="setup")
             else:
@@ -1128,6 +1393,7 @@ def main() -> None:
         print("\nstopping participant UI")
     finally:
         PROCESS.stop()
+        RACE_PROCESS.stop()
         RENDER_PROCESS.stop()
         server.server_close()
 
