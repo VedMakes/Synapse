@@ -6,25 +6,67 @@ A modern, broadcast-grade **2.5D WebGL F1 TV Chase Viewer** built with Three.js 
 
 ## 🌟 Visual & Environmental Features
 
-- **Authentic Sunlit F1 Grid:** Bright, daytime Formula 1 atmosphere with warm sunlight (`3.2` intensity), vivid azure sky, soft horizon haze, and zero dark black voids.
-- **Clear Track Geometry (Zero Obstructions):**
+- **🎬 F1 Grand Prix Hero Section & Cinematic Highlight Showcase:**
+  - **Broadcast Hero Overlay:** Elegant neo-brutalist F1 pre-race launchpad displayed on initial load.
+  - **Circuit Selection Grid:** Direct visual card selector for all official championship circuits (**Oval Speedway**, **Flowing Esses**, **Tight Loop**).
+  - **Dual Racer Selectors:** Configurable head-to-head matchmaker for Car 1 (Cyan `#00f0ff`) and Car 2 (Papaya `#ff5500`), supporting both default built-in AI telemetry and instant custom replay JSON uploads.
+  - **Hero BGM Audio Engine:** Dedicated background music player for the Hero Section. Automatically plays `renderer/assets/hero_bgm.mp3` (or `.wav`), with procedural ambient synth chord progression fallback when the file is not yet added. Fades out smoothly when launching the Grand Prix.
+  - **6 Aesthetic Cinematic Racing Highlights & Cuts:**
+    In the background of the hero section, the camera continuously tracks the cars across 6 aesthetic broadcast camera cuts with optical shutter flashes, repeating every 4.5 seconds:
+    1. *Apex Curb Ground Cam:* Low-slung curb perspective ($Y = 0.42\text{m}$) clipping the corner rumble strip.
+    2. *Telephoto Straight Zoom:* Compressed $24^\circ$ telephoto lens placed $36\text{m}$ down the straight looking directly head-on at the oncoming cars.
+    3. *Trackside Lateral Tracking Pan:* Parallel side tracking shot with wheel rim and halo perspective ($Y = 1.65\text{m}$).
+    4. *Helicopter Drone Overhead Sweep:* Wide-angle elevated drone perspective ($Y = 18.5\text{m}$) capturing the full circuit curves and grandstands.
+    5. *Low Rear Diffuser & Rain LED Chase:* Close chase behind the carbon diffuser, titanium exhaust, and flashing red rain LED.
+    6. *Spectator Grandstand POV:* Grandstand terrace perspective behind waving spectator flags.
+  - **Instant Intro Re-opener:** Click `🎬 Intro` in the bottom broadcast bar anytime during racing to reopen the Hero Section showcase.
+- **Authentic Sunlit F1 Grid & Enhanced 3D Realism:**
+  - Bright, daytime Formula 1 atmosphere with warm sunlight (`3.2` intensity), vivid azure sky, soft horizon haze, and zero dark black voids.
+  - **Procedural Asphalt Bump Map:** Micro-surface grain texture generating specular sheen and road grip realism.
+  - **Rubberized Racing Line:** Dark Pirelli rubber grooved ribbon along apexes and braking zones.
+  - **Glowing Carbon-Ceramic Brake Discs:** Front and rear brake rotors glow hot orange-red (`#ff2200`) under hard braking ($>0.12$ deceleration).
+  - **Beveled Apex Rumble Curbs:** 3D extruded curbs with $0.065\text{m}$ height profile and beveled edges in alternating FIA red and white.
+  - **Distance Braking Boards:** FIA standard $150\text{m}$, $100\text{m}$, and $50\text{m}$ marker boards placed on outer barrier walls before corner entry zones.
+  - **FIA F1 Starting Grid Slots:** Authentic staggered grid positions (Slot 1 Pole on racing line, Slot 2 staggered 9m behind). Each slot features thick white front stop bars, fluorescent yellow centerline alignment guides, tire alignment chevrons, and bold asphalt-painted position decals (`1 POLE` and `2 P2`).
+  - **Low-Poly 3D Audience & Grandstand Fans:**
+    - Dozens of colorful low-poly spectators populating all grandstand tiers wearing authentic F1 team shirts (Ferrari Red, McLaren Papaya, Red Bull Blue, Mercedes Teal, Aston Green, Williams Blue, Cyan, Yellow, White).
+    - Trackside spectator clusters standing along perimeter grass banks opposite the pit straight.
+    - Animated fluttering team flags waving in the wind.
   - High-clearance start/finish gantry ($9.5\text{m}$ clearance) with pillars placed strictly **3.5m behind the outer safety barriers**.
-  - All perimeter stadium floodlights and spectator grandstands are positioned **18m outside the outer barriers** on the open countryside turf — completely off the racing tarmac and runoffs.
+  - All perimeter stadium floodlights and spectator grandstands are positioned **15–18m outside the outer barriers** on the open countryside turf — completely off the racing tarmac and runoffs.
 - **Realistic Circuit Materials:**
-  - **Asphalt Road Surface:** Authentic asphalt grey (`#363b46`) with subtle specular highlights, sharp white boundary lines, dashed centerline, and painted F1 grid slot boxes (Slot 1 & Slot 2).
+  - **Asphalt Road Surface:** Authentic asphalt grey (`#2e333d`) with procedural grain bump map, specular sheen, sharp white boundary lines, dashed centerline, and checkered finish line.
   - **Runoff Traps:** Warm sandy golden gravel traps (`#d9b372`) and F1 Royal Blue painted runoff aprons (`#1e3a8a`).
-  - **Apex Curbs:** Vibrant red (`#e10600`) and pure white (`#ffffff`) 3D apex curbing.
+  - **Apex Curbs:** Vibrant red (`#e10600`) and pure white (`#ffffff`) 3D beveled apex curbing.
   - **Safety Barriers:** Clean white/silver TecPro barrier walls (`#f8fafc`) with vibrant blue safety railings.
   - **Infield & Countryside:** Lush summer green grass turf (`#3d8b37`).
 - **High-Detail F1 Car Models:**
-  - Tapered aerodynamic nose cone with carbon fiber nose tip.
-  - Sculpted sidepods with dark radiator inlet grilles and undercut floors.
-  - 3D curved titanium Halo safety ring arching over the cockpit.
-  - Driver helmet with glossy reflective gold/dark visor.
-  - Multi-tier front wing with endplate canards, high-downforce rear wing with DRS flap, and pulsing red rain safety LED.
-  - Wide Pirelli slick tires with yellow sidewall stripes and team-colored wheel rims.
+  - **Procedural Livery & Sponsor Decals:** Crisp nose cone livery striping, carbon fiber edge borders, team branding banner (`SYNAPSE AI` / `SYNAPSE GP`), and bold racing number roundels (`#1` & `#2`).
+  - **Aerodynamic Wing Mirrors:** Carbon fiber stalks and sculpted mirror pods with reflective chrome glass on cockpit flanks.
+  - **Multi-Tier Front Wing:** Dihedral main plane, upper cascade flap, and curved outer endplate vortex canards.
+  - **Underbody Rear Diffuser & Central Exhaust:** Carbon floor diffuser with 4 vertical aerodynamic strakes and central titanium exhaust tailpipe.
+  - **Swan-Neck Rear Wing Mounts & DRS Actuator:** Dual curved carbon pylons mounting the rear wing from above, with DRS hydraulic actuator housing pod.
+  - **Detailed Wheels & Brakes:** Directional center lock wheel nuts (Anodized Red on left, Anodized Blue on right), painted high-performance brake calipers, glowing carbon-ceramic brake discs, and Pirelli yellow sidewall striping.
+  - **Radial Contact Shadow:** Smooth ambient occlusion ground contact shadow with radial gradient falloff under chassis.
+  - 3D curved titanium Halo safety ring, driver helmet with iridescent gold/dark visor, and cockpit digital steering wheel dash.
   - **Car A (Racer Alpha):** Pearlescent Electric Cyan (`#00f0ff`) with gloss clearcoat and white aerodynamic flaps.
   - **Car B (Racer Beta):** Metallic Solar Papaya Orange (`#ff5500`) with gold aerodynamic flaps.
+- **🎵 Real-Time Sound Engine & Custom Audio Asset Support:**
+  - **Dual Engine Architecture:** Built-in procedural Web Audio API synthesizer + automatic custom WAV/MP3 loader from `renderer/assets/`.
+  - **Audible Custom Audio Assets Supported:**
+    - `renderer/assets/crowd_noise.mp3` (or `.wav`) — Real grandstand crowd cheering & murmur (audible baseline gain `0.52`, scaling up to `0.86` during high-speed action).
+    - `renderer/assets/hero_bgm.mp3` (or `.wav`) — **Required file for the Hero Section background music!** (Smoothly fades in on intro and fades out upon race launch).
+    - `renderer/assets/bg_sound.mp3` (or `.wav`) — TV broadcast background music / trackside ambient sound bed.
+    - `renderer/assets/engine_sound.mp3` (or `.wav`) — Recorded F1 engine audio.
+  - **Procedural Fallback (Zero Assets Required):** Multi-oscillator V6 turbo-hybrid engine roar mapped across 8 sequential gears (5,000–13,800 RPM), resonant grandstand crowd formant filter ($420\text{Hz}$) with speed/overtake cheering swells, and soft ambient synth broadcast music bed.
+  - **Stereo Spatial Panning:** Car A and Car B have distinct spatial audio positioning.
+  - **Audio Toggle & Shortcut:** `#btn-audio` toggle button on the bottom bar with keyboard shortcut (`M`). Auto-resumes on first user gesture.
+- **🏁 Neo-Brutalist F1 TV Broadcast Graphics UI:**
+  - **Broadcast Typography:** Authentic F1 broadcast typography using `Titillium Web` (italic bold caps), `Chakra Petch` HUD numerals, and `JetBrains Mono` telemetry readouts.
+  - **F1 Steering Wheel 15-LED Shift Light HUD:** 15 sequential RPM LEDs (5 Green $\rightarrow$ 5 Red $\rightarrow$ 5 Blue) with redline flashing at $>92\%$ RPM.
+  - **DRS Status Indicator:** Neon green `#00e676` DRS pill that illuminates on high-speed straights.
+  - **Official F1 Timing Tower:** High-contrast carbon badge, driver number (`#1`, `#2`), 3-letter codes (`ALF`, `BET`), tire compound badges (`[S]`, `[M]`), gap intervals, and live mini-sector timing dots.
+  - **Provisional Classification Victory Modal:** Official F1 GP post-race classification screen with race time, fastest lap chip, podium leaderboard, and instant track switching.
 - **Dynamic X-Ray Overlap Transparency & Glowing Wireframe Matrix:**
   - If two cars come within $2.8\text{m}$ of each other (or in Raw Telemetry mode where they occupy the exact same coordinate):
     - Both car bodies smoothly become **semi-transparent** (~45% opacity).
@@ -37,6 +79,7 @@ A modern, broadcast-grade **2.5D WebGL F1 TV Chase Viewer** built with Three.js 
   - `[3] Car B Chase`: Locked follow camera behind Racer Beta.
   - `[4] Cockpit Cam`: First-person nose/halo camera for high-speed perspective.
   - `[5] Top Drone Cam`: Overhead tactical overview of the full circuit.
+  - `[6] Side Trackside Cam`: Dynamic low-slung TV broadcast side-profile camera tracking the cars along the tarmac.
 - **Clean 2-Row Bottom Broadcast Control Bar:**
   - Row 1: Full-width scrubbable progress timeline with high-precision timecode indicators (`00:00.000` elapsed and total duration).
   - Row 2: Four distinct control groups:
@@ -129,6 +172,7 @@ You can double-click any generated `.html` file in `artifacts/replay/` to run it
 | Control | Shortcut | Description |
 |---|---|---|
 | **Play / Pause** | `Space` | Toggle playback |
+| **Sound Mute / Unmute** | `Key M` | Toggle F1 engine, crowd, and TV broadcast audio |
 | **Reset to Start** | `Key R` | Rewind simulation to Tick 0 |
 | **Lane Separation** | `Key L` | Toggle Side-by-Side Dual Lane vs Raw Telemetry (test overlap wireframe!) |
 | **Battle Cam** | `1` | Default broadcast chase camera tracking both cars |
@@ -136,6 +180,7 @@ You can double-click any generated `.html` file in `artifacts/replay/` to run it
 | **Car B Chase** | `3` | Tight follow camera behind Racer Beta |
 | **Nose / Cockpit** | `4` | First-person nose/halo perspective |
 | **Top Drone View** | `5` | High-altitude tactical overview of the circuit |
+| **Side Trackside View**| `6` | Low-slung dynamic TV broadcast side-profile tracking cam |
 | **Step 1s Back** | `[` | Step backwards by 1.0 second |
 | **Step 1s Forward**| `]` | Step forward by 1.0 second |
 | **Step 1 Frame** | `←` / `→` | Step backwards / forwards by 1 frame (1/30s) |
