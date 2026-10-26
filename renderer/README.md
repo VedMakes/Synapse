@@ -104,14 +104,24 @@ A modern, broadcast-grade **2.5D WebGL F1 TV Chase Viewer** built with Three.js 
 
 ---
 
+## Ownership and runtime boundary
+
+`renderer/` is the presentation layer for the SYNAPSE project. Python owns
+observations, ONNX actions, fixed-step physics, deadlines, events, termination,
+and results. The renderer reads validated replay/live packets, interpolates
+only received poses, and never sends actions back to the simulator. Keep
+renderer changes coordinated with the renderer-owning team; participant
+orchestration belongs in `tools/participant_ui.py` and
+`tools/run_live_onnx.py`.
+
 ## 🚀 Quick Start Guide: How to Run the Renderer
 
-All commands should be executed from the `d:\synapse_shit\Synapse` root directory in PowerShell or Bash:
+Run commands from the repository root. Use the project Python when available:
 
-### Step 1: Start the Local Web Server
+### Step 1: Start the local web server
 
-```powershell
-python -m http.server 8765 --bind 127.0.0.1 --directory renderer
+```bash
+.venv/bin/python -m http.server 8765 --bind 127.0.0.1 --directory renderer
 ```
 
 ### Step 2: Open in Your Browser
@@ -122,6 +132,51 @@ Open Chrome, Edge, or Firefox and navigate to:
 
 *(The built-in sample replays load automatically on launch!)*
 
+### Live Python race mode
+
+The renderer also has a read-only live adapter. Start the Python live runner
+from the repository root, then open the renderer with the printed WebSocket
+URL:
+
+```bash
+.venv/bin/python -m http.server 8765 --bind 127.0.0.1 --directory renderer
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant racer-a submissions/racer-a \
+  --entrant racer-b submissions/racer-b \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live/oval \
+  --port 8767 \
+  --telemetry-stdout
+```
+
+Open `http://127.0.0.1:8765/?live=ws://127.0.0.1:8767/live/v1`, or paste that
+WebSocket URL into **Connect Live**. Python owns every action, physics step,
+event, and result. The browser only receives state packets, interpolates
+received poses for presentation, and shows `STALE` if packets stop arriving.
+Replay controls are disabled in live mode. The live stream is not a replay and
+does not send actions back to Python.
+
+### Participant dashboard flow
+
+For a participant-style run, start the dashboard in a second terminal:
+
+```bash
+.venv/bin/python tools/participant_ui.py --port 8766
+```
+
+Open **http://127.0.0.1:8766/** and use **03 · Grid control / live heat** to
+choose two ONNX artifact directories, one track/config, a new output directory,
+and the live policy. The dashboard starts and stops the Python race process,
+shows per-entrant latency/deadline/failure telemetry, and displays shared
+process-tree RSS/peak RSS/PID/thread telemetry. It also keeps the bounded
+`LIVE_TELEMETRY` child output in the terminal panel. The default dashboard race
+WebSocket port is `8767`, while the renderer HTTP server remains on `8765`.
+
+The dashboard's default `strict_scored` profile marks late or failed inference
+as `dnf_inference`. `trusted_live` is a local demonstration profile that may
+hold the previous action for one interval; it is not a scored event rule.
+
 ---
 
 ## 🏎️ How to Generate Dual-Car Replays for Any Track
@@ -129,21 +184,21 @@ Open Chrome, Edge, or Firefox and navigate to:
 You can generate fresh head-to-head evaluation replays for any circuit using `tools/export_replay.py`:
 
 ### A. Synthetic Oval Track
-```powershell
-python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-alpha --output artifacts/replay/racer_a.json
-python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-beta --steps 650 --output artifacts/replay/racer_b.json
+```bash
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-alpha --output artifacts/replay/racer_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-beta --steps 650 --output artifacts/replay/racer_b.json
 ```
 
 ### B. Synthetic Flowing Track
-```powershell
-python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-alpha --output artifacts/replay/flowing_a.json
-python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-beta --steps 500 --output artifacts/replay/flowing_b.json
+```bash
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-alpha --output artifacts/replay/flowing_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-beta --steps 500 --output artifacts/replay/flowing_b.json
 ```
 
 ### C. Synthetic Tight Loop Track
-```powershell
-python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-alpha --output artifacts/replay/tight_a.json
-python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-beta --steps 450 --output artifacts/replay/tight_b.json
+```bash
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-alpha --output artifacts/replay/tight_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-beta --steps 450 --output artifacts/replay/tight_b.json
 ```
 
 ---
@@ -152,15 +207,15 @@ python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_lo
 
 To generate self-contained, single-file HTML replays that open anywhere on any device without running a server:
 
-```powershell
+```bash
 # Bundle Oval Track Race
-python renderer/build_replay.py --racer-a artifacts/replay/racer_a.json --racer-b artifacts/replay/racer_b.json --output artifacts/replay/battle_oval.html
+.venv/bin/python renderer/build_replay.py --racer-a artifacts/replay/racer_a.json --racer-b artifacts/replay/racer_b.json --output artifacts/replay/battle_oval.html
 
 # Bundle Flowing Track Race
-python renderer/build_replay.py --racer-a artifacts/replay/flowing_a.json --racer-b artifacts/replay/flowing_b.json --output artifacts/replay/battle_flowing.html
+.venv/bin/python renderer/build_replay.py --racer-a artifacts/replay/flowing_a.json --racer-b artifacts/replay/flowing_b.json --output artifacts/replay/battle_flowing.html
 
 # Bundle Tight Loop Race
-python renderer/build_replay.py --racer-a artifacts/replay/tight_a.json --racer-b artifacts/replay/tight_b.json --output artifacts/replay/battle_tight.html
+.venv/bin/python renderer/build_replay.py --racer-a artifacts/replay/tight_a.json --racer-b artifacts/replay/tight_b.json --output artifacts/replay/battle_tight.html
 ```
 
 You can double-click any generated `.html` file in `artifacts/replay/` to run it offline!

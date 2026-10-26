@@ -8,6 +8,10 @@ import json
 from pathlib import Path
 import tempfile
 import os
+import sys
+
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from racing_event.track import TrackGeometry
 from racing_event.config import SimulationConfig

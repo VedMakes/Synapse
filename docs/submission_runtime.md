@@ -42,6 +42,27 @@ float32 conversion is preserved. Source artifacts are unchanged. Participants
 may instead export their own supported architecture directly; the converter is
 not a requirement or an architecture prescription.
 
+## Build a live-race package
+
+The participant dashboard's **Build ONNX live package** button performs the
+export and assembles a new directory containing the validated `submission/`,
+matching `config/simulation.json`, the selected public track, bounded run
+provenance, `package_manifest.json` hashes, and a README with the live command.
+The same operation is available without the dashboard:
+
+```bash
+.venv/bin/python tools/package_live_submission.py \
+  --source participant_run \
+  --output artifacts/live-packages/my-model \
+  --track tracks/train/synthetic_oval.json \
+  --participant-id team-a
+```
+
+The output directory must be new. The generated command is intended to run from
+the repository root and uses the package's copied model, config, and track.
+The package does not copy participant training code, Torch checkpoints, or
+reward callbacks into the live submission.
+
 ## ONNX profile v1
 
 Exactly three regular, non-symlink files are accepted:
@@ -155,6 +176,110 @@ nonregular files, extra files, and oversized inputs. It bounds host-side
 normalizer allocation before parsing metadata; weights/ONNX native parsing
 occurs only inside the worker. The worker validates and acknowledges the exact
 snapshot digest. Later source edits cannot alter that worker's input.
+
+## Run several ONNX models as a race
+
+The non-renderer race interface evaluates one to four ONNX artifacts on the
+same explicit track set. Each entrant gets a fresh fixed-start environment and
+the deterministic mean-action path. Entrants do not interact or collide. This
+is the Python-authoritative ghost race used to compare lap outcomes and, when
+requested, produce replay-group inputs for the read-only presentation tools.
+
+The default is a trusted local preview. Use it only with artifacts you own:
+
+```bash
+.venv/bin/python tools/run_onnx_race.py \
+  --entrant team-a submissions/team-a \
+  --entrant team-b submissions/team-b \
+  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/synthetic_flowing.json \
+  --config config/simulation.json \
+  --repeats 2 \
+  --output-dir artifacts/onnx-races/oval-flowing \
+  --emit-replays
+```
+
+The output directory must be new. It contains `race.json`. With
+`--emit-replays`, it also contains one schema-1.1 replay per entrant and one
+v1.0 replay-group manifest per track:
+
+```text
+race-output/
+  race.json
+  tracks/00-synthetic_oval/*.json
+  tracks/01-synthetic_flowing/*.json
+```
+
+The report binds each result to the artifact, ONNX model, and training
+contract hashes. It records all repeated outcomes and fails if a repeated
+trajectory hash differs. It intentionally has no leaderboard score or DNF
+aggregation because those are event-policy decisions still open in the
+handoff. `total_reward` is not a race score.
+
+For organizer-grade evaluation, select the model-only Docker worker explicitly:
+
+```bash
+.venv/bin/python tools/run_onnx_race.py \
+  --isolate --worker-image synapse-evaluator@sha256:<organizer-digest> \
+  --entrant team-a submissions/team-a \
+  --entrant team-b submissions/team-b \
+  --track private/tracks/heldout-01.json \
+  --config private/simulation.json \
+  --output-dir private/race-results/heldout-01
+```
+
+Do not pass `--emit-replays` for private tracks: replay files embed complete
+track geometry. The runner is bounded to four entrants, 32 explicit tracks,
+eight repeats, and two million planned transitions. These are operational
+limits, not final event scoring rules. Docker availability and the outer
+organizer job supervisor remain release gates.
+
+## Live inference and actions
+
+The live heat path is separate from replay comparison. It calls every ONNX
+policy during the race, applies the returned actions to the authoritative
+Python environment, and publishes post-transition state to a read-only
+WebSocket client. The initial live profile uses 30 Hz physics and control,
+one action per physics tick, a 20 ms candidate policy budget, and
+`strict_scored` late-action handling.
+
+Install the optional live dependencies:
+
+```bash
+.venv/bin/python -m pip install -r requirements-live.lock
+```
+
+Run a live two-entrant heat:
+
+```bash
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant team-a submissions/team-a \
+  --entrant team-b submissions/team-b \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live/oval
+```
+
+The command prints a loopback endpoint such as
+`ws://127.0.0.1:8766/live/v1`. Serve `renderer/` separately and open:
+
+```text
+http://127.0.0.1:8765/?live=ws://127.0.0.1:8766/live/v1
+```
+
+Each control cycle is: policy observation, concurrent fresh ONNX actions,
+finite/bounds/deadline validation, one fixed Python physics step, then one
+complete state packet. Policy sessions are loaded and warmed before tick zero.
+The browser receives `hello`, latest-only `state`, and reliable `end` packets;
+it cannot send actions or alter the race. Slow browser clients can lose
+intermediate state packets without changing the simulation.
+
+`strict_scored` marks an entrant `dnf_inference` on a late, missing, invalid,
+or failed action. `trusted_live` may hold the previous action for one control
+interval and is intended only for local visual demonstrations. The report is
+`live-race.json`; it records tick rates, policy deadline, latency percentiles,
+deadline misses, inference failures, and per-entrant trajectory hashes. The
+live heat remains independent ghosts, not car-to-car interaction.
 
 The launched worker has:
 

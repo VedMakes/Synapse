@@ -54,7 +54,7 @@ async function dashboard() {
     },
     fetch: (url, options) => {
       calls.push({ url, options });
-      if (url === "/api/maps") return Promise.resolve(response([{ id: "synthetic_oval", display_name: "Oval" }]));
+       if (url === "/api/maps") return Promise.resolve(response([{ id: "synthetic_oval", display_name: "Oval", path: "tracks/train/synthetic_oval.json" }]));
       if (url === "/api/status" && !delayStatus) return Promise.resolve(response(status));
       return new Promise(resolve => deferred.push({ url, resolve }));
     },
@@ -76,7 +76,9 @@ async function dashboard() {
 
 function response(body, ok = true) { return { ok, json: async () => body }; }
 const runFields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", "reward-progress", "reward-steer_smoothness"];
+const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
 function assertFrozen(h, expected) { for (const id of runFields) assert.equal(h.el(id).disabled, expected, id); }
+function assertRaceFrozen(h, expected) { for (const id of raceFields) assert.equal(h.el(id).disabled, expected, id); }
 
 test("initial budget, explicit renderer/source controls and ordered live ray preview", async () => {
   const h = await dashboard();
@@ -197,4 +199,64 @@ test("stale status polls cannot unfreeze an in-flight watch or start", async () 
   assert.equal(h.el("watch-error").focused, true);
   assert.match(h.el("watch-error").textContent, /failed validation/);
   assert.equal(h.el("watch").disabled, false);
+});
+
+test("live heat starts as a single-flight race action and renders telemetry/resource status", async () => {
+  const h = await dashboard();
+  const first = h.click("race-start");
+  assertRaceFrozen(h, true);
+  const calls = h.calls.filter(call => call.url === "/api/race/start");
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.participant_a, "racer-alpha");
+  assert.equal(payload.participant_b, "racer-beta");
+  await h.click("race-start");
+  assert.equal(h.calls.filter(call => call.url === "/api/race/start").length, 1);
+  h.setStatus({ race: { state: "starting", running: true, lines: [], telemetry: {}, resources: {} } });
+  h.resolve("/api/race/start", { state: "starting", running: true, lines: ["Live WebSocket endpoint: ws://127.0.0.1:8777/live/v1"] });
+  await first; await flush();
+  assertRaceFrozen(h, true);
+  assert.equal(h.el("race-state-chip").textContent, "starting");
+  h.setStatus({ race: { state: "running", running: true, lines: ["LIVE_TELEMETRY tick=4"], resources: { rss_mb: 42.5, peak_rss_mb: 48.1, pids: 3, threads: 5 }, telemetry: { entrants: [
+    { label: "Alpha", status: "running", latency_ms: 3.25, model_mb: 1.5, deadline_misses: 1, inference_failures: 0 },
+    { label: "Beta", status: "dnf_inference", latency_ms: 22.0, model_mb: 2.5, deadline_misses: 2, inference_failures: 1 },
+  ] } } });
+  await h.poll();
+  assert.equal(h.el("race-latency-a").textContent, "3.25 ms");
+  assert.equal(h.el("race-model-a").textContent, "1.500 MB");
+  assert.equal(h.el("race-deadlines-b").textContent, "2");
+  assert.match(h.el("race-resource").textContent, /42\.5 MB/);
+  assert.match(h.el("race-terminal").textContent, /LIVE_TELEMETRY/);
+  assert.equal(h.el("race-stop").disabled, false);
+  h.setStatus({ race: { state: "stopped", running: false, lines: [], telemetry: {}, resources: {} } });
+  await h.poll();
+  assertRaceFrozen(h, false);
+  assert.equal(h.el("race-start").disabled, false);
+});
+
+test("live package exports and assigns the validated submission to the selected racer", async () => {
+  const h = await dashboard();
+  await h.input("package-output", "artifacts/live-packages/ui-test");
+  await h.input("package-entrant", "b");
+  const first = h.click("package");
+  assert.equal(h.el("package").attrs["aria-busy"], "true");
+  const calls = h.calls.filter(call => call.url === "/api/package");
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.package_track, "tracks/train/synthetic_oval.json");
+  h.resolve("/api/package", {
+    package_dir: "/workspace/artifacts/live-packages/ui-test",
+    submission_dir: "/workspace/artifacts/live-packages/ui-test/submission",
+    manifest_path: "/workspace/artifacts/live-packages/ui-test/package_manifest.json",
+    config_path: "/workspace/artifacts/live-packages/ui-test/config/simulation.json",
+    track_path: "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json",
+    track_id: "synthetic_oval", participant_id: "racer-beta", source_kind: "numpy_artifact",
+  });
+  await first; await flush();
+  assert.match(h.el("package-result").textContent, /ONNX live package ready/);
+  assert.equal(h.el("artifact-b").value, "/workspace/artifacts/live-packages/ui-test/submission");
+  assert.equal(h.el("participant-b").value, "racer-beta");
+  assert.equal(h.el("race-track").value, "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json");
+  assert.equal(h.el("race-config").value, "/workspace/artifacts/live-packages/ui-test/config/simulation.json");
+  assert.equal(h.el("package").attrs["aria-busy"], "false");
 });

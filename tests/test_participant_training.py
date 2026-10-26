@@ -43,7 +43,11 @@ class ParticipantTrainingTests(unittest.TestCase):
         manifest = build_manifest(DEFAULT_TRACK_DIR, "test-release")
         self.assertEqual(manifest["release_id"], "test-release")
         self.assertFalse(manifest["private_tracks_included"])
-        self.assertEqual([item["split"] for item in manifest["maps"]], ["train"] * 3)
+        self.assertEqual([item["split"] for item in manifest["maps"]], ["train"] * 5)
+        self.assertEqual(
+            {item["map_id"] for item in manifest["maps"]},
+            {"monaco", "spa", "synthetic_flowing", "synthetic_oval", "synthetic_tight_loop"},
+        )
         self.assertTrue(all(len(item["canonical_content_hash"]) == 64 for item in manifest["maps"]))
         self.assertTrue(all(len(item["delivered_file_sha256"]) == 64 for item in manifest["maps"]))
 

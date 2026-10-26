@@ -625,7 +625,8 @@ inventing a leaderboard formula.
 
 ## Maps
 
-The current three maps are original synthetic development fixtures. The
+The current public set contains five development maps: three original
+synthetic fixtures plus Monaco and Spa reference layouts. The
 manifest records both the canonical geometry hash and the delivered-file hash.
 Before public release, the organizers must still:
 

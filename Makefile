@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: test render e1 e2 participant-setup participant-maps participant-smoke participant-ui evaluate-participant ui-browser-check
+.PHONY: test render e1 e2 participant-setup participant-maps participant-smoke participant-ui evaluate-participant onnx-race live-onnx-race ui-browser-check
 
 test:
 	$(PYTHON) -m unittest discover -s tests -v
@@ -34,3 +34,11 @@ ui-browser-check:
 
 evaluate-participant:
 	$(PYTHON) tools/evaluate_participant.py --artifact-dir submission --track tracks/train/synthetic_oval.json --config config/simulation.json --repeats 2
+
+# Pass CLI options with: make onnx-race ARGS='--entrant team-a submission-a ...'
+onnx-race:
+	$(PYTHON) tools/run_onnx_race.py $(ARGS)
+
+# Pass CLI options with: make live-onnx-race ARGS='--entrant team-a submission-a ...'
+live-onnx-race:
+	$(PYTHON) tools/run_live_onnx.py $(ARGS)

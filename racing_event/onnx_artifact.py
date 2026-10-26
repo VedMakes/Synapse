@@ -160,8 +160,17 @@ def load_onnx_artifact(path: str | Path) -> OnnxPolicyArtifact:
     for file, field in (("model.onnx", "model_sha256"), ("training_contract.json", "training_contract_sha256")):
         if hashlib.sha256(contents[file]).hexdigest() != _require_hash(manifest[field], field):
             raise ValueError(f"ONNX artifact hash mismatch: {file}")
+    # Reject ONNX-side normalizers and unbounded observation declarations before
+    # TrainingContract.load can construct NumPy arrays from untrusted JSON.
+    contract_data = _load_json(root / "training_contract.json")
+    observation_data = contract_data.get("observation")
+    fields = observation_data.get("fields") if isinstance(observation_data, dict) else None
+    trainer_data = contract_data.get("trainer")
+    if (not isinstance(fields, list) or not 1 <= len(fields) <= 256
+            or not isinstance(trainer_data, dict) or trainer_data.get("normalizer") is not None):
+        raise ValueError("ONNX contract must have a bounded observation and no separate normalizer")
     contract, normalizer = TrainingContract.load(root / "training_contract.json")
-    if normalizer is not None or _load_json(root / "training_contract.json") != contract.to_dict():
+    if normalizer is not None or contract_data != contract.to_dict():
         raise ValueError("ONNX contract must be canonical with preprocessing embedded, not a separate normalizer")
     if not 1 <= contract.observation.size <= 256 or not contract.track_ids or len(contract.track_ids) != len(contract.track_hashes):
         raise ValueError("invalid ONNX observation/training-track contract")

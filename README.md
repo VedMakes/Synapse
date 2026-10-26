@@ -5,7 +5,7 @@ This repository contains the first Python-only vertical slice for the SYNAPSE te
 The current slice provides:
 
 - A deterministic, track-relative racing environment.
-- A validated geometry-file format and three original synthetic development tracks.
+- A validated geometry-file format with five public training tracks: three original synthetic fixtures plus Monaco and Spa reference layouts.
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
 - A participant-owned reward boundary over published raw transition signals.
 - A persistent `n` runs by `k` steps-per-run budget.
@@ -16,6 +16,12 @@ The current slice provides:
   convergence tool.
 - A validated, streaming replay export with a Pygame renderer and an optional
   dependency-free browser fallback.
+- A bounded ONNX ghost-race interface that evaluates multiple model artifacts
+  on shared tracks and can emit compatible replay groups.
+- A fixed-rate live ONNX heat path that runs fresh model actions during the
+  Python simulation and streams read-only state to the browser renderer.
+- A participant dashboard with side-by-side live-heat controls, structured
+  latency/deadline/failure telemetry, and supervised process resource reporting.
 
 Python is authoritative. Pygame is a read-only renderer that consumes validated
 replays; it does not simulate or score cars. Unity is no longer an active
@@ -25,7 +31,7 @@ project target.
 
 These are provisional implementation decisions based on the handoff and the latest project answers:
 
-- Three training tracks are the intended first event target. Three synthetic development tracks are present; E2 currently uses the oval only, not a frozen event training set.
+- Five public training tracks are present: three synthetic development fixtures plus Monaco and Spa reference layouts. E2 currently uses the oval only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
 - Evaluation submissions will use ONNX. A bounded static-vector profile and
   model-only Docker worker are implemented as release candidates; actual Docker
@@ -105,6 +111,66 @@ link for playback. Inputs stay locked during a run, and errors appear inline.
 The dashboard executes local code: keep it on loopback. Cross-origin mutations
 and non-loopback host names are rejected; it is not a public service.
 
+### Participant live heat dashboard
+
+The dashboard also provides a **Grid control / live heat** panel for running two
+validated ONNX artifacts side by side. Python remains authoritative for the
+observations, model actions, fixed-step physics, deadlines, events, and result;
+the browser is only a control surface and telemetry view. The panel exposes:
+
+Before the heat controls, use **Package for live race** after training. Choose
+the trained run or model source, a new package directory, a public circuit, and
+the racer ID, then press **Build ONNX live package**. The dashboard validates the
+export, copies the matching config and selected track, writes provenance and
+SHA-256 hashes to `package_manifest.json`, and fills the selected grid slot with
+the resulting `submission/` directory. The package also contains a README with
+the ready-to-copy `tools/run_live_onnx.py` command.
+
+- two participant IDs and two artifact directories;
+- one explicit track, simulation config, output directory, and WebSocket port;
+- action budget, live tick limit, and `strict_scored` versus local-demo
+  `trusted_live` late-action policy;
+- optional organizer isolation, when the evaluator image is available;
+- per-entrant status, latency, deadline misses, inference failures, and model
+  file size;
+- shared live-process RSS/peak RSS, PID count, thread count, and bounded child
+  output in the terminal panel.
+
+Start the dashboard from the repository root:
+
+```bash
+.venv/bin/python tools/participant_ui.py --port 8766
+```
+
+Open **http://127.0.0.1:8766/** and use **03 · Grid control / live heat**.
+Build a package or choose two artifact directories, then start the heat. The default renderer HTTP
+server uses port `8765`; the dashboard's live-heat WebSocket default is `8767`
+so the three local services do not collide. Runtime RSS is measured for the
+supervised race process tree and is intentionally labeled shared; the dashboard
+does not pretend that in-process model memory is separately measurable.
+
+For a direct CLI smoke or a non-dashboard run, use the live runner explicitly:
+
+```bash
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant small-alpha artifacts/onnx-imitation \
+  --entrant small-beta artifacts/onnx-imitation \
+  --track tracks/train/synthetic_oval.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live/small-heat \
+  --port 8767 \
+  --max-steps 2400 \
+  --policy-budget-ms 20 \
+  --late-policy strict_scored \
+  --telemetry-stdout
+```
+
+Use `trusted_live` only for a local demonstration where holding the last action
+after one late inference is acceptable. It is not the scored policy. The CLI
+prints the actual WebSocket endpoint and emits bounded `LIVE_TELEMETRY` JSON
+lines when `--telemetry-stdout` is enabled. The live report is
+`artifacts/live/small-heat/live-race.json`; it is a live result, not a replay.
+
 ## Setup
 
 The supported runtime is Python 3.11. The lock file uses the CPU PyTorch wheel
@@ -158,7 +224,19 @@ a local baseline only. The measured PPO baseline experiment is in
 `reports/e2_baseline_convergence.md`; it covers the current synthetic fixture
 only and does not freeze public event settings. Held-out-track storage, final
 ranking, and event release freeze remain separate milestones; ONNX inference
-and local multi-ghost comparison now have candidate implementations.
+and local multi-ghost comparison now have a non-renderer race interface. See
+[`docs/submission_runtime.md`](docs/submission_runtime.md). It does not change
+the renderer directory or the single-car replay schema.
+
+For live actions rather than replay playback, install
+`requirements-live.lock`, serve `renderer/`, and run either the participant
+dashboard or `tools/run_live_onnx.py`. The initial profile is 30 Hz
+physics/control with a 20 ms candidate action budget and strict late-action DNF.
+The renderer is normally served at `http://127.0.0.1:8765/`; connect it to the
+printed WebSocket endpoint, for example
+`http://127.0.0.1:8765/?live=ws://127.0.0.1:8767/live/v1`. The browser is
+presentation-only; Python remains authoritative for observations, actions,
+physics, events, and results.
 
 ## Trainer boundary
 
@@ -374,12 +452,13 @@ To save a deterministic paused QA image without a desktop:
 
 ### Layer checks and container preview
 
-`make test` runs Python simulation/export/read-back checks. If Node is available
-it also runs the dependency-free JavaScript playback/DOM tests; otherwise that
-test is explicitly **skipped**. Run them directly with:
+`make test` runs the configured Python simulation/export/read-back checks. The
+participant dashboard test invokes the embedded dashboard JavaScript when Node
+is available. Run the complete dependency-free JavaScript smoke suite directly
+with:
 
 ```bash
-node --test tests/replay_frontend.test.cjs
+node --test tests/*.test.cjs
 ```
 
 The default checks do not install a browser. The JS checks use a DOM/canvas
