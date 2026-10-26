@@ -1,505 +1,1071 @@
-# SYNAPSE Racing RL Event
+# SYNAPSE Participant Manual
 
-This repository contains the first Python-only vertical slice for the SYNAPSE technical-fest event.
+Welcome. This file is the beginner-friendly path through the SYNAPSE racing
+package. You do **not** need previous racing, reinforcement-learning, or
+command-line experience to follow it. Start at step 1 and copy the commands
+exactly. Later sections explain what each command does and how to replace the
+starter model with your own training program.
 
-The current slice provides:
+> **Important idea:** Python is the authority. Your model chooses two actions;
+> Python applies those actions to the physics, decides whether the car crashed
+> or finished, and writes the result. The renderer only displays recorded
+> state. It cannot steer a car, change a reward, or change a result.
 
-- A deterministic, track-relative racing environment.
-- A validated geometry-file format with two public training tracks: Monaco and Spa reference layouts.
-- A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
-- A participant-owned reward boundary over published raw transition signals.
-- A persistent `n` runs by `k` steps-per-run budget.
-- A scripted-run and replay-export path for the read-only Pygame renderer.
-- A versioned state/action contract, serializable observation normalizer, and a batched NumPy environment for headless training.
-- An optional fixed two-layer PyTorch reference baseline, masked GAE, clipped
-  PPO update, safe state-dictionary artifact format, and a measured baseline
-  convergence tool.
-- A validated, streaming replay export with a Pygame renderer and an optional
-  dependency-free browser fallback.
-- A bounded ONNX ghost-race interface that evaluates multiple model artifacts
-  on shared tracks and can emit compatible replay groups.
-- A fixed-rate live ONNX heat path that runs fresh model actions during the
-  Python simulation and streams read-only state to the browser renderer.
-- A participant dashboard with side-by-side live-heat controls, structured
-  latency/deadline/failure telemetry, and supervised process resource reporting.
+![Annotated first-run map: the trainer script, public maps, and output folder](docs/assets/participant-start.svg)
 
-Python is authoritative. Pygame is a read-only renderer that consumes validated
-replays; it does not simulate or score cars. Unity is no longer an active
-project target.
+## What you will do
 
-## Explicit working decisions
+You will complete this sequence:
 
-These are provisional implementation decisions based on the handoff and the latest project answers:
+1. Open a terminal in this repository.
+2. Install the local Python environment.
+3. Choose a trainer script. The starter is already included.
+4. Run a **tiny** training experiment so failures are cheap.
+5. Open a replay and look at what the car actually did.
+6. Change one parameter at a time and repeat.
+7. Export the best saved model to the validated ONNX format.
+8. Put the ONNX model, matching configuration, and map into a live package.
+9. Run two packages against each other in a Python-authoritative live heat.
 
-- Two public training tracks are present: Monaco and Spa development layouts. E2 currently uses Monaco only, not a frozen event training set.
-- Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
-- Evaluation submissions will use ONNX. A bounded static-vector profile and
-  model-only Docker worker are implemented as release candidates; actual Docker
-  verification and final event-profile acceptance are pending. See
-  `docs/submission_runtime.md`.
-- Participants own their model architecture, algorithm, preprocessing, weights,
-  and reward function. The local PPO baseline is only an optional starter, not
-  the event contract.
-- SYNAPSE publishes raw transition signals. Participants may implement reward
-  weights or arbitrary local reward code in their own trainer; scoring never
-  executes participant reward code.
-- Training uses a configurable maximum of `n` runs, with at most `k` environment steps in each run. The budget state is persistent and tamper-evident by hash, but it is not a cumulative-week budget.
-- The provisional simulation rate is 30 Hz.
-- The event date is recorded as the 31st and the environment-release target as the 20th. Month/year still need to be recorded before public scheduling.
+The local public maps are:
 
-## Participant training launcher
+```text
+tracks/train/monaco.json
+tracks/train/spa.json
+```
 
-The first minimal participant-facing workflow is a bounded local launcher. It
-does not construct a model; it runs the participant trainer you select. The
-dashboard owns the static nine-signal reward-weight file and sensor-ray layout.
-It is a delivery prototype, not a frozen event launcher or final budget rule:
+They are the only participant-facing training maps in this checkout. The map
+manifest is `tracks/train_manifest.json`.
 
-First prepare the project environment. This keeps the SYNAPSE environment
-dependencies inside `.venv`:
+## 1. The four words you need to know
+
+| Word | Plain-English meaning | Example in this repository |
+|---|---|---|
+| **Trainer script** | Your Python program. It creates the model, collects experience, updates weights, and saves the result. | `examples/participant_train.py` |
+| **Run directory** | A folder containing one training attempt and its saved weights/metadata. | `artifacts/participant/manual-monaco` |
+| **Artifact** | A model saved in a format that the local evaluator can read. | `policy.pt` + `policy.json` + `training_contract.json` |
+| **Live package** | A new folder containing `model.onnx`, its contract, one public map, matching config, hashes, and a live command. | `artifacts/live-packages/team-a-monaco` |
+
+The word **model script** can be confusing. In this manual, the script is the
+program that **trains** the model. The trained weights are saved later in the
+run directory. You point the launcher at the script with `--trainer`; you do
+not point `--trainer` at a `.pt`, `.onnx`, or `.npz` file.
+
+## 2. Open the repository correctly
+
+### 2.1 Find the repository folder
+
+Open a terminal:
+
+- Linux: open **Terminal**.
+- macOS: open **Terminal**.
+- Windows: use WSL, Git Bash, or the Linux environment supplied for this
+  project.
+
+Change directory to the folder that contains this README. For example:
+
+```bash
+cd /path/to/Synapse
+```
+
+Check that you are in the right place:
+
+```bash
+pwd
+ls
+```
+
+You should see names such as `README.md`, `tools`, `tracks`, `config`, and
+`examples`. If `ls` does not show those names, use `cd` again. All relative
+paths in the commands below are relative to this repository root.
+
+### 2.2 Check Python
+
+SYNAPSE supports Python 3.11:
+
+```bash
+python3.11 --version
+```
+
+The result should begin with `Python 3.11`. If your computer has another
+Python version as well, always use `python3.11` for setup and `.venv/bin/python`
+for project commands.
+
+### 2.3 Create the project environment
+
+Run:
 
 ```bash
 python3.11 tools/setup_participant.py
 ```
 
-The same setup action is available from the dashboard's **Set up / repair
-Python** button.
+This creates `.venv/` and installs the locked CPU dependencies. A GPU is not
+required. If setup succeeds, check the environment with:
+
+```bash
+.venv/bin/python --version
+.venv/bin/python -c "import numpy; print('NumPy is ready')"
+```
+
+You can also use the dashboard's **Set up / repair Python** button later. Do
+not delete `.venv` between every experiment; it is the shared project
+environment, not a model output folder.
+
+### 2.4 Validate the public maps
+
+Run:
 
 ```bash
 .venv/bin/python tools/build_training_manifest.py
-.venv/bin/python tools/train_participant.py \
-  --trainer examples/participant_train.py \
-  --reward examples/baseline_reward.json \
-  --steps 2048 --budget-steps 10000 \
-  --output-dir participant_run
 ```
 
-The launcher forwards the published environment inputs to the trainer script
-you select. A trainer entrypoint must accept the forwarded options
-`--track-dir`, `--config`, `--output-dir`, `--steps`, `--budget-steps`,
-`--n-envs`, `--rollout-length`, and `--seed`; `--reward` is forwarded only
-when supplied. The UI writes `run_config.json`, `reward_config.json`, and
-`run_identity.json` into the output directory without mutating the repository
-defaults. `examples/participant_train.py` is only a runnable reference
-starter; replace it with your own script to choose the model, algorithm,
-preprocessing, weights, and reward implementation. Run the same command again
-with the same output directory if your trainer supports resuming.
+You should see `validated 2 public training maps` and a list containing
+`monaco` and `spa`. This command checks geometry, hashes, widths, boundaries,
+and the published training contract. It does not train a model.
 
-The current onboarding budget example is 10,000 accepted environment
-transitions. It is intentionally not the scored event budget. The recommended
-fairness direction is a cumulative count of active-lane transitions, with
-vector lanes and repeated frames charged individually, but the exact budget
-and enforcement model remain open. See `docs/participant_guide.md` and the
-research report `reports/Participant delivery options.md`.
+## 3. Choose the model program
 
-For a simple browser dashboard around the same CLI, run:
+There are two sensible first choices.
 
-```bash
-.venv/bin/python tools/participant_ui.py
-```
+### Choice A: run the included starter
 
-Then open **http://127.0.0.1:8766/**. The UI is served by Python's standard
-library, binds to loopback, launches the participant-owned trainer through the
-launcher, and polls its bounded progress output. It does not implement a
-second model, environment, or budget. The reward editor and ray controls are
-input/configuration UI, not a second simulation authority. The watch panel now
-explicitly selects the **latest saved reference artifact** or a **safe NumPy
-participant artifact**, plus **Pygame** or the **browser fallback**. It requires
-the selected run's `run_config.json` so custom rays cannot silently fall back to
-the defaults. Both choices produce browser-playback and JSON-download links.
-On a headless host, Pygame is honestly labeled a one-frame check; use the browser
-link for playback. Inputs stay locked during a run, and errors appear inline.
-The dashboard executes local code: keep it on loopback. Cross-origin mutations
-and non-loopback host names are rejected; it is not a public service.
-
-### Participant live heat dashboard
-
-The dashboard also provides a **Grid control / live heat** panel for running two
-validated ONNX artifacts side by side. Python remains authoritative for the
-observations, model actions, fixed-step physics, deadlines, events, and result;
-the browser is only a control surface and telemetry view. The panel exposes:
-
-Before the heat controls, use **Package for live race** after training. Choose
-the trained run or model source, a new package directory, a public circuit, and
-the racer ID, then press **Build ONNX live package**. The dashboard validates the
-export, copies the matching config and selected track, writes provenance and
-SHA-256 hashes to `package_manifest.json`, and fills the selected grid slot with
-the resulting `submission/` directory. The package also contains a README with
-the ready-to-copy `tools/run_live_onnx.py` command.
-
-- two participant IDs and two artifact directories;
-- one explicit track, simulation config, output directory, and WebSocket port;
-- action budget, live tick limit, and `strict_scored` versus local-demo
-  `trusted_live` late-action policy;
-- optional organizer isolation, when the evaluator image is available;
-- per-entrant status, latency, deadline misses, inference failures, and model
-  file size;
-- shared live-process RSS/peak RSS, PID count, thread count, and bounded child
-  output in the terminal panel.
-
-Start the dashboard from the repository root:
-
-```bash
-.venv/bin/python tools/participant_ui.py --port 8766
-```
-
-Open **http://127.0.0.1:8766/** and use **03 · Grid control / live heat**.
-Build a package or choose two artifact directories, then start the heat. The default renderer HTTP
-server uses port `8765`; the dashboard's live-heat WebSocket default is `8767`
-so the three local services do not collide. Runtime RSS is measured for the
-supervised race process tree and is intentionally labeled shared; the dashboard
-does not pretend that in-process model memory is separately measurable.
-
-For a direct CLI smoke or a non-dashboard run, use the live runner explicitly:
-
-```bash
-.venv/bin/python tools/run_live_onnx.py \
-  --entrant small-alpha artifacts/onnx-imitation \
-  --entrant small-beta artifacts/onnx-imitation \
-  --track tracks/train/monaco.json \
-  --config config/simulation.json \
-  --output-dir artifacts/live/small-heat \
-  --port 8767 \
-  --max-steps 2400 \
-  --policy-budget-ms 20 \
-  --late-policy strict_scored \
-  --telemetry-stdout
-```
-
-Use `trusted_live` only for a local demonstration where holding the last action
-after one late inference is acceptable. It is not the scored policy. The CLI
-prints the actual WebSocket endpoint and emits bounded `LIVE_TELEMETRY` JSON
-lines when `--telemetry-stdout` is enabled. The live report is
-`artifacts/live/small-heat/live-race.json`; it is a live result, not a replay.
-
-## Setup
-
-The supported runtime is Python 3.11. The lock file uses the CPU PyTorch wheel
-index, so a GPU and CUDA installation are not required. Pygame uses software
-SDL drawing and is also exercised with dummy SDL drivers in CI.
-
-```bash
-python3.11 -m venv .venv
-.venv/bin/python -m pip install -r requirements.lock
-```
-
-The same dependency set is available through the `Dockerfile`.
-
-## Try the first slice
-
-```bash
-make render
-```
-
-The command exports a schema 1.1 replay from the deterministic scripted policy
-and renders one frame through Pygame with dummy SDL drivers. For an interactive
-window, run `make render` with `SDL_VIDEODRIVER` unset and launch:
-
-```bash
-.venv/bin/python tools/run_pygame.py --replay artifacts/replay/pygame-smoke.json
-```
-
-Run the checks with the project test command:
-
-```bash
-make test
-```
-
-## Batched engine and contract
-
-`VectorizedRacingEnv` accepts an `(n_envs, 2)` action array and returns a
-float32 observation whose size is `10 + ray_count + lookahead_count`, raw signals, events, and
-termination/truncation flags through `step_raw`. The legacy `step` method also
-returns reference weighted rewards for compatibility. The physics transition
-is batched with NumPy while track geometry remains the shared Python authority. Use
-`evaluation=True` on reset for a fixed start-line standing start with zero
-spawn noise.
-
-The field order and bounds are documented in `docs/state_schema.md` and are
-also available through `build_observation_schema`. `TrainingContract` can save
-the action/observation versions, environment hashes, deterministic evaluation
-metadata, and optional running-normalization statistics.
-
-The measured first benchmark is in `reports/e1_vectorized_benchmark.md`. It is
-a local baseline only. The measured PPO baseline experiment is in
-`reports/e2_baseline_convergence.md`; it covers the current synthetic fixture
-only and does not freeze public event settings. Held-out-track storage, final
-ranking, and event release freeze remain separate milestones; ONNX inference
-and local multi-ghost comparison now have a non-renderer race interface. See
-[`docs/submission_runtime.md`](docs/submission_runtime.md). It does not change
-the renderer directory or the single-car replay schema.
-
-For live actions rather than replay playback, install
-`requirements-live.lock`, serve `renderer/`, and run either the participant
-dashboard or `tools/run_live_onnx.py`. The initial profile is 30 Hz
-physics/control with a 20 ms candidate action budget and strict late-action DNF.
-The renderer is normally served at `http://127.0.0.1:8765/`; connect it to the
-printed WebSocket endpoint, for example
-`http://127.0.0.1:8765/?live=ws://127.0.0.1:8767/live/v1`. The browser is
-presentation-only; Python remains authoritative for observations, actions,
-physics, events, and results.
-
-## Trainer boundary
-
-`RolloutCollector` in `racing_event/rollout.py` is a reusable transition
-adapter, not the participant's model or algorithm. It accepts a batched policy
-callable and an optional participant-owned reward callback, reserves the persistent
-`RunBudget` in individual environment-transition units, uses a partial active
-mask for a final batch, and resets only lanes that ended. Each call is capped
-at 8,192 transitions by default; call `collect()` repeatedly for larger runs.
-The local launcher is cooperative: a custom trainer must use the environment
-and budget APIs if it needs the same accounting guarantees as the reference
-starter.
-`RolloutMetrics` records raw signals and optional reference weighted terms, episode outcomes,
-speed, off-track rate, action saturation, action smoothness, policy-invisible
-sector coverage, positive off-track progress, boundary excess, and per-track
-statistics. The diagnostic fields do not enter observations, rewards,
-termination, ranking, or replay schema 1.1.
-
-The collector can update a `RunningObservationNormalizer` during training. Save
-that normalizer with `TrainingContract.save`; freeze it before evaluation so
-evaluation does not change the artifact.
-
-`FixedMLPActorCritic` in `racing_event/ppo.py` is an optional reference model. It
-has two 64-unit tanh layers, a two-dimensional tanh-squashed Gaussian policy,
-and a scalar value head. Its initial output bias is `[0.0, 0.5]`, giving the
-longitudinal action a small throttle prior at standing starts. The bias is
-stored in the artifact metadata. `PPOTrainer.update` computes masked GAE and performs
-the configured full-batch clipped PPO epochs. Terminations do not bootstrap;
-truncations bootstrap but do not carry GAE across the reset boundary.
-
-Reference weights are saved as a state dictionary with
-`FixedMLPActorCritic.save_artifact`; loading uses `weights_only=True` and
-validates the JSON architecture metadata. The provisional PPO values are
-available from `PPOHyperparameters.to_dict()`. They are not public event
-settings until the training set and remaining validation experiments are
-frozen.
-
-Run the measured baseline experiment with:
-
-```bash
-make e2
-```
-
-The report is written to `reports/e2_baseline_convergence.md`.
-
-## Deterministic policy evaluation
-
-The engine includes a fixed-start evaluation path that uses the same Python
-physics as training. It runs one lane at a time, uses the policy mean action,
-keeps the observation normalizer frozen, and streams a trajectory hash instead
-of retaining every frame in memory. This keeps evaluation suitable for a
-machine with limited RAM and makes repeated runs comparable.
-
-Save an artifact from an E2 run, then evaluate it twice:
-
-```bash
-ARTIFACT_DIR="$(mktemp -d)"
-
-.venv/bin/python tools/run_e2_baseline.py \
-  --updates 4 --n-envs 4 --rollout-length 64 \
-  --artifact-dir "$ARTIFACT_DIR" \
-  --output "$ARTIFACT_DIR/training.md"
-
-.venv/bin/python tools/evaluate_policy.py \
-  --weights "$ARTIFACT_DIR/policy.pt" \
-  --metadata "$ARTIFACT_DIR/policy.json" \
-  --contract "$ARTIFACT_DIR/training_contract.json" \
-  --track tracks/train/monaco.json \
-  --config config/simulation.json \
-  --repeats 2 \
-  --output "$ARTIFACT_DIR/evaluation.json"
-```
-
-The evaluator reports `finished`, `dnf_crash`, `dnf_timeout`,
-`dnf_stuck`, or `dnf_backward`, plus step count, fixed-step lap time when
-finished, physical metrics, and the trajectory digest. A repeated evaluation
-must produce the same digest; a mismatch is treated as an error.
-
-Evaluation JSON also includes a bounded `diagnostics` summary: off-track seconds
-and longest excursion, positive/off-track/backward progress, maximum boundary
-excess, stalled runs, driven sector coverage, first forward sector-crossing
-ticks, and per-channel saturation/applied-command deltas. These are physical
-audits, not extra policy inputs, rewards, DNF rules, or leaderboard scores.
-Evaluation takes one explicit track at a time, never a randomly selected pool.
-Replay schema 1.1 and its trajectory digest remain unchanged.
-
-The measured local E2 artifact is retained outside Git at
-`artifacts/e2-stable/` (`policy.pt`, `policy.json`, and
-`training_contract.json`).
-
-## Declarative participant artifact (first generic evaluator slice)
-
-The repository now includes a Torch-free, organizer-side evaluator for a safe
-first generic submission format. A participant artifact is a directory with
-exactly:
+The included file is:
 
 ```text
-submission/
+examples/participant_train.py
+```
+
+It delegates to the inspectable reference PPO trainer. It is a runnable
+onboarding example, **not** the event algorithm and not a requirement. It is
+useful for confirming that your installation, maps, replay viewer, and package
+pipeline work before you write your own algorithm.
+
+Make your own copy so you know which file you changed:
+
+```bash
+mkdir -p participant_code
+cp examples/participant_train.py participant_code/train_reference.py
+```
+
+You will point the launcher at that copy with:
+
+```text
+--trainer participant_code/train_reference.py
+```
+
+### Choice B: use your own trainer
+
+Put your program inside the repository, for example:
+
+```text
+participant_code/
+  train.py                 # the file passed to --trainer
+  reward.py                # optional; only your trainer may import it
+  model.py                 # optional model definition
+  checkpoints/             # optional intermediate files
+```
+
+The launcher checks that the trainer path stays inside this repository. These
+are valid examples:
+
+```bash
+--trainer participant_code/train.py
+--trainer participant_code/my_algorithm/train.py
+--trainer /absolute/path/to/Synapse/participant_code/train.py
+```
+
+This is not valid because it points outside the workspace:
+
+```bash
+--trainer /home/me/Desktop/random-trainer.py
+```
+
+Copy that file into `participant_code/` first. This path rule keeps a run
+repeatable and prevents an accidental command from launching an unrelated
+program.
+
+### 3.1 What your trainer must accept
+
+`tools/train_participant.py` forwards these options to the file named by
+`--trainer`:
+
+| Argument | What it tells your script | Example |
+|---|---|---|
+| `--track-dir` | Directory containing one or more public `*.json` maps. | `tracks/train` |
+| `--config` | The simulation and sensor configuration file. | `config/simulation.json` |
+| `--output-dir` | Where your script must save the run. | `artifacts/runs/team-a` |
+| `--steps` | Maximum transitions requested in this invocation. | `256` |
+| `--budget-steps` | Persistent maximum allowed by this local run ledger. | `10000` |
+| `--n-envs` | Number of parallel environment lanes requested. | `2` |
+| `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
+| `--seed` | Reproducibility seed. | `17` |
+| `--reward` | Optional reward JSON selected by the participant UI. | `examples/baseline_reward.json` |
+
+Your parser should accept `--reward` with a default of `None`, because the
+launcher does not send it when you choose a custom reward implementation. The
+other arguments should be required or have sensible defaults. A small parser
+blueprint looks like this:
+
+```python
+import argparse
+from pathlib import Path
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--reward", type=Path, default=None)
+    parser.add_argument("--track-dir", type=Path, required=True)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--steps", type=int, required=True)
+    parser.add_argument("--budget-steps", type=int, required=True)
+    parser.add_argument("--n-envs", type=int, required=True)
+    parser.add_argument("--rollout-length", type=int, required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    return parser.parse_args()
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    # 1. Load args.config and the JSON maps in args.track_dir.
+    # 2. Build your model and optimizer.
+    # 3. Collect at most args.steps transitions.
+    # 4. Update your model using your own algorithm and reward.
+    # 5. Save a recognized artifact below args.output_dir.
+```
+
+This is a shape guide, not a complete learning algorithm. The included
+starter is the complete runnable example. A custom script owns its model
+architecture, policy distribution, optimizer, preprocessing, reward, and
+checkpoint logic.
+
+![Annotated trainer structure: parse arguments, load data, update the model, and save an artifact](docs/assets/training-script-shape.svg)
+
+### 3.2 What your trainer should save
+
+For the included reference path, the run directory must eventually contain:
+
+```text
+your-run/
+  policy.pt
+  policy.json
+  training_contract.json
+```
+
+The reference trainer may also create checkpoint generations, metrics,
+`training_report.md`, `budget.json`, and `run_identity.json`. Keep the entire
+run directory; the extra files are useful evidence and resume state.
+
+For the safe declarative NumPy path, the artifact directory must contain
+**exactly** these three regular files:
+
+```text
+numpy-artifact/
   manifest.json
   training_contract.json
   weights.npz
 ```
 
-`manifest.json` declares a sequential NumPy MLP, preprocessing mode, schema
-identity, and file hashes. The loader supports participant-chosen feed-forward
-layer widths and `identity`, `relu`, and `tanh` activations, with bounded layer,
-parameter, file-size, and inference-batch limits. It does not load participant
-Python, pickle, reward modules, or arbitrary operators. The contract normalizer
-must be frozen for this artifact path.
+The NumPy manifest describes a sequential MLP. Supported activations are
+`identity`, `relu`, and `tanh`; the final layer has two `tanh` outputs. Hashes
+must match the exact files. The loader rejects extra files, symlinks, object
+arrays, non-finite values, bad shapes, and unsupported layers. The full
+declarative contract is in [`docs/state_schema.md`](docs/state_schema.md).
 
-Evaluate it against organizer-provided tracks with:
+If you use a framework or architecture that is not the bundled reference
+model, do not assume that a raw framework checkpoint can be packaged. Convert
+it to the supported declarative artifact or produce an ONNX graph that obeys
+the [ONNX profile](docs/submission_runtime.md#onnx-profile-v1). The evaluator
+does not import your training Python, load pickle files, or execute your reward
+code.
 
-```bash
-.venv/bin/python tools/evaluate_participant.py \
-  --artifact-dir submission \
-  --track tracks/train/monaco.json \
-  --config config/simulation.json \
-  --repeats 2 \
-  --output artifacts/participant-evaluation.json
+### 3.3 Optional progress output
+
+The dashboard can display a progress line when your trainer prints lines like:
+
+```text
+update 1: steps 128/2048 return=12.4 lap=n/a speed=18.2 m/s crash=0 off_track=0.03
 ```
 
-The same artifact can be exported through the existing replay schema:
+The exact metrics are yours. The important part is that your program writes
+normal text to standard output, flushes periodically, and exits with status 0
+when training succeeds. A non-zero exit code is shown as a failed run.
+
+## 4. Run a tiny first experiment
+
+Start small. A 256-transition run is for checking paths and file formats, not
+for producing a fast racer.
+
+### 4.1 Train on both public maps
+
+This command points at the copied starter script:
 
 ```bash
-.venv/bin/python tools/export_replay.py \
-  --artifact-dir submission \
-  --track tracks/train/monaco.json \
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward examples/baseline_reward.json \
+  --track-dir tracks/train \
   --config config/simulation.json \
-  --participant-id team-a \
-  --output artifacts/replay/team-a.json
+  --output-dir artifacts/runs/first-check \
+  --steps 256 \
+  --budget-steps 10000 \
+  --n-envs 2 \
+  --rollout-length 32 \
+  --seed 17
 ```
 
-This remains the first generic artifact format, not the final event contract.
-For ONNX export, the supported architecture/operator profile, optional pinned
-dependencies, and **explicit isolated organizer evaluation**, see
-[`docs/submission_runtime.md`](docs/submission_runtime.md). In-process evaluation
-is labeled trusted-local preview, not a sandbox. Actual container verification,
-outer job supervision, and event rules remain release gates.
+Read the command from left to right:
 
-## Replay UI boundary (Python simulation only)
+1. `.venv/bin/python` uses the installed project environment.
+2. `tools/train_participant.py` is the safe launcher.
+3. `--trainer ...` selects **your training script**.
+4. `--reward ...` selects the starter reward weights.
+5. `--track-dir ...` exposes Monaco and Spa.
+6. `--config ...` selects the sensor/physics configuration.
+7. `--output-dir ...` selects a new folder for this experiment.
+8. `--steps 256` makes this invocation short.
+9. `--budget-steps 10000` creates the local transition ceiling.
+10. `--n-envs 2` asks for two parallel lanes.
+11. `--rollout-length 32` asks for 32 transitions per lane per update.
+12. `--seed 17` makes this attempt reproducible.
 
-Generate a complete smoke-controller replay and bundle an offline preview:
+When it succeeds, inspect the output:
+
+```bash
+find artifacts/runs/first-check -maxdepth 2 -type f -printf '%P\n' | sort
+```
+
+For the reference starter you should see `policy.pt`, `policy.json`, and
+`training_contract.json` among the results. If you do not, stop and fix the
+trainer before spending more transitions.
+
+### 4.2 Train on one map only
+
+The launcher takes a directory, not a single track file. Make a small map
+directory when you want a one-map experiment:
+
+```bash
+mkdir -p participant_maps/monaco
+cp tracks/train/monaco.json participant_maps/monaco/monaco.json
+
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward examples/baseline_reward.json \
+  --track-dir participant_maps/monaco \
+  --config config/simulation.json \
+  --output-dir artifacts/runs/monaco-seed-17 \
+  --steps 256 --budget-steps 10000 \
+  --n-envs 1 --rollout-length 32 --seed 17
+```
+
+To use Spa instead, copy `tracks/train/spa.json` into a `participant_maps/spa/`
+directory and change `--track-dir` and `--output-dir`.
+
+### 4.3 Understand steps and budget
+
+These two numbers are different:
+
+- `--steps` is the amount requested **this time you start the command**.
+- `--budget-steps` is the persistent local ceiling for the run directory.
+
+For example, `--steps 256 --budget-steps 10000` requests 256 transitions and
+allows future reference-starter resumes to spend up to 10,000 accepted
+transitions in that run ledger. `n_envs` lanes are charged individually. A
+vector call with two active lanes costs two transitions.
+
+The local onboarding budget is a prototype fairness mechanism, not a claim
+that the final event budget has been frozen. Do not edit `budget.json` to try to
+refund work. If your custom trainer has its own budget accounting, keep that
+accounting in its run directory too.
+
+## 5. Use the dashboard instead of typing commands
+
+The dashboard is optional. It is a local form around the same launcher; it is
+not a second simulator or a second model.
+
+Start it from the repository root:
+
+```bash
+.venv/bin/python tools/participant_ui.py --port 8766
+```
+
+Open this address in a browser on the same computer:
+
+```text
+http://127.0.0.1:8766/
+```
+
+Keep the terminal open while the dashboard is running. It launches local code
+and is intentionally bound to loopback; do not expose it to the internet.
+
+### 5.1 Fill in the training form
+
+In the training panel:
+
+1. **Trainer script:** type `participant_code/train.py` or
+   `participant_code/train_reference.py`. This is the path to your Python
+   trainer, not the path to model weights.
+2. **Track directory:** type `tracks/train` for both maps, or a folder such as
+   `participant_maps/monaco` for one map.
+3. **Output directory:** type a new folder such as
+   `artifacts/runs/dashboard-first`.
+4. **Steps:** enter `256` for the first smoke run.
+5. **Budget steps:** enter `10000` for the local onboarding example.
+6. **Parallel environments:** enter `1` or `2` while learning the workflow.
+7. **Rollout length:** enter `32` for a small test.
+8. **Seed:** enter `17`. Use a different seed only for a deliberately new
+   experiment.
+9. **Reward function:** leave the starter weights in place for the first run.
+10. **Ray sensors:** leave the default nine angles in place until the baseline
+    works.
+11. Press **Start / resume participant training** once.
+
+Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
+and `run_identity.json` beside the run. This is why dashboard-created runs are
+convenient for later replay and packaging.
+
+## 6. Sensors and actions: what the model sees and does
+
+With the default configuration, every observation is a vector of 23 `float32`
+values:
+
+```text
+9 driving-state values
+9 boundary-ray values
+4 curvature-lookahead values
+1 local-width value
+```
+
+The exact default order is:
+
+```text
+speed, longitudinal_velocity, lateral_velocity, yaw_rate,
+lateral_offset, heading_error, previous_steering,
+previous_longitudinal, steering_angle,
+ray_0 ... ray_8,
+curvature_lookahead_0 ... curvature_lookahead_3,
+local_width
+```
+
+The full field table, ranges, and units are in
+[`docs/state_schema.md`](docs/state_schema.md). The observations are
+track-relative: there is no absolute x/y position, absolute heading, track ID,
+or absolute lap-progress value.
+
+The model returns exactly two finite numbers in `[-1, 1]`, in this order:
+
+```text
+action[0] = steering
+action[1] = throttle_brake
+```
+
+For `throttle_brake`, positive means throttle, zero means coast, and negative
+means braking. Do not swap the two outputs. Do not return NaN or infinity.
+
+### 6.1 Optional ray changes
+
+The UI allows 1–16 unique ray angles from `-90` through `90` degrees. The
+angle list must include `0`, the forward center ray. For example:
+
+```text
+-30,0,30
+```
+
+creates three rays and therefore a 17-value observation (`10 + 3 + 4`). The
+default list is:
+
+```text
+0,-15,15,-30,30,-60,60,-90,90
+```
+
+Changing rays changes the observation size and the configuration hash. Start a
+new output directory after changing them. Do not resume a run that was trained
+with a different ray order. The contract is designed to reject that mismatch
+instead of silently feeding the model the wrong numbers.
+
+## 7. Reward design and parameter tuning
+
+SYNAPSE publishes raw transition signals. A participant may use the dashboard's
+nine weighted signals or write a completely custom finite reward inside its
+trainer. The organizer evaluator does not import participant reward code.
+
+The starter reward file is:
+
+```json
+{
+  "schema_version": 1,
+  "weights": {
+    "progress": 12.0,
+    "speed": 0.5,
+    "curvature_matched_speed": 0.25,
+    "off_track": -1.5,
+    "crash": -10.0,
+    "stuck": -8.0,
+    "lap_complete": 20.0,
+    "time": -0.15,
+    "steer_smoothness": -0.05
+  }
+}
+```
+
+Plain-English meanings:
+
+| Signal | Meaning | Typical symptom when too weak |
+|---|---|---|
+| `progress` | Reward for moving forward along the route. | The car does not try to advance. |
+| `speed` | Reward related to forward speed. | The car is safe but very slow. |
+| `curvature_matched_speed` | Encourages speed appropriate to the bend. | The car enters corners too fast. |
+| `off_track` | Penalty for leaving the bounded road. | The car cuts across runoff. |
+| `crash` | Penalty for a crash/contact event. | The car repeatedly hits barriers. |
+| `stuck` | Penalty for failing to move. | The car sits at the start. |
+| `lap_complete` | Bonus when the episode completes its lap target. | The car gives up before a lap. |
+| `time` | Small pressure against wasting time. | The car drives safely but never commits. |
+| `steer_smoothness` | Penalty for abrupt steering changes. | The car oscillates left/right. |
+
+### 7.1 The recommended tuning loop
+
+![Annotated one-change-at-a-time tuning loop](docs/assets/tuning-loop.svg)
+
+Use this loop instead of changing five values and guessing which one helped:
+
+1. **Baseline:** run 256 transitions with the starter reward, seed 17, default
+   rays, and one map.
+2. **Inspect:** build a replay. Look for a crash, a stuck start, excessive
+   steering oscillation, or a car that is safe but motionless.
+3. **Change one input:** for example, change only `off_track` from `-1.5` to
+   `-3.0`.
+4. **Use a new output directory:** for example,
+   `artifacts/runs/off-track-stronger`. This prevents incompatible run identity
+   files from being mixed together.
+5. **Retrain:** keep all other values, map choices, and seed the same for the
+   first comparison.
+6. **Replay and evaluate:** compare the actual driving, not only the printed
+   training return.
+7. **Keep or revert:** record the change in a notebook or text file, then try
+   the next single change.
+8. **Check both maps:** a change that helps Monaco but makes Spa crash is not a
+   reliable improvement.
+
+### 7.2 Example: stronger off-track penalty
+
+Copy the reward file, edit one number, and run a fresh directory:
+
+```bash
+cp examples/baseline_reward.json participant_code/reward_off_track.json
+# Edit only "off_track": -1.5 to "off_track": -3.0
+
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward participant_code/reward_off_track.json \
+  --track-dir tracks/train \
+  --config config/simulation.json \
+  --output-dir artifacts/runs/off-track-stronger \
+  --steps 2048 --budget-steps 10000 \
+  --n-envs 2 --rollout-length 32 --seed 17
+```
+
+Do not reuse `artifacts/runs/first-check` for a different reward file. A saved
+run identity deliberately rejects that combination.
+
+### 7.3 Example: compare two seeds
+
+Keep the reward and maps fixed and change only the seed and output folder:
+
+```bash
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward examples/baseline_reward.json \
+  --track-dir tracks/train --config config/simulation.json \
+  --output-dir artifacts/runs/seed-17 \
+  --steps 2048 --budget-steps 10000 --n-envs 2 --rollout-length 32 --seed 17
+
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward examples/baseline_reward.json \
+  --track-dir tracks/train --config config/simulation.json \
+  --output-dir artifacts/runs/seed-23 \
+  --steps 2048 --budget-steps 10000 --n-envs 2 --rollout-length 32 --seed 23
+```
+
+Two seeds are two separate experiments. They are not two models inside one
+run directory.
+
+### 7.4 Safe starter values for reference PPO
+
+For the optional reference trainer, begin here:
+
+| Parameter | First smoke | Small experiment | Why |
+|---|---:|---:|---|
+| `steps` | 256 | 2,048 or more | Invocation work, not the lifetime ledger. |
+| `budget-steps` | 10,000 | 10,000 | Local prototype ceiling. |
+| `n-envs` | 1 | 2 or 4 | More lanes collect more data per update. |
+| `rollout-length` | 16 or 32 | 32 or 64 | Must multiply with `n-envs` to at most 8,192. |
+| `seed` | 17 | 17, then 23 | Repeatability and variability checks. |
+| `learning-rate` | `0.0001` | `0.0001` | Reference fine-tuning only. |
+| `update-epochs` | `1` for a smoke | `4` default | More passes can improve learning and cost more CPU. |
+
+Change one row at a time. A large `n-envs * rollout-length` product is not
+automatically better; it uses more memory and makes a short smoke run harder
+to interpret.
+
+## 8. Replay the model with the renderer
+
+The renderer is a viewer. It consumes a validated replay produced by Python;
+it never runs the environment itself.
+
+### 8.1 Dashboard replay
+
+After a dashboard training run:
+
+1. Keep **Output directory** set to the exact run directory.
+2. Choose **Reference · latest saved artifact** for a reference run.
+3. Choose `Monaco` or `Spa`.
+4. Choose **Pygame** for a local window or **Browser** for a browser replay.
+5. Click **Build / watch replay**.
+6. Use **Open browser fallback** or **Download replay JSON** if the machine has
+   no desktop display.
+
+The selected run must contain `run_config.json`. This file records the actual
+ray order and other settings. The dashboard refuses to guess a default when it
+is missing.
+
+### 8.2 Command-line replay for a reference run
+
+Create the replay directory first:
 
 ```bash
 mkdir -p artifacts/replay
-.venv/bin/python tools/export_replay.py --scripted \
-  --participant-id scripted-demo --output artifacts/replay/run.json
-.venv/bin/python tools/build_replay.py artifacts/replay/run.json \
-  --output artifacts/replay/index.html
-.venv/bin/python -m http.server 8765 --bind 127.0.0.1 --directory artifacts/replay
-```
-
-Open **http://localhost:8765/**, or open `artifacts/replay/index.html` directly.
-The HTML contains its own data/styles/scripts and needs no network connection,
-frontend dependencies, Node runtime, or running simulator. It has play/pause,
-restart, next-tick, scrubber, playback speed, recorded telemetry/events, track
-geometry, car pose, and the Python result. Exported files are ignored by Git.
-
-To view the retained learned E2 artifact instead of the scripted controller:
-
-```bash
 .venv/bin/python tools/export_replay.py \
-  --weights artifacts/e2-stable/policy.pt \
-  --metadata artifacts/e2-stable/policy.json \
-  --contract artifacts/e2-stable/training_contract.json \
-  --participant-id e2-stable --output artifacts/replay/e2-stable.json
-.venv/bin/python tools/build_replay.py artifacts/replay/e2-stable.json \
-  --output artifacts/replay/index.html
+  --weights artifacts/runs/first-check/policy.pt \
+  --metadata artifacts/runs/first-check/policy.json \
+  --contract artifacts/runs/first-check/training_contract.json \
+  --track tracks/train/monaco.json \
+  --config config/simulation.json \
+  --participant-id first-check \
+  --output artifacts/replay/first-check-monaco.json
 ```
 
-The exporter streams frames to an atomic JSON file. The renderer verifies
-version, tick ordering, hashes, finite values, and outcome consistency before
-drawing. See `docs/replay_contract.md` for schema **1.1**, units, time-zero
-semantics, memory limits, checksum details, and the Pygame coordinate mapping.
-The legacy scripted smoke format 1.0 is intentionally not accepted by the new
-renderer.
-
-Pygame and the browser interpolate **only the recorded pose**, never physics.
-Neither renderer may compute contacts, resets, rewards, progress, finishes, or
-lap times. Private held-out geometry must never be exported into a public
-preview. Checksums are integrity checks, not anti-cheat authentication.
-
-### Pygame renderer
-
-`tools/run_pygame.py` is the active local renderer. It loads only validated
-schema 1.1 replays, draws the embedded track boundaries and recorded path,
-interpolates the recorded pose for smooth playback, and displays the Python
-result/events as telemetry. It never imports or steps the racing environment.
-Use `--headless` with dummy SDL drivers for CI and one-frame smoke checks. The
-HTML viewer remains an optional dependency-free fallback for remote previews;
-Unity has been retired from the active product.
-
-The resizable viewer has clickable playback/speed controls, a drag-to-seek
-timeline, recorded-event markers and previous/next-event jumps. Arrows seek one
-exact tick, Shift + arrows seek one second, Home/End select the endpoints,
-Space toggles playback, and `?` shows help. Seeking pauses. The header labels the
-recorded final result separately from the currently selected tick's state.
-Separate replay-group v1.0 manifests compare 1–4 recordings on the same Python
-track/config/standing-start clock, while single-car schema 1.1 stays unchanged.
-Use `tools/build_replay_group.py --help` and `tools/run_pygame.py --group ...`;
-shorter recordings explicitly hold their final pose rather than extrapolating.
-See `docs/participant_guide.md` for controls/limits and exact reference
-resume/warm-start/best-selection commands, and
-`reports/pygame_review_2026-10-19.md` for screenshot review evidence.
-
-To save a deterministic paused QA image without a desktop:
+Open a local Pygame viewer:
 
 ```bash
 .venv/bin/python tools/run_pygame.py \
-  --replay artifacts/replay/pygame-smoke.json \
-  --start-seconds 1 --screenshot artifacts/replay/viewer.png
+  --replay artifacts/replay/first-check-monaco.json
 ```
 
-### Layer checks and container preview
-
-`make test` runs the configured Python simulation/export/read-back checks. The
-participant dashboard test invokes the embedded dashboard JavaScript when Node
-is available. Run the complete dependency-free JavaScript smoke suite directly
-with:
+On a machine without a display, render one frame:
 
 ```bash
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  .venv/bin/python tools/run_pygame.py \
+  --replay artifacts/replay/first-check-monaco.json --headless
+```
+
+For a dependency-free browser file:
+
+```bash
+.venv/bin/python tools/build_replay.py \
+  artifacts/replay/first-check-monaco.json \
+  --output artifacts/replay/first-check-monaco.html
+
+.venv/bin/python -m http.server 8765 --bind 127.0.0.1 \
+  --directory artifacts/replay
+```
+
+Open `http://127.0.0.1:8765/first-check-monaco.html`. Playback controls,
+recorded telemetry, events, the car pose, and the final Python result come from
+the replay. A DNF is not silently turned into a lap.
+
+## 9. Evaluate before packaging
+
+For a reference artifact, run the deterministic evaluator twice:
+
+```bash
+.venv/bin/python tools/evaluate_policy.py \
+  --weights artifacts/runs/first-check/policy.pt \
+  --metadata artifacts/runs/first-check/policy.json \
+  --contract artifacts/runs/first-check/training_contract.json \
+  --track tracks/train/monaco.json \
+  --config config/simulation.json \
+  --repeats 2 \
+  --output artifacts/evaluation/first-check-monaco.json
+```
+
+Useful statuses are `finished`, `dnf_crash`, `dnf_timeout`, `dnf_stuck`, and
+`dnf_backward`. The evaluator uses a fixed start and a frozen preprocessing
+mapping. Repeated runs should have the same trajectory digest. A training
+return is not a race score; inspect `status`, lap time when finished, off-track
+time, and the replay.
+
+For a safe NumPy artifact, use:
+
+```bash
+.venv/bin/python tools/evaluate_participant.py \
+  --artifact-dir path/to/numpy-artifact \
+  --track tracks/train/monaco.json \
+  --config config/simulation.json \
+  --repeats 2 \
+  --output artifacts/evaluation/numpy-monaco.json
+```
+
+Repeat the command with `tracks/train/spa.json` before deciding which run is
+better.
+
+## 10. Export ONNX
+
+The live interface uses ONNX, not a trainer script and not a raw Torch
+checkpoint. Install the optional evaluator dependencies once:
+
+```bash
+.venv/bin/python -m pip install -r requirements-evaluator.lock
+```
+
+### 10.1 Export the bundled reference artifact
+
+The output directory must be new:
+
+```bash
+mkdir -p artifacts/submissions
+.venv/bin/python tools/export_onnx.py \
+  --reference \
+  --source artifacts/runs/first-check \
+  --output artifacts/submissions/first-check
+```
+
+Check that it contains exactly:
+
+```text
+artifacts/submissions/first-check/
+  manifest.json
+  training_contract.json
+  model.onnx
+```
+
+The exporter validates the graph before returning. It embeds any saved
+preprocessing so the evaluator does not apply it a second time.
+
+### 10.2 Export a declarative NumPy artifact
+
+For a directory containing exactly `manifest.json`, `training_contract.json`,
+and `weights.npz`, omit `--reference`:
+
+```bash
+.venv/bin/python tools/export_onnx.py \
+  --source artifacts/numpy-artifact \
+  --output artifacts/submissions/numpy-model
+```
+
+Do not submit the trainer, reward file, Python source, pickle, or Torch
+checkpoint as the model-only live submission. They are useful for training
+provenance but are not the ONNX runtime input.
+
+The current profile expects one float32 input named `observations` with shape
+`[1, N]` and one float32 `actions` output with shape `[1, 2]`. The final output
+is `tanh`, and the allowed graph operators and limits are listed in
+[`docs/submission_runtime.md`](docs/submission_runtime.md).
+
+## 11. Build a self-contained live package
+
+Use a **new** output directory every time. This example packages Monaco:
+
+```bash
+.venv/bin/python tools/package_live_submission.py \
+  --source artifacts/runs/first-check \
+  --output artifacts/live-packages/team-a-monaco \
+  --track tracks/train/monaco.json \
+  --participant-id team-a
+```
+
+The source run must contain the recognized reference files. For a NumPy source,
+pass the directory that contains its three exact artifact files instead.
+
+The package looks like this:
+
+```text
+artifacts/live-packages/team-a-monaco/
+  README.md
+  package_manifest.json       # hashes and provenance
+  config/simulation.json       # matching saved config
+  tracks/monaco.json           # selected public map
+  submission/
+    manifest.json
+    training_contract.json
+    model.onnx
+  provenance/
+    run_config.json            # when available
+    reward_config.json         # when available
+    run_identity.json          # when available
+    training_report.md         # when available
+```
+
+The package builder checks the model contract against the copied config and
+records SHA-256 hashes. It does not copy your training Python, Torch checkpoint,
+or reward callback into the live submission.
+
+![Annotated package flow: saved run to ONNX package to Python live heat](docs/assets/package-live.svg)
+
+The dashboard can perform the same operation:
+
+1. Open **Package for live race**.
+2. Select the trained run or model source.
+3. Enter a new package output directory.
+4. Choose `Monaco` or `Spa`.
+5. Enter a simple racer ID such as `team-a`.
+6. Click **Build ONNX live package**.
+7. Confirm that the result shows a `submission/` directory and a
+   `package_manifest.json`.
+
+## 12. Run two models against each other
+
+The local heat is a ghost race: entrants share the same Python track/config but
+do not collide with one another. Python calls each model, validates its action,
+advances physics, and records the result.
+
+### 12.1 Direct live runner
+
+Install live dependencies:
+
+```bash
+.venv/bin/python -m pip install -r requirements-live.lock
+```
+
+Run two packages for a short local heat:
+
+```bash
+.venv/bin/python tools/run_live_onnx.py \
+  --entrant team-a artifacts/live-packages/team-a-monaco/submission \
+  --entrant team-b artifacts/live-packages/team-b-monaco/submission \
+  --track tracks/train/monaco.json \
+  --config config/simulation.json \
+  --output-dir artifacts/live-results/monaco-team-a-team-b \
+  --port 0 \
+  --max-steps 240 \
+  --policy-budget-ms 20 \
+  --late-policy strict_scored \
+  --telemetry-stdout
+```
+
+The runner prints a WebSocket address such as:
+
+```text
+ws://127.0.0.1:32949/live/v1
+```
+
+The final report is:
+
+```text
+artifacts/live-results/monaco-team-a-team-b/live-race.json
+```
+
+`strict_scored` marks an entrant `dnf_inference` when an action is late,
+missing, invalid, or fails. `trusted_live` may hold the previous action for a
+local visual demo, but it is not the strict scored behavior:
+
+```bash
+--late-policy trusted_live
+```
+
+### 12.2 Connect the read-only renderer
+
+In another terminal, serve the renderer folder:
+
+```bash
+.venv/bin/python -m http.server 8765 \
+  --bind 127.0.0.1 --directory renderer
+```
+
+Open the printed live URL by adding the WebSocket query parameter:
+
+```text
+http://127.0.0.1:8765/?live=ws://127.0.0.1:32949/live/v1
+```
+
+Replace the WebSocket address with the one printed by your own heat. The
+browser receives `hello`, ordered state packets, and an `end` packet. It cannot
+send actions back to Python. Slow browser rendering can drop intermediate
+display packets without changing the race.
+
+### 12.3 Dashboard live heat
+
+The dashboard's **Grid control / live heat** panel has the same controls:
+
+1. Put the two `submission/` directories into the two racer slots.
+2. Give each slot a participant ID.
+3. Select the same track and matching config for the heat.
+4. Choose the action budget and tick limit.
+5. Keep `strict_scored` for a meaningful timing check.
+6. Click **Start live heat**.
+7. Read latency, deadline misses, inference failures, and final status.
+
+The terminal panel also reports shared live-process RSS, process count, and
+thread count. It intentionally labels these as shared resources.
+
+## 13. Optional reference resume and fine-tuning
+
+The reference PPO has a checkpoint-aware command for experiments. This is a
+convenience for the included starter, not a requirement for your algorithm.
+
+To continue the same reference run, reuse the same output directory, reward,
+config, maps, ray order, seed, and budget identity. Change only the invocation
+limit when you understand the checkpoint rules:
+
+```bash
+.venv/bin/python tools/train_participant.py \
+  --trainer participant_code/train_reference.py \
+  --reward examples/baseline_reward.json \
+  --track-dir tracks/train \
+  --config config/simulation.json \
+  --output-dir artifacts/runs/first-check \
+  --steps 256 --budget-steps 10000 \
+  --n-envs 2 --rollout-length 32 --seed 17
+```
+
+For the reference-only best-selection and warm-start controls, read
+[`docs/participant_guide.md`](docs/participant_guide.md). A selected `best/`
+artifact is not automatically the dashboard's latest artifact; check which
+directory you export.
+
+## 14. Final checks before calling a model ready
+
+Run the project checks from the repository root:
+
+```bash
+make test
 node --test tests/*.test.cjs
+node --check renderer/app.js
+node --check renderer/live_source.js
+make render
+git diff --check
 ```
 
-The default checks do not install a browser. The JS checks use a DOM/canvas
-test double; Pygame uses dummy SDL. An **optional real Chromium smoke** exercises
-custom rays/weights, a tiny reference training run, browser replay, and
-390/800/1440px layouts, saving screenshots under `artifacts/ui-polish/`:
+For a map/contract check:
 
 ```bash
-.venv/bin/python -m pip install -r requirements-ui-qa.lock
-PLAYWRIGHT_BROWSERS_PATH=.venv/qa-browsers \
-  .venv/bin/python -m playwright install chromium --only-shell
-PLAYWRIGHT_BROWSERS_PATH=.venv/qa-browsers \
-  .venv/bin/python tools/check_ui_browser.py
+.venv/bin/python tools/build_training_manifest.py
+.venv/bin/python -m py_compile racing_event/*.py tools/*.py
 ```
 
-This optional check needs Chromium's Linux system libraries and fonts. The
-`ui-qa` Docker target installs them reproducibly without changing the default
-participant image:
+For a practical participant check, do all of these:
+
+- train a tiny run;
+- replay it on Monaco;
+- replay or evaluate it on Spa;
+- export ONNX;
+- package it into a new directory;
+- run a short two-entrant heat; and
+- inspect `live-race.json` for inference failures and deadline misses.
+
+The renderer check is successful when Python creates a valid replay and Pygame
+or the browser displays it. A renderer does not prove that the model is good;
+the replay and evaluator result are the evidence.
+
+## 15. Troubleshooting
+
+### “participant trainer does not exist”
+
+You supplied the wrong path. Run:
 
 ```bash
-docker build --target ui-qa -t synapse-ui-qa .
-docker run --rm synapse-ui-qa
+find participant_code -type f -name '*.py' -print
 ```
 
-It downloads QA tools at setup/build time, not during `make test`. Real-display
-Pygame interaction is still a separate manual check.
+Then use the printed path after `--trainer`, for example
+`--trainer participant_code/train.py`. Run from the repository root.
 
-To generate and serve a preview using the existing Python container:
+### “track_dir is not a directory” or “contains no JSON tracks”
+
+Pass a folder, not a single file:
 
 ```bash
-docker build -t racing-event .
-mkdir -p artifacts/replay
-docker run --rm -v "$PWD/artifacts/replay:/preview" racing-event \
-  python tools/export_replay.py --scripted --output /preview/run.json
-docker run --rm -v "$PWD/artifacts/replay:/preview" racing-event \
-  python tools/build_replay.py /preview/run.json --output /preview/index.html
-docker run --rm -p 127.0.0.1:8765:8765 \
-  -v "$PWD/artifacts/replay:/preview:ro" racing-event \
-  python -m http.server 8765 --bind 0.0.0.0 --directory /preview
+--track-dir tracks/train
 ```
 
-This is a local preview deployment, not a public upload or tournament service.
-Random-respawn findings and the questions deferred for later discussion are in
-`research_notes/Track sourcing and racing physics/racing_rl_controls.md`.
+For one map, create a folder and copy the JSON map into it as shown in
+section 4.2.
+
+### “saved run_config.json is required”
+
+The dashboard needs the exact saved sensor/config file to replay a run. Train
+through the dashboard, or create a run directory first and pass that exact file
+as `--config`:
+
+```bash
+mkdir -p artifacts/runs/cli-run
+cp config/simulation.json artifacts/runs/cli-run/run_config.json
+```
+
+Then use `--config artifacts/runs/cli-run/run_config.json` during training.
+Keep the file in the run directory for replay and packaging.
+
+### “config mismatch” or a ray-order error
+
+You changed the config or ray list while reusing a run. Start a new output
+directory. A model trained with a different observation size must not be fed
+the old contract.
+
+### “live package output must be a new directory”
+
+Choose a new package name. For example, change
+`team-a-monaco` to `team-a-monaco-v2`. This avoids silently overwriting a
+package whose hashes have already been recorded.
+
+### The replay says `dnf_crash`, `dnf_stuck`, or `dnf_timeout`
+
+That is a real Python result, not necessarily a tool failure. Open the replay,
+check the first event, and tune one thing at a time. A tiny 256-step smoke run
+may end in a DNF simply because it is too short to finish a lap.
+
+### The live result says `dnf_inference`
+
+Check the entrant's `deadline_misses` and `inference_failures` in
+`live-race.json`. Confirm that `model.onnx` is valid, that its input is
+`[1, N]`, that its output is `[1, 2]`, and that all actions are finite and in
+`[-1, 1]`. Use `trusted_live` only to diagnose a local display; use
+`strict_scored` for the meaningful test.
+
+### The Pygame window does not appear
+
+Pygame opens on the machine running Python. On a headless machine, use the
+browser replay or a one-frame check:
+
+```bash
+SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy \
+  .venv/bin/python tools/run_pygame.py \
+  --replay artifacts/replay/first-check-monaco.json --headless
+```
+
+### A port is already in use
+
+Use another unused port for the dashboard, renderer, or live runner. Passing
+`--port 0` to the live runner asks the operating system to choose a free live
+WebSocket port; copy the printed address into the renderer URL.
+
+## 16. What is authoritative and what is provisional
+
+Python owns physics, observations, actions, termination, timing, live
+deadlines, and results. Pygame and the browser are read-only presentation
+layers. Participants own their model, optimizer, preprocessing, training
+algorithm, and reward implementation.
+
+This checkout contains a working engineering profile. Event-wide budget rules,
+held-out maps, final ranking, final dates, and the organizer's production
+isolation image still require release decisions. The ONNX runtime profile and
+isolation boundaries are documented in
+[`docs/submission_runtime.md`](docs/submission_runtime.md); read that document
+before treating a local preview as an event submission.
+
+## 17. Useful reference documents
+
+- [`docs/participant_guide.md`](docs/participant_guide.md) — exact reference
+  resume, warm-start, selection, replay, and dashboard details.
+- [`docs/state_schema.md`](docs/state_schema.md) — observation/action fields,
+  bounds, artifacts, and normalization.
+- [`docs/submission_runtime.md`](docs/submission_runtime.md) — ONNX graph
+  profile, package contents, trusted preview, and isolated evaluation.
+- [`docs/replay_contract.md`](docs/replay_contract.md) — replay validation and
+  renderer boundary.
+- [`docs/track_sources.md`](docs/track_sources.md) — Monaco/Spa provenance and
+  deterministic map transformation.
+
+When in doubt, first run the smallest command that exercises the part you are
+changing. A 256-step training run, one replay, and a short live heat usually
+find a path or contract error before a long experiment spends time.

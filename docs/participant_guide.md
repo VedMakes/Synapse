@@ -133,7 +133,7 @@ A new local ledger is not permission to reset a future cumulative event budget.
 `--warm-start` enables bounded fine-tuning/selection even without `--fine-tune`.
 A new `--fine-tune` run requires a warm start. For example, if this checkout has
 the retained local `artifacts/pygame-imitation` artifact, this small experiment
-uses all three current public development tracks. That retained artifact is a
+uses both current public development tracks. That retained artifact is a
 local fixture, not a promised participant-release download. Choose a new output
 path for each new experiment:
 

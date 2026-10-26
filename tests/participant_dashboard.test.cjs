@@ -249,14 +249,14 @@ test("live package exports and assigns the validated submission to the selected 
     submission_dir: "/workspace/artifacts/live-packages/ui-test/submission",
     manifest_path: "/workspace/artifacts/live-packages/ui-test/package_manifest.json",
     config_path: "/workspace/artifacts/live-packages/ui-test/config/simulation.json",
-    track_path: "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json",
-    track_id: "synthetic_oval", participant_id: "racer-beta", source_kind: "numpy_artifact",
+    track_path: "/workspace/artifacts/live-packages/ui-test/tracks/monaco.json",
+    track_id: "monaco", participant_id: "racer-beta", source_kind: "numpy_artifact",
   });
   await first; await flush();
   assert.match(h.el("package-result").textContent, /ONNX live package ready/);
   assert.equal(h.el("artifact-b").value, "/workspace/artifacts/live-packages/ui-test/submission");
   assert.equal(h.el("participant-b").value, "racer-beta");
-  assert.equal(h.el("race-track").value, "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json");
+  assert.equal(h.el("race-track").value, "/workspace/artifacts/live-packages/ui-test/tracks/monaco.json");
   assert.equal(h.el("race-config").value, "/workspace/artifacts/live-packages/ui-test/config/simulation.json");
   assert.equal(h.el("package").attrs["aria-busy"], "false");
 });
