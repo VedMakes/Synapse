@@ -1,4 +1,4 @@
-"""Focused contract tests for the original synthetic track fixtures."""
+"""Focused contract tests for the public training track fixtures."""
 
 from __future__ import annotations
 
@@ -33,14 +33,22 @@ class TrackGeometryTests(unittest.TestCase):
         return path
 
     def test_fixture_round_trip_and_hashes(self) -> None:
-        self.assertEqual(len(FIXTURES), 3)
+        self.assertEqual(len(FIXTURES), 5)
+        self.assertEqual(
+            {path.stem for path in FIXTURES},
+            {"monaco", "spa", "synthetic_flowing", "synthetic_oval", "synthetic_tight_loop"},
+        )
         for path in FIXTURES:
             track = TrackGeometry.from_file(path)
             self.assertEqual(track.content_hash, track.meta["content_hash"])
             self.assertEqual(track.meta["geometry_version"], "1.0")
             self.assertEqual(track.centerline.shape, (512, 2))
             self.assertAlmostEqual(track.half_width_left[0] + track.half_width_right[0], 10.0)
-            self.assertEqual(track.meta["source_note"], "Original synthetic development fixture; no real-track or held-out geometry.")
+            if path.stem.startswith("synthetic_"):
+                self.assertEqual(track.meta["source_note"], "Original synthetic development fixture; no real-track or held-out geometry.")
+            else:
+                self.assertEqual(track.meta["source_license"], "MIT")
+                self.assertAlmostEqual(track.meta["reference_length_m"], track.length)
 
             point, heading, _ = track.point_at_s(track.length + 1.25)
             projection = track.project(point)

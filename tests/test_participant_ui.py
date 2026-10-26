@@ -259,10 +259,13 @@ class ParticipantUiTests(unittest.TestCase):
             after = {name: (output_dir / name).read_bytes() for name in before}
         self.assertEqual(after, before)
 
-    def test_public_map_selector_has_three_development_maps(self) -> None:
+    def test_public_map_selector_has_five_development_maps(self) -> None:
         maps = public_maps()
-        self.assertEqual(len(maps), 3)
-        self.assertEqual({item["id"] for item in maps}, {"synthetic_oval", "synthetic_flowing", "synthetic_tight_loop"})
+        self.assertEqual(len(maps), 5)
+        self.assertEqual(
+            {item["id"] for item in maps},
+            {"monaco", "spa", "synthetic_oval", "synthetic_flowing", "synthetic_tight_loop"},
+        )
 
     def test_numeric_inputs_reject_fractional_boolean_and_infinite_values(self) -> None:
         for value in (1.5, True, float("nan"), float("inf"), "not-a-number"):

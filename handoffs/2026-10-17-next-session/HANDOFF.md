@@ -597,3 +597,47 @@ and test files plus this handoff, leave `.gitignore` untouched, create a
 conventional feature commit, and report the commit hash. Do not claim Docker,
 browser display, or separate per-model runtime RSS verification beyond the
 evidence above.
+
+## 2026-10-26 continuation: Monaco, Spa, and live-heat smoke
+
+### Implemented
+
+- Added `tracks/train/monaco.json` and `tracks/train/spa.json` as public
+  development maps. Their centerlines derive from the MIT-licensed
+  `bacinger/f1-circuits` GeoJSON references, are projected/resampled/scaled to
+  3,337 m and 7,004 m, and receive SYNAPSE-owned 10 m road, 5 m runoff, and
+  barrier geometry.
+- Added `tools/build_reference_tracks.py` for deterministic regeneration and
+  `docs/track_sources.md` for source, license, dimensions, and transformation
+  notes.
+- Refreshed `tracks/train_manifest.json`, the participant map count/docs, and
+  map/manifest tests. `tools/build_training_manifest.py` now works when run
+  directly from the repository root.
+
+### Checks
+
+- Focused map/manifest/UI tests: **50 passed**.
+- Full Python suite: **258 passed, 1 Docker integration skipped** via `make test`.
+- Frontend suite: **75 passed** via `node --test tests/*.test.cjs`.
+- `make render`, JSON parsing, Python compilation, and `git diff --check`:
+  **passed**.
+- Scripted Monaco and Spa exports rendered headlessly for 120 ticks without
+  crashes or off-track steps.
+- Real ONNX live CLI smoke ran two entrants on each new map for 12 ticks with
+  30/30 Hz, zero inference failures, and zero deadline misses. A real loopback
+  WebSocket smoke received Monaco hello, ticks 0–4, and end in order.
+
+### Renderer branch status
+
+- Local `origin/feat/renderer` is commit `86fe080`, already an ancestor of
+  `origin/master` through merge commit `c2c05ed`; `git merge-tree` reports no
+  conflicts in the available refs.
+- The GitHub CLI is not installed and the repository API is not accessible from
+  this session, so remote PR status/push was not verified. Confirm the PR URL or
+  provide authenticated GitHub CLI access before changing the remote branch.
+
+### Next exact action
+
+Review the generated map previews on a display, then commit the map/source/docs
+slice. Keep final held-out tracks private and do not claim event-grade live
+scoring, Docker isolation, or p99.9 latency from these smoke runs.

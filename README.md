@@ -5,7 +5,7 @@ This repository contains the first Python-only vertical slice for the SYNAPSE te
 The current slice provides:
 
 - A deterministic, track-relative racing environment.
-- A validated geometry-file format and three original synthetic development tracks.
+- A validated geometry-file format with five public training tracks: three original synthetic fixtures plus Monaco and Spa reference layouts.
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
 - A participant-owned reward boundary over published raw transition signals.
 - A persistent `n` runs by `k` steps-per-run budget.
@@ -31,7 +31,7 @@ project target.
 
 These are provisional implementation decisions based on the handoff and the latest project answers:
 
-- Three training tracks are the intended first event target. Three synthetic development tracks are present; E2 currently uses the oval only, not a frozen event training set.
+- Five public training tracks are present: three synthetic development fixtures plus Monaco and Spa reference layouts. E2 currently uses the oval only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
 - Evaluation submissions will use ONNX. A bounded static-vector profile and
   model-only Docker worker are implemented as release candidates; actual Docker

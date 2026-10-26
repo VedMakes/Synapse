@@ -980,7 +980,7 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
           <div class="contract-item"><strong>UI reward function</strong><span>All nine published signals are editable as static weights; the generated file is saved with the run.</span></div>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
-          <div class="contract-item"><strong>SYNAPSE public maps: 3</strong><span>Original synthetic development maps. Final event maps are not here.</span></div>
+          <div class="contract-item"><strong>SYNAPSE public maps: 5</strong><span>Three synthetic development maps plus Monaco and Spa reference layouts. Final event maps are not here.</span></div>
           <div class="watch">
             <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option></select>
             <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="participant_run/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
