@@ -1073,7 +1073,7 @@ PAGE = r'''<!doctype html>
          </div>
        </section>
        <section class="panel">
-         <div class="panel-head"><h2>04 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
+         <div class="panel-head"><h2>05 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
