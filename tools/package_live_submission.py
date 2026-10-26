@@ -286,17 +286,23 @@ def main() -> None:
     parser.add_argument("--track", type=Path, default=DEFAULT_TRACK)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--participant-id", default="participant-model")
-    parser.add_argument(
+    package_mode = parser.add_mutually_exclusive_group()
+    package_mode.add_argument(
         "--model-only",
         action="store_true",
-        help="build an ONNX submission package without a track or replay",
+        help="explicitly build an ONNX submission package without a track or replay (the default)",
+    )
+    package_mode.add_argument(
+        "--include-track",
+        action="store_true",
+        help="explicitly build the legacy local smoke bundle with a selected track",
     )
     args = parser.parse_args()
     try:
-        if args.model_only:
-            print(package_onnx_submission(args.source, args.output, config=args.config, participant_id=args.participant_id))
-        else:
+        if args.include_track:
             print(package_live_submission(args.source, args.output, track=args.track, config=args.config, participant_id=args.participant_id))
+        else:
+            print(package_onnx_submission(args.source, args.output, config=args.config, participant_id=args.participant_id))
     except (OSError, ValueError, ImportError) as exc:
         parser.exit(2, f"Live package failed: {exc}\n")
 
