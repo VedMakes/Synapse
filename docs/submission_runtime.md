@@ -42,26 +42,28 @@ float32 conversion is preserved. Source artifacts are unchanged. Participants
 may instead export their own supported architecture directly; the converter is
 not a requirement or an architecture prescription.
 
-## Build a live-race package
+## Build a model-only ONNX submission package
 
-The participant dashboard's **Build ONNX live package** button performs the
-export and assembles a new directory containing the validated `submission/`,
-matching `config/simulation.json`, the selected public track, bounded run
-provenance, `package_manifest.json` hashes, and a README with the live command.
-The same operation is available without the dashboard:
+The participant dashboard's **Build ONNX submission** button performs the export
+and assembles a new directory containing the validated `submission/`, matching
+`config/simulation.json`, bounded run provenance, `package_manifest.json`
+hashes, and a README. It deliberately contains no track and no replay. The
+live runner supplies the event or local-test track/config separately, and the
+ONNX model produces fresh actions during the heat. The same operation is
+available without the dashboard:
 
 ```bash
 .venv/bin/python tools/package_live_submission.py \
+  --model-only \
   --source participant_run \
-  --output artifacts/live-packages/my-model \
-  --track tracks/train/monaco.json \
+  --output artifacts/onnx-packages/my-model \
   --participant-id team-a
 ```
 
-The output directory must be new. The generated command is intended to run from
-the repository root and uses the package's copied model, config, and track.
-The package does not copy participant training code, Torch checkpoints, or
-reward callbacks into the live submission.
+The output directory must be new. The package does not copy participant
+training code, Torch checkpoints, reward callbacks, tracks, or replay files
+into the model submission. Use the package's `submission/` directory as the
+entrant path when starting a live runner.
 
 ## ONNX profile v1
 

@@ -234,29 +234,26 @@ test("live heat starts as a single-flight race action and renders telemetry/reso
   assert.equal(h.el("race-start").disabled, false);
 });
 
-test("live package exports and assigns the validated submission to the selected racer", async () => {
+test("ONNX package exports only the model submission and leaves live inputs to the heat", async () => {
   const h = await dashboard();
   await h.input("package-output", "artifacts/live-packages/ui-test");
-  await h.input("package-entrant", "b");
   const first = h.click("package");
   assert.equal(h.el("package").attrs["aria-busy"], "true");
   const calls = h.calls.filter(call => call.url === "/api/package");
   assert.equal(calls.length, 1);
   const payload = JSON.parse(calls[0].options.body);
-  assert.equal(payload.package_track, "tracks/train/monaco.json");
+  assert.equal(payload.package_track, undefined);
   h.resolve("/api/package", {
     package_dir: "/workspace/artifacts/live-packages/ui-test",
     submission_dir: "/workspace/artifacts/live-packages/ui-test/submission",
     manifest_path: "/workspace/artifacts/live-packages/ui-test/package_manifest.json",
     config_path: "/workspace/artifacts/live-packages/ui-test/config/simulation.json",
-    track_path: "/workspace/artifacts/live-packages/ui-test/tracks/monaco.json",
-    track_id: "monaco", participant_id: "racer-beta", source_kind: "numpy_artifact",
+    participant_id: "submission-alpha", source_kind: "numpy_artifact",
   });
   await first; await flush();
-  assert.match(h.el("package-result").textContent, /ONNX live package ready/);
-  assert.equal(h.el("artifact-b").value, "/workspace/artifacts/live-packages/ui-test/submission");
-  assert.equal(h.el("participant-b").value, "racer-beta");
-  assert.equal(h.el("race-track").value, "/workspace/artifacts/live-packages/ui-test/tracks/monaco.json");
-  assert.equal(h.el("race-config").value, "/workspace/artifacts/live-packages/ui-test/config/simulation.json");
+  assert.match(h.el("package-result").textContent, /ONNX submission package ready/);
+  assert.equal(h.el("artifact-a").value, "artifacts/onnx-imitation");
+  assert.equal(h.el("race-track").value, "tracks/train/monaco.json");
+  assert.equal(h.el("race-config").value, "config/simulation.json");
   assert.equal(h.el("package").attrs["aria-busy"], "false");
 });

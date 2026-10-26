@@ -39,7 +39,7 @@ from racing_event.observation import TrainingContract
 from racing_event.reward import RewardConfig
 from racing_event.trajectory import MAX_REPLAY_BYTES, load_replay
 from tools.build_replay import build as build_browser_replay
-from tools.package_live_submission import package_live_submission
+from tools.package_live_submission import package_live_submission, package_onnx_submission
 from tools.train_participant import validate_public_training_tracks
 
 
@@ -529,6 +529,34 @@ def build_live_package(form: dict[str, object]) -> dict[str, object]:
         "config_path": str(package / "config" / "simulation.json"),
         "track_path": str(package / str(package_data["track_path"])),
         "track_id": package_data["track_id"],
+        "participant_id": participant_id,
+        "source_kind": package_data["source_kind"],
+    }
+
+
+def build_onnx_package(form: dict[str, object]) -> dict[str, object]:
+    """Build the model-only package used by local or organizer live runners."""
+    def text(name: str, default: str = "") -> str:
+        value = form.get(name, default)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value.strip()
+
+    source = _workspace_path(text("package_source", "participant_run"), label="package source")
+    output = _workspace_path(text("package_output", "artifacts/onnx-packages/participant-run"), label="package output")
+    participant_id = text("package_participant", "participant-model")
+    if not source.is_dir():
+        raise ValueError(f"package source does not exist: {source}")
+    if output.exists():
+        raise ValueError("package output already exists; choose a new directory")
+    package = package_onnx_submission(source, output, participant_id=participant_id)
+    manifest = package / "package_manifest.json"
+    package_data = json.loads(manifest.read_text(encoding="utf-8"))
+    return {
+        "package_dir": str(package),
+        "submission_dir": str(package / "submission"),
+        "manifest_path": str(manifest),
+        "config_path": str(package / str(package_data["config_path"])),
         "participant_id": participant_id,
         "source_kind": package_data["source_kind"],
     }
@@ -1039,25 +1067,24 @@ PAGE = r'''<!doctype html>
            <div id="client-budget-callout" class="callout">12 new training allocations are available; each allocation allows at most 10,000 transitions. Resuming the same output directory does not use another allocation.</div>
         </div>
       </aside>
-        <section class="panel race-panel">
-          <div class="panel-head"><h2>03 · Package for live race</h2><span id="package-state-chip" class="status-chip">ready</span></div>
+         <section class="panel race-panel">
+           <div class="panel-head"><h2>03 · Build ONNX submission</h2><span id="package-state-chip" class="status-chip">ready</span></div>
+           <div class="section">
+             <p class="subcopy">Build a model-only ONNX bundle. It contains the validated model, matching contract/config snapshot, hashes, and provenance. It contains no track and no replay: the live runner supplies the event or local-test map, and the model produces fresh inferences during the heat.</p>
+             <div class="form-grid">
+               <label>Trained run / model source<input id="package-source" value="participant_run" spellcheck="false"></label>
+               <label>New package directory<input id="package-output" value="artifacts/onnx-packages/participant-run" spellcheck="false"></label>
+               <label>Package participant ID<input id="package-participant" value="racer-alpha" spellcheck="false"></label>
+             </div>
+             <div class="actions"><button id="package" data-api-endpoint="/api/package" class="primary">Build ONNX submission package</button></div>
+             <p id="package-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
+             <div id="package-result" class="watch-result" role="status" aria-live="polite">No ONNX submission package built yet. The package output must be a new directory; package_manifest.json will record its hashes.</div>
+           </div>
+         </section>
+         <section class="panel race-panel">
+           <div class="panel-head"><h2>04 · Local live heat / inference test</h2><span id="race-state-chip" class="status-chip">idle</span></div>
           <div class="section">
-            <p class="subcopy">After training, build one clean ONNX bundle. It includes the validated model, matching config, selected public circuit, hashes, and a copy-ready live command.</p>
-            <div class="form-grid">
-              <label>Trained run / model source<input id="package-source" value="participant_run" spellcheck="false"></label>
-              <label>New package directory<input id="package-output" value="artifacts/live-packages/participant-run" spellcheck="false"></label>
-              <label>Live circuit<select id="package-track"></select></label>
-              <label>Package participant ID<input id="package-participant" value="racer-alpha" spellcheck="false"></label>
-              <label>Assign package to<select id="package-entrant"><option value="a">Racer Alpha</option><option value="b">Racer Beta</option></select></label>
-            </div>
-            <div class="actions"><button id="package" data-api-endpoint="/api/package" class="primary">Build ONNX live package</button></div>
-            <p id="package-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
-            <div id="package-result" class="watch-result" role="status" aria-live="polite">No live package built yet. The package output must be a new directory; package_manifest.json will record its hashes.</div>
-          </div>
-        </section>
-        <section class="panel race-panel">
-          <div class="panel-head"><h2>04 · Grid control / live heat</h2><span id="race-state-chip" class="status-chip">idle</span></div>
-         <div class="section">
+            <p class="subcopy">This is the actual live-inference test. Choose a local test track/config here, point each slot at a model-only <code>submission/</code> directory from section 03, and Python requests fresh ONNX actions on every tick. Competition runners supply their own event maps.</p>
            <div class="form-grid">
              <label>Racer Alpha ID<input id="participant-a" value="racer-alpha" spellcheck="false"></label>
              <label>Racer Beta ID<input id="participant-b" value="racer-beta" spellcheck="false"></label>
@@ -1098,7 +1125,7 @@ PAGE = r'''<!doctype html>
      const $ = id => document.getElementById(id);
      const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
         const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
-        const packageFields = ["package-source", "package-output", "package-track", "package-participant", "package-entrant"];
+       const packageFields = ["package-source", "package-output", "package-participant"];
        const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
@@ -1192,13 +1219,8 @@ PAGE = r'''<!doctype html>
        }
        function renderPackage(result) {
          const target = $("package-result");
-         target.textContent = `ONNX live package ready · ${result.source_kind} · ${result.track_id} · package: ${result.package_dir} · submission: ${result.submission_dir} · manifest: ${result.manifest_path}`;
-         $("package-state-chip").textContent = "ready";
-         const entrant = $("package-entrant").value === "b" ? "b" : "a";
-         $(entrant === "a" ? "artifact-a" : "artifact-b").value = result.submission_dir;
-         $(entrant === "a" ? "participant-a" : "participant-b").value = result.participant_id;
-         $("race-track").value = result.track_path;
-         $("race-config").value = result.config_path;
+          target.textContent = `ONNX submission package ready · ${result.source_kind} · package: ${result.package_dir} · submission: ${result.submission_dir} · manifest: ${result.manifest_path}. No track or replay was included; choose the live-test/event track in section 04 or the organizer runner.`;
+          $("package-state-chip").textContent = "ready";
        }
        function render(data) {
         latestStatus = data;
@@ -1253,7 +1275,7 @@ PAGE = r'''<!doctype html>
         $("watch").setAttribute("aria-busy", String(pending === "watch"));
        }
        function packageValidation() {
-         for (const id of ["package-source", "package-output", "package-track", "package-participant"]) if (!$(id) || !String($(id).value || "").trim()) return `${id} is required.`;
+          for (const id of ["package-source", "package-output", "package-participant"]) if (!$(id) || !String($(id).value || "").trim()) return `${id} is required.`;
          return "";
        }
        function raceValidation() {
@@ -1266,7 +1288,7 @@ PAGE = r'''<!doctype html>
       }
      async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
      async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
-      async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"), packageSelect = $("package-track"); select.replaceChildren(); packageSelect.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); const packageOption = document.createElement("option"); packageOption.value = map.path; packageOption.textContent = map.display_name; packageSelect.appendChild(packageOption); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
+       async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
      function renderWatch(result) {
        lastWatch = result;
        const target = $("watch-result");
@@ -1296,7 +1318,7 @@ PAGE = r'''<!doctype html>
       $("start").addEventListener("click", () => action("start", formData()));
        $("stop").addEventListener("click", () => action("stop"));
        $("setup").addEventListener("click", () => action("setup"));
-       $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_output: $("package-output").value, package_track: $("package-track").value, package_participant: $("package-participant").value }));
+        $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_output: $("package-output").value, package_participant: $("package-participant").value }));
        $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
       $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
@@ -1449,7 +1471,7 @@ class Handler(BaseHTTPRequestHandler):
                     raise RuntimeError("stop training before building a live package")
                 if RACE_PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop the live heat before building a live package")
-                result = build_live_package(form)
+                result = build_onnx_package(form)
             elif path == "/api/race/start":
                 if PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop training before starting a live heat")

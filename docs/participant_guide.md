@@ -256,11 +256,13 @@ run. After training, use the watch panel:
 4. Click **Build / watch replay**. Use **Open browser fallback** to play in this
    browser or **Download replay JSON** to keep the validated recording.
 
-After training, use **Build ONNX live package** in the package panel. Select the
-run/model source, a new output directory, a public circuit, and the racer slot.
-The UI exports the validated ONNX files, copies the matching config and track,
-writes `package_manifest.json` hashes, and fills the selected live-heat model,
-track, and config fields for you.
+After training, use **Build ONNX submission** in the package panel. Select the
+run/model source, a new output directory, and a submission ID. The UI exports
+the validated ONNX files, copies the matching config snapshot, writes
+`package_manifest.json` hashes, and does not copy a track or replay. In **04 ·
+Local live heat / inference test**, select a local test track/config and point a
+race slot at the package's `submission/` directory. Competition runners supply
+competition-time maps separately.
 
 “Latest saved” is not a claim of best-checkpoint selection. The UI's last 32
 replay links live for the current server session; saved files remain under the

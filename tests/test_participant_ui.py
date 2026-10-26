@@ -29,6 +29,7 @@ from tools.participant_ui import (
     ROOT,
     TrainingProcess,
     build_live_package,
+    build_onnx_package,
     build_live_race_command,
     build_training_command,
     parse_live_telemetry_line,
@@ -126,7 +127,7 @@ class ParticipantUiTests(unittest.TestCase):
             "Start live heat",
             "Shared race process",
             "model-file sizes",
-            "Build ONNX live package",
+            "Build ONNX submission package",
             "package_manifest.json",
             "/api/package",
             "Training maps (all public)",
@@ -199,6 +200,29 @@ class ParticipantUiTests(unittest.TestCase):
                     "package_output": str(output),
                     "package_track": "tracks/train/monaco.json",
                 })
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("onnx") and importlib.util.find_spec("onnxruntime"),
+        "optional ONNX packaging checks require requirements-evaluator.lock",
+    )
+    def test_model_only_package_contains_no_track_or_replay(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            shutil.copy(ROOT / "config" / "simulation.json", source / "run_config.json")
+            write_artifact(source / "artifact")
+            output = Path(directory) / "submission-package"
+            result = build_onnx_package({
+                "package_source": str(source),
+                "package_output": str(output),
+                "package_participant": "submission-alpha",
+            })
+            self.assertTrue(Path(result["submission_dir"]).joinpath("model.onnx").is_file())
+            self.assertFalse((output / "tracks").exists())
+            self.assertFalse((output / "replays").exists())
+            manifest = json.loads((output / "package_manifest.json").read_text())
+            self.assertEqual(manifest["kind"], "synapse_onnx_submission_package")
+            self.assertNotIn("track_id", manifest)
 
     def test_process_resource_snapshot_reports_a_process_tree(self) -> None:
         snapshot = ui._process_resource_snapshot(os.getpid())

@@ -24,8 +24,8 @@ You will complete this sequence:
 5. Open a replay and look at what the car actually did.
 6. Change one parameter at a time and repeat.
 7. Export the best saved model to the validated ONNX format.
-8. Put the ONNX model, matching configuration, and map into a live package.
-9. Run two packages against each other in a Python-authoritative live heat.
+8. Build a model-only ONNX submission package.
+9. Run two submissions against each other in a Python-authoritative live heat.
 
 The local public maps are:
 
@@ -44,7 +44,7 @@ manifest is `tracks/train_manifest.json`.
 | **Trainer script** | Your Python program. It creates the model, collects experience, updates weights, and saves the result. | `examples/participant_train.py` |
 | **Run directory** | A folder containing one training attempt and its saved weights/metadata. | `artifacts/participant/manual-monaco` |
 | **Artifact** | A model saved in a format that the local evaluator can read. | `policy.pt` + `policy.json` + `training_contract.json` |
-| **Live package** | A new folder containing `model.onnx`, its contract, one public map, matching config, hashes, and a live command. | `artifacts/live-packages/team-a-monaco` |
+| **ONNX submission package** | A new folder containing `model.onnx`, its contract, matching config snapshot, hashes, and provenance. It contains no track or replay. | `artifacts/onnx-packages/team-a` |
 
 The word **model script** can be confusing. In this manual, the script is the
 program that **trains** the model. The trained weights are saved later in the
@@ -782,15 +782,16 @@ The current profile expects one float32 input named `observations` with shape
 is `tanh`, and the allowed graph operators and limits are listed in
 [`docs/submission_runtime.md`](docs/submission_runtime.md).
 
-## 11. Build a self-contained live package
+## 11. Build an ONNX submission package
 
-Use a **new** output directory every time. This example packages Monaco:
+Use a **new** output directory every time. This creates the model package that
+the live runner consumes. It does not select or copy a circuit:
 
 ```bash
 .venv/bin/python tools/package_live_submission.py \
+  --model-only \
   --source artifacts/runs/first-check \
-  --output artifacts/live-packages/team-a-monaco \
-  --track tracks/train/monaco.json \
+  --output artifacts/onnx-packages/team-a \
   --participant-id team-a
 ```
 
@@ -800,11 +801,10 @@ pass the directory that contains its three exact artifact files instead.
 The package looks like this:
 
 ```text
-artifacts/live-packages/team-a-monaco/
+artifacts/onnx-packages/team-a/
   README.md
   package_manifest.json       # hashes and provenance
   config/simulation.json       # matching saved config
-  tracks/monaco.json           # selected public map
   submission/
     manifest.json
     training_contract.json
@@ -817,21 +817,27 @@ artifacts/live-packages/team-a-monaco/
 ```
 
 The package builder checks the model contract against the copied config and
-records SHA-256 hashes. It does not copy your training Python, Torch checkpoint,
-or reward callback into the live submission.
+records SHA-256 hashes. It does not copy a track, replay, training Python, Torch
+checkpoint, or reward callback into the model submission. During a live heat,
+the runner receives the event/local-test map and config separately and invokes
+the ONNX model for fresh actions on every tick.
 
 ![Annotated package flow: saved run to ONNX package to Python live heat](docs/assets/package-live.svg)
 
 The dashboard can perform the same operation:
 
-1. Open **Package for live race**.
+1. Open **Build ONNX submission**.
 2. Select the trained run or model source.
 3. Enter a new package output directory.
-4. Choose `Monaco` or `Spa`.
-5. Enter a simple racer ID such as `team-a`.
-6. Click **Build ONNX live package**.
-7. Confirm that the result shows a `submission/` directory and a
+4. Enter a simple submission ID such as `team-a`.
+5. Click **Build ONNX submission package**.
+6. Confirm that the result shows a `submission/` directory and a
    `package_manifest.json`.
+
+The dashboard does not choose a map for the submission or place it into a race
+slot. In **04 · Local live heat / inference test**, enter the local test track,
+config, and the package's `submission/` directory. An organizer live runner
+will provide competition-time maps separately.
 
 ## 12. Run two models against each other
 
@@ -851,8 +857,8 @@ Run two packages for a short local heat:
 
 ```bash
 .venv/bin/python tools/run_live_onnx.py \
-  --entrant team-a artifacts/live-packages/team-a-monaco/submission \
-  --entrant team-b artifacts/live-packages/team-b-monaco/submission \
+  --entrant team-a artifacts/onnx-packages/team-a/submission \
+  --entrant team-b artifacts/onnx-packages/team-b/submission \
   --track tracks/train/monaco.json \
   --config config/simulation.json \
   --output-dir artifacts/live-results/monaco-team-a-team-b \

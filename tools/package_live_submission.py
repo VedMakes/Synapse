@@ -1,10 +1,11 @@
-"""Create a self-contained participant package for a local live heat.
+"""Create participant ONNX submission packages and optional local bundles.
 
-The package contains the validated ONNX submission, the exact saved config used
-by the run, one selected public track, bounded provenance snapshots, and a
-manifest with hashes plus a ready-to-copy live runner command. It never copies
-participant Python, Torch checkpoints, or reward callbacks into the live
-submission directory.
+The model-only submission package contains the validated ONNX submission, the
+matching saved config, bounded provenance, and a manifest with hashes. It never
+copies tracks, replays, participant Python, Torch checkpoints, or reward
+callbacks into the model submission directory. ``package_live_submission`` is
+retained as a lower-level local convenience for callers that explicitly want a
+track bundled for a local smoke command.
 """
 
 from __future__ import annotations
@@ -194,6 +195,90 @@ def package_live_submission(
     return output_path
 
 
+def package_onnx_submission(
+    source: str | Path,
+    output: str | Path,
+    *,
+    config: str | Path | None = None,
+    participant_id: str = "participant-model",
+) -> Path:
+    """Build a model-only ONNX submission package.
+
+    This package deliberately contains no track and no replay. A local or
+    organizer live runner supplies the track and runtime configuration when it
+    starts the heat; the ONNX model produces fresh actions during the run.
+    """
+
+    source_path = Path(source).resolve()
+    output_path = Path(output).resolve()
+    config_path_arg = None if config is None else Path(config).resolve()
+    if output_path.exists() or output_path.is_symlink():
+        raise ValueError("ONNX submission output must be a new directory")
+    if output_path == source_path or source_path in output_path.parents:
+        raise ValueError("ONNX submission output cannot be inside the model source")
+    if not participant_id or any(character in participant_id for character in "/\\\x00"):
+        raise ValueError("participant_id must be a simple non-empty label")
+
+    artifact_source, source_kind, source_run_dir = _source_kind(source_path)
+    config_path = _read_config(source_run_dir, config_path_arg)
+    config_value = SimulationConfig.from_file(config_path)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.", dir=output_path.parent))
+    try:
+        submission = temporary / "submission"
+        export(artifact_source, submission, reference=source_kind == "reference")
+        onnx_artifact = load_onnx_artifact(submission)
+        contract, _ = TrainingContract.load(submission / "training_contract.json")
+        expected_config_hash = TrainingContract.config_hash_for(config_value)
+        if contract.config_hash != expected_config_hash:
+            raise ValueError(
+                "saved submission config does not match the model contract; use the run's run_config.json"
+            )
+
+        _copy_regular(config_path, temporary / "config" / "simulation.json")
+        provenance: list[str] = []
+        for name in _PROVENANCE_FILES:
+            candidate = source_run_dir / name
+            if candidate.is_file() and not candidate.is_symlink():
+                _copy_regular(candidate, temporary / "provenance" / name, max_bytes=_MAX_PROVENANCE_BYTES)
+                provenance.append(f"provenance/{name}")
+
+        readme = (
+            "# SYNAPSE ONNX submission package\n\n"
+            f"Participant: `{participant_id}`\n\n"
+            "This is a model-only package. It contains no track and no replay. "
+            "The selected runner supplies the event or local-test track and "
+            "configuration, while this ONNX model produces fresh actions during "
+            "inference.\n\n"
+            "Contents:\n\n"
+            "- `submission/model.onnx` and its validation manifests;\n"
+            "- the matching training configuration snapshot; and\n"
+            "- bounded training provenance.\n"
+        )
+        (temporary / "README.md").write_text(readme, encoding="utf-8")
+        manifest = {
+            "kind": "synapse_onnx_submission_package",
+            "package_version": PACKAGE_VERSION,
+            "source_kind": source_kind,
+            "participant_id": participant_id,
+            "submission_dir": "submission",
+            "config_path": "config/simulation.json",
+            "config_hash": expected_config_hash,
+            "observation_size": onnx_artifact.observation_size,
+            "provenance": provenance,
+            "files": _relative_file_list(temporary),
+        }
+        (temporary / "package_manifest.json").write_text(
+            json.dumps(manifest, indent=2, sort_keys=True, allow_nan=False) + "\n", encoding="utf-8"
+        )
+        os.rename(temporary, output_path)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return output_path
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True, help="run directory or NumPy artifact directory")
@@ -201,9 +286,17 @@ def main() -> None:
     parser.add_argument("--track", type=Path, default=DEFAULT_TRACK)
     parser.add_argument("--config", type=Path, default=None)
     parser.add_argument("--participant-id", default="participant-model")
+    parser.add_argument(
+        "--model-only",
+        action="store_true",
+        help="build an ONNX submission package without a track or replay",
+    )
     args = parser.parse_args()
     try:
-        print(package_live_submission(args.source, args.output, track=args.track, config=args.config, participant_id=args.participant_id))
+        if args.model_only:
+            print(package_onnx_submission(args.source, args.output, config=args.config, participant_id=args.participant_id))
+        else:
+            print(package_live_submission(args.source, args.output, track=args.track, config=args.config, participant_id=args.participant_id))
     except (OSError, ValueError, ImportError) as exc:
         parser.exit(2, f"Live package failed: {exc}\n")
 
