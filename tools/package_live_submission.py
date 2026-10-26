@@ -30,7 +30,7 @@ from tools.export_onnx import export
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "config" / "simulation.json"
-DEFAULT_TRACK = ROOT / "tracks" / "train" / "synthetic_oval.json"
+DEFAULT_TRACK = ROOT / "tracks" / "train" / "monaco.json"
 PACKAGE_VERSION = "1"
 _PROVENANCE_FILES = ("run_config.json", "reward_config.json", "run_identity.json", "training_report.md")
 _MAX_PROVENANCE_BYTES = 4 * 1024 * 1024

@@ -23,12 +23,12 @@ class ScriptedImitationTests(unittest.TestCase):
                 "samples_per_track": 8,
                 "seed": 17,
             })())
-            self.assertEqual(report["samples"], 24)
+            self.assertEqual(report["samples"], 16)
             self.assertTrue((output / "policy.pt").exists())
             self.assertTrue((output / "policy.json").exists())
             contract, normalizer = TrainingContract.load(output / "training_contract.json")
         self.assertIsNone(normalizer)
-        self.assertEqual(contract.track_ids, ("synthetic_flowing", "synthetic_oval", "synthetic_tight_loop"))
+        self.assertEqual(contract.track_ids, ("monaco", "spa"))
 
 
 if __name__ == "__main__":

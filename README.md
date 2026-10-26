@@ -5,7 +5,7 @@ This repository contains the first Python-only vertical slice for the SYNAPSE te
 The current slice provides:
 
 - A deterministic, track-relative racing environment.
-- A validated geometry-file format with five public training tracks: three original synthetic fixtures plus Monaco and Spa reference layouts.
+- A validated geometry-file format with two public training tracks: Monaco and Spa reference layouts.
 - A kinematic bicycle-style physics model with steering, throttle, braking, grip, runoff, and barriers.
 - A participant-owned reward boundary over published raw transition signals.
 - A persistent `n` runs by `k` steps-per-run budget.
@@ -31,7 +31,7 @@ project target.
 
 These are provisional implementation decisions based on the handoff and the latest project answers:
 
-- Five public training tracks are present: three synthetic development fixtures plus Monaco and Spa reference layouts. E2 currently uses the oval only, not a frozen event training set.
+- Two public training tracks are present: Monaco and Spa development layouts. E2 currently uses Monaco only, not a frozen event training set.
 - Five held-out tracks are a planning hypothesis. They are not included in this participant-facing directory.
 - Evaluation submissions will use ONNX. A bounded static-vector profile and
   model-only Docker worker are implemented as release candidates; actual Docker
@@ -155,7 +155,7 @@ For a direct CLI smoke or a non-dashboard run, use the live runner explicitly:
 .venv/bin/python tools/run_live_onnx.py \
   --entrant small-alpha artifacts/onnx-imitation \
   --entrant small-beta artifacts/onnx-imitation \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --output-dir artifacts/live/small-heat \
   --port 8767 \
@@ -304,7 +304,7 @@ ARTIFACT_DIR="$(mktemp -d)"
   --weights "$ARTIFACT_DIR/policy.pt" \
   --metadata "$ARTIFACT_DIR/policy.json" \
   --contract "$ARTIFACT_DIR/training_contract.json" \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --repeats 2 \
   --output "$ARTIFACT_DIR/evaluation.json"
@@ -352,7 +352,7 @@ Evaluate it against organizer-provided tracks with:
 ```bash
 .venv/bin/python tools/evaluate_participant.py \
   --artifact-dir submission \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --repeats 2 \
   --output artifacts/participant-evaluation.json
@@ -363,7 +363,7 @@ The same artifact can be exported through the existing replay schema:
 ```bash
 .venv/bin/python tools/export_replay.py \
   --artifact-dir submission \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --participant-id team-a \
   --output artifacts/replay/team-a.json

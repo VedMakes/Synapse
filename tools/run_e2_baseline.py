@@ -51,7 +51,7 @@ def run(args: argparse.Namespace) -> str:
         raise ValueError("updates, n-envs, and rollout-length must be positive")
     torch.manual_seed(args.seed)
     config = SimulationConfig.from_file(ROOT / "config" / "simulation.json")
-    track = TrackGeometry.from_file(ROOT / "tracks" / "train" / "synthetic_oval.json")
+    track = TrackGeometry.from_file(ROOT / "tracks" / "train" / "monaco.json")
     reward = RewardConfig.from_file(ROOT / "examples" / "baseline_reward.json")
     env = VectorizedRacingEnv(track, config, reward, n_envs=args.n_envs)
     hyperparameters = PPOHyperparameters(
@@ -123,7 +123,7 @@ def run(args: argparse.Namespace) -> str:
         "## Configuration",
         "",
         f"- Python package: `racing-event` local checkout",
-        f"- Track: `synthetic_oval`",
+        f"- Track: `monaco`",
         f"- Seed: `{args.seed}`",
         f"- Environments: `{args.n_envs}`",
         f"- Rollout length per environment: `{args.rollout_length}`",

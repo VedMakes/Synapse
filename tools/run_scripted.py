@@ -88,7 +88,7 @@ def run(track_path: Path, config_path: Path, steps: int, participant_id: str) ->
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--track", type=Path, default=Path("tracks/train/synthetic_oval.json"))
+    parser.add_argument("--track", type=Path, default=Path("tracks/train/monaco.json"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--steps", type=int, default=120)
     parser.add_argument("--participant-id", default="scripted_smoke_test")

@@ -19,7 +19,8 @@ from tools import run_reference_baseline as runner
 from tests.test_reference_checkpoint import arguments, current_directory
 
 
-OVAL = runner.DEFAULT_TRACK_DIR / "synthetic_oval.json"
+ROOT = Path(__file__).resolve().parents[1]
+OVAL = ROOT / "tracks/train/monaco.json"
 
 
 class ReferenceFineTuneTests(unittest.TestCase):

@@ -28,7 +28,7 @@ from racing_event.vector_env import VectorizedRacingEnv
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRACK_PATH = ROOT / "tracks" / "train" / "synthetic_oval.json"
+TRACK_PATH = ROOT / "tracks" / "train" / "monaco.json"
 CONFIG_PATH = ROOT / "config" / "simulation.json"
 
 

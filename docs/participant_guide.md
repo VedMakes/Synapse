@@ -209,7 +209,7 @@ multi-track best without rewriting its contract:
   --weights my-reference-run/best/policy.pt \
   --metadata my-reference-run/best/policy.json \
   --contract my-reference-run/best/training_contract.json \
-  --track tracks/train/synthetic_oval.json --config config/simulation.json \
+  --track tracks/train/monaco.json --config config/simulation.json \
   --participant-id reference-best --output artifacts/replay/reference-best.json
 ```
 
@@ -631,8 +631,7 @@ inventing a leaderboard formula.
 
 ## Maps
 
-The current public set contains five development maps: three original
-synthetic fixtures plus Monaco and Spa reference layouts. The
+The current public set contains two development maps: Monaco and Spa. The
 manifest records both the canonical geometry hash and the delivered-file hash.
 Before public release, the organizers must still:
 

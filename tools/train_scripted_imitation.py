@@ -67,9 +67,9 @@ def train(args: argparse.Namespace) -> dict[str, object]:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     config = SimulationConfig.from_file(args.config)
-    track_paths = sorted(path for path in args.track_dir.glob("synthetic_*.json"))
+    track_paths = sorted(path for path in args.track_dir.glob("*.json") if path.name != "manifest.json")
     if not track_paths:
-        raise ValueError("no synthetic training tracks found")
+        raise ValueError("no training tracks found")
     tracks = tuple(TrackGeometry.from_file(path) for path in track_paths)
     observations, actions = collect_teacher_data(track_paths, config, args.samples_per_track)
     policy = FixedMLPActorCritic(observations.shape[1])

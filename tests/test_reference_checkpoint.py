@@ -24,7 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 def arguments(output: Path, **overrides) -> Namespace:
     return Namespace(**{
         "reward": runner.DEFAULT_REWARD, "track_dir": runner.DEFAULT_TRACK_DIR,
-        "tracks": [runner.DEFAULT_TRACK_DIR / "synthetic_oval.json"],
+        "tracks": [ROOT / "tracks/train/monaco.json"],
         "config": runner.DEFAULT_CONFIG, "output_dir": output, "budget_steps": 24,
         "steps": 6, "n_envs": 2, "rollout_length": 3, "seed": 17, **overrides,
     })

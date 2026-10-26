@@ -54,7 +54,7 @@ The same operation is available without the dashboard:
 .venv/bin/python tools/package_live_submission.py \
   --source participant_run \
   --output artifacts/live-packages/my-model \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --participant-id team-a
 ```
 
@@ -127,7 +127,7 @@ Only use in-process loading for your own trusted artifacts:
 ```bash
 .venv/bin/python tools/evaluate_participant.py \
   --artifact-dir submission --config config/simulation.json \
-  --track tracks/train/synthetic_oval.json --repeats 2 \
+  --track tracks/train/monaco.json --repeats 2 \
   --output artifacts/participant-evaluation.json
 ```
 
@@ -160,7 +160,7 @@ Run the host-side Python evaluator with explicit isolation:
 .venv/bin/python tools/evaluate_participant.py \
   --isolate --worker-image synapse-evaluator:v1 \
   --artifact-dir submission --config config/simulation.json \
-  --track tracks/train/synthetic_oval.json --repeats 2 \
+  --track tracks/train/monaco.json --repeats 2 \
   --worker-memory-mb 512 --startup-timeout 30 --action-timeout 2 \
   --output artifacts/isolated-evaluation.json
 ```
@@ -191,8 +191,8 @@ The default is a trusted local preview. Use it only with artifacts you own:
 .venv/bin/python tools/run_onnx_race.py \
   --entrant team-a submissions/team-a \
   --entrant team-b submissions/team-b \
-  --track tracks/train/synthetic_oval.json \
-  --track tracks/train/synthetic_flowing.json \
+  --track tracks/train/monaco.json \
+  --track tracks/train/spa.json \
   --config config/simulation.json \
   --repeats 2 \
   --output-dir artifacts/onnx-races/oval-flowing \
@@ -206,8 +206,8 @@ v1.0 replay-group manifest per track:
 ```text
 race-output/
   race.json
-  tracks/00-synthetic_oval/*.json
-  tracks/01-synthetic_flowing/*.json
+  tracks/00-monaco/*.json
+  tracks/01-spa/*.json
 ```
 
 The report binds each result to the artifact, ONNX model, and training
@@ -255,7 +255,7 @@ Run a live two-entrant heat:
 .venv/bin/python tools/run_live_onnx.py \
   --entrant team-a submissions/team-a \
   --entrant team-b submissions/team-b \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --output-dir artifacts/live/oval
 ```

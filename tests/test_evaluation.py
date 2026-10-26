@@ -18,7 +18,7 @@ from tools.run_scripted import scripted_action
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRACK = TrackGeometry.from_file(ROOT / "tracks" / "train" / "synthetic_oval.json")
+TRACK = TrackGeometry.from_file(ROOT / "tests" / "fixtures" / "tracks" / "synthetic_oval.json")
 CONFIG = SimulationConfig.from_file(ROOT / "config" / "simulation.json")
 
 
@@ -109,7 +109,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(splits[-1], result.steps)
 
     def test_evaluation_rejects_random_track_pool_before_reset(self) -> None:
-        second = TrackGeometry.from_file(ROOT / "tracks/train/synthetic_flowing.json")
+        second = TrackGeometry.from_file(ROOT / "tests/fixtures/tracks/synthetic_flowing.json")
         env = VectorizedRacingEnv((TRACK, second), CONFIG, n_envs=1)
         with self.assertRaisesRegex(ValueError, "one explicit track"):
             evaluate_policy(env, ZeroPolicy(), max_steps=1)

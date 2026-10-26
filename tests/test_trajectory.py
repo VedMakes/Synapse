@@ -24,7 +24,7 @@ from tools.export_replay import export
 
 
 ROOT = Path(__file__).resolve().parents[1]
-TRACK = TrackGeometry.from_file(ROOT / "tracks/train/synthetic_oval.json")
+TRACK = TrackGeometry.from_file(ROOT / "tests/fixtures/tracks/synthetic_oval.json")
 CONFIG = SimulationConfig.from_file(ROOT / "config/simulation.json")
 
 
@@ -209,7 +209,7 @@ class ReplayTests(unittest.TestCase):
 
     def test_scripted_export_tool_reads_back(self) -> None:
         args = argparse.Namespace(
-            track=ROOT / "tracks/train/synthetic_oval.json", config=ROOT / "config/simulation.json",
+            track=ROOT / "tests/fixtures/tracks/synthetic_oval.json", config=ROOT / "config/simulation.json",
             weights=None, metadata=None, contract=None, participant_id="smoke",
             steps=5, output=self.path,
         )
@@ -228,7 +228,7 @@ class ReplayTests(unittest.TestCase):
         make_generic_artifact(artifact_dir)
         args = argparse.Namespace(
             artifact_dir=artifact_dir,
-            track=ROOT / "tracks/train/synthetic_oval.json",
+            track=ROOT / "tests/fixtures/tracks/synthetic_oval.json",
             config=ROOT / "config/simulation.json",
             weights=None,
             metadata=None,
@@ -252,7 +252,7 @@ class ReplayTests(unittest.TestCase):
         source.mkdir()
         policy = FixedMLPActorCritic(23)
         policy.save_artifact(source / "policy.pt")
-        flowing = TrackGeometry.from_file(ROOT / "tracks/train/synthetic_flowing.json")
+        flowing = TrackGeometry.from_file(ROOT / "tests/fixtures/tracks/synthetic_flowing.json")
         contract = TrainingContract.for_config(CONFIG, track_ids=(TRACK.track_id, flowing.track_id),
                                              track_hashes=(TRACK.content_hash, flowing.content_hash))
         normalizer = RunningObservationNormalizer(23)
@@ -260,7 +260,7 @@ class ReplayTests(unittest.TestCase):
         contract.save(source / "training_contract.json", normalizer=normalizer)
         before = (source / "training_contract.json").read_bytes()
         args = argparse.Namespace(
-            track=ROOT / "tracks/train/synthetic_oval.json", config=ROOT / "config/simulation.json",
+            track=ROOT / "tests/fixtures/tracks/synthetic_oval.json", config=ROOT / "config/simulation.json",
             weights=source / "policy.pt", metadata=source / "policy.json", contract=source / "training_contract.json",
             participant_id="multi-reference", steps=3, output=self.path,
         )

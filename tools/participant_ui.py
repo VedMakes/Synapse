@@ -461,7 +461,7 @@ def build_live_race_command(form: dict[str, object]) -> list[str]:
     artifact_b = _workspace_path(text("artifact_b"), label="model B artifact")
     if not artifact_a.is_dir() or not artifact_b.is_dir():
         raise ValueError("both model artifacts must be existing directories")
-    track = _workspace_path(text("race_track", "tracks/train/synthetic_oval.json"), label="race track")
+    track = _workspace_path(text("race_track", "tracks/train/monaco.json"), label="race track")
     config = _workspace_path(text("race_config", "config/simulation.json"), label="race config")
     output_dir = _workspace_path(text("race_output", "artifacts/live/ui-heat"), label="race output")
     if not track.is_file():
@@ -501,7 +501,7 @@ def build_live_package(form: dict[str, object]) -> dict[str, object]:
 
     source = _workspace_path(text("package_source", "participant_run"), label="package source")
     output = _workspace_path(text("package_output", "artifacts/live-packages/participant-run"), label="package output")
-    track = _workspace_path(text("package_track", "tracks/train/synthetic_oval.json"), label="package track")
+    track = _workspace_path(text("package_track", "tracks/train/monaco.json"), label="package track")
     participant_id = text("package_participant", "participant-model")
     if not source.is_dir():
         raise ValueError(f"package source does not exist: {source}")
@@ -1014,7 +1014,7 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
           <div class="contract-item"><strong>UI reward function</strong><span>All nine published signals are editable as static weights; the generated file is saved with the run.</span></div>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
-          <div class="contract-item"><strong>SYNAPSE public maps: 5</strong><span>Three synthetic development maps plus Monaco and Spa reference layouts. Final event maps are not here.</span></div>
+          <div class="contract-item"><strong>SYNAPSE public maps: 2</strong><span>Monaco and Spa development layouts. Final event maps are not here.</span></div>
           <div class="watch">
             <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option></select>
             <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="participant_run/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
@@ -1053,7 +1053,7 @@ PAGE = r'''<!doctype html>
              <label>Racer Beta ID<input id="participant-b" value="racer-beta" spellcheck="false"></label>
              <label>Model A artifact<input id="artifact-a" value="artifacts/onnx-imitation" spellcheck="false"></label>
              <label>Model B artifact<input id="artifact-b" value="artifacts/onnx-imitation" spellcheck="false"></label>
-             <label>Race circuit<input id="race-track" value="tracks/train/synthetic_oval.json" spellcheck="false"></label>
+             <label>Race circuit<input id="race-track" value="tracks/train/monaco.json" spellcheck="false"></label>
              <label>Race config<input id="race-config" value="config/simulation.json" spellcheck="false"></label>
              <label>Output directory<input id="race-output" value="artifacts/live/ui-heat" spellcheck="false"></label>
              <label>WebSocket port<input id="race-port" type="number" min="1" max="65535" step="1" value="8767"></label>

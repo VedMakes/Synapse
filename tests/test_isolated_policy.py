@@ -405,7 +405,7 @@ class WorkerProtocolTests(LocalProtocolTestCase):
     def test_evaluator_cli_path_records_isolation_and_matches_local_results(self):
         from tools.evaluate_participant import evaluate
         args = argparse.Namespace(
-            artifact_dir=self.source, tracks=[ROOT / "tracks/train/synthetic_flowing.json"],
+            artifact_dir=self.source, tracks=[ROOT / "tests/fixtures/tracks/synthetic_flowing.json"],
             config=ROOT / "config/simulation.json", repeats=2, max_steps=4, isolate=False,
             worker_image="synapse-evaluator:v1", worker_memory_mb=512, startup_timeout=10, action_timeout=1,
         )

@@ -181,7 +181,7 @@ class ParticipantUiTests(unittest.TestCase):
             result = build_live_package({
                 "package_source": str(source),
                 "package_output": str(output),
-                "package_track": "tracks/train/synthetic_oval.json",
+                "package_track": "tracks/train/monaco.json",
                 "package_participant": "packaged-alpha",
             })
             self.assertEqual(result["source_kind"], "numpy_artifact")
@@ -190,12 +190,12 @@ class ParticipantUiTests(unittest.TestCase):
             self.assertTrue(Path(result["track_path"]).is_file())
             manifest = json.loads((output / "package_manifest.json").read_text())
             self.assertEqual(manifest["recommended_command"][1], "tools/run_live_onnx.py")
-            self.assertEqual(manifest["track_id"], "synthetic_oval")
+            self.assertEqual(manifest["track_id"], "monaco")
             with self.assertRaisesRegex(ValueError, "new directory"):
                 build_live_package({
                     "package_source": str(source),
                     "package_output": str(output),
-                    "package_track": "tracks/train/synthetic_oval.json",
+                    "package_track": "tracks/train/monaco.json",
                 })
 
     def test_process_resource_snapshot_reports_a_process_tree(self) -> None:
@@ -296,12 +296,12 @@ class ParticipantUiTests(unittest.TestCase):
             after = {name: (output_dir / name).read_bytes() for name in before}
         self.assertEqual(after, before)
 
-    def test_public_map_selector_has_five_development_maps(self) -> None:
+    def test_public_map_selector_has_two_development_maps(self) -> None:
         maps = public_maps()
-        self.assertEqual(len(maps), 5)
+        self.assertEqual(len(maps), 2)
         self.assertEqual(
             {item["id"] for item in maps},
-            {"monaco", "spa", "synthetic_oval", "synthetic_flowing", "synthetic_tight_loop"},
+            {"monaco", "spa"},
         )
 
     def test_numeric_inputs_reject_fractional_boolean_and_infinite_values(self) -> None:
@@ -465,7 +465,7 @@ def write_watch_run(root: Path) -> dict[str, object]:
     config = SimulationConfig.from_file(root / "run_config.json")
     artifact = root / "artifact"
     artifact.mkdir()
-    track = next(item for item in public_maps() if item["id"] == "synthetic_flowing")
+    track = next(item for item in public_maps() if item["id"] == "monaco")
     contract = TrainingContract.for_config(config, track_ids=[track["id"]], track_hashes=[track["content_hash"]])
     contract.save(artifact / "training_contract.json")
     size = contract.observation.size
@@ -480,7 +480,7 @@ def write_watch_run(root: Path) -> dict[str, object]:
         "training_contract_sha256": hashlib.sha256((artifact / "training_contract.json").read_bytes()).hexdigest(),
     }
     (artifact / "manifest.json").write_text(json.dumps(manifest))
-    return {"source": "artifact", "renderer": "browser", "map_id": "synthetic_oval", "output_dir": str(root), "artifact_dir": str(artifact)}
+    return {"source": "artifact", "renderer": "browser", "map_id": "monaco", "output_dir": str(root), "artifact_dir": str(artifact)}
 
 
 class ParticipantUiApiTests(unittest.TestCase):

@@ -99,7 +99,7 @@ def main() -> None:
     policy_group.add_argument("--artifact-dir", type=Path, help="declarative participant model artifact directory")
     parser.add_argument("--metadata", type=Path)
     parser.add_argument("--contract", type=Path)
-    parser.add_argument("--track", type=Path, default=Path("tracks/train/synthetic_oval.json"))
+    parser.add_argument("--track", type=Path, default=Path("tracks/train/monaco.json"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--steps", type=int, default=None, help="optional preview horizon; never extends engine limits")
     parser.add_argument("--participant-id", default="local_driver")

@@ -78,7 +78,7 @@ def main() -> None:
     # Each crash is an actual deterministic policy evaluation, not a fabricated
     # terminal frame or a result inferred from where the sprite meets a wall.
     config = SimulationConfig.from_file(ROOT / "config/simulation.json")
-    track = TrackGeometry.from_file(ROOT / "tracks/train/synthetic_oval.json")
+    track = TrackGeometry.from_file(ROOT / "tracks/train/monaco.json")
     crashes = []
     crash_results = []
     for name, action in (("straight", (0.0, 1.0)), ("left", (0.15, 1.0)),

@@ -38,39 +38,6 @@
       "split": "train",
       "units": "metres",
       "validator": "TrackGeometry.validate"
-    },
-    {
-      "canonical_content_hash": "3c40c0e8fad93e9702f7429f1bce2f6bd9e99ea0297be5d0a0a6b9b383c9cbdd",
-      "delivered_file_sha256": "84caf1d594b65f6e02d28cea8e5a423078297519fd11183597f5ccb610ab3669",
-      "display_name": "Synthetic Flowing Loop",
-      "geometry_version": "1.0",
-      "map_id": "synthetic_flowing",
-      "source_note": "Original synthetic development fixture; no real-track or held-out geometry.",
-      "split": "train",
-      "units": "metres",
-      "validator": "TrackGeometry.validate"
-    },
-    {
-      "canonical_content_hash": "273a66d19cfe9b01b6c3de29d91f432b051878d4f279acd63dddf035c4dfa374",
-      "delivered_file_sha256": "803aa98653ff2ed1b2f76c2a50a896bef1c44c4cf1da565d1cad4675f7a4fc07",
-      "display_name": "Synthetic Oval",
-      "geometry_version": "1.0",
-      "map_id": "synthetic_oval",
-      "source_note": "Original synthetic development fixture; no real-track or held-out geometry.",
-      "split": "train",
-      "units": "metres",
-      "validator": "TrackGeometry.validate"
-    },
-    {
-      "canonical_content_hash": "cbca5162d5ca168a18de1503c7b91adc1f11388c1061f405de2de0250d50beb9",
-      "delivered_file_sha256": "0c803aaf0d9e721177b8e8f946b3f6d1bff48365a79729afeb59e538242cf87d",
-      "display_name": "Synthetic Tighter Loop",
-      "geometry_version": "1.0",
-      "map_id": "synthetic_tight_loop",
-      "source_note": "Original synthetic development fixture; no real-track or held-out geometry.",
-      "split": "train",
-      "units": "metres",
-      "validator": "TrackGeometry.validate"
     }
   ],
   "private_tracks_included": false,

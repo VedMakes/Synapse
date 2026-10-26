@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ScriptedRunTests(unittest.TestCase):
     def test_recorded_run_has_versioned_exchange_shape(self) -> None:
         result = run(
-            ROOT / "tracks" / "train" / "synthetic_oval.json",
+            ROOT / "tests" / "fixtures" / "tracks" / "synthetic_oval.json",
             ROOT / "config" / "simulation.json",
             steps=8,
             participant_id="test",

@@ -7,7 +7,7 @@ test:
 
 render:
 	mkdir -p artifacts/replay
-	$(PYTHON) tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --steps 120 --participant-id pygame-smoke --output artifacts/replay/pygame-smoke.json
+	$(PYTHON) tools/export_replay.py --scripted --track tracks/train/monaco.json --config config/simulation.json --steps 120 --participant-id pygame-smoke --output artifacts/replay/pygame-smoke.json
 	SDL_VIDEODRIVER=dummy SDL_AUDIODRIVER=dummy $(PYTHON) tools/run_pygame.py --replay artifacts/replay/pygame-smoke.json --headless
 
 e1:
@@ -33,7 +33,7 @@ ui-browser-check:
 	$(PYTHON) tools/check_ui_browser.py
 
 evaluate-participant:
-	$(PYTHON) tools/evaluate_participant.py --artifact-dir submission --track tracks/train/synthetic_oval.json --config config/simulation.json --repeats 2
+	$(PYTHON) tools/evaluate_participant.py --artifact-dir submission --track tracks/train/monaco.json --config config/simulation.json --repeats 2
 
 # Pass CLI options with: make onnx-race ARGS='--entrant team-a submission-a ...'
 onnx-race:

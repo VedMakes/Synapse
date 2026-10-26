@@ -143,7 +143,7 @@ URL:
 .venv/bin/python tools/run_live_onnx.py \
   --entrant racer-a submissions/racer-a \
   --entrant racer-b submissions/racer-b \
-  --track tracks/train/synthetic_oval.json \
+  --track tracks/train/monaco.json \
   --config config/simulation.json \
   --output-dir artifacts/live/oval \
   --port 8767 \
@@ -185,20 +185,20 @@ You can generate fresh head-to-head evaluation replays for any circuit using `to
 
 ### A. Synthetic Oval Track
 ```bash
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-alpha --output artifacts/replay/racer_a.json
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_oval.json --config config/simulation.json --participant-id racer-beta --steps 650 --output artifacts/replay/racer_b.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/monaco.json --config config/simulation.json --participant-id racer-alpha --output artifacts/replay/racer_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/monaco.json --config config/simulation.json --participant-id racer-beta --steps 650 --output artifacts/replay/racer_b.json
 ```
 
 ### B. Synthetic Flowing Track
 ```bash
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-alpha --output artifacts/replay/flowing_a.json
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_flowing.json --config config/simulation.json --participant-id flowing-beta --steps 500 --output artifacts/replay/flowing_b.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/spa.json --config config/simulation.json --participant-id spa-alpha --output artifacts/replay/spa_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/spa.json --config config/simulation.json --participant-id spa-beta --steps 500 --output artifacts/replay/spa_b.json
 ```
 
 ### C. Synthetic Tight Loop Track
 ```bash
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-alpha --output artifacts/replay/tight_a.json
-.venv/bin/python tools/export_replay.py --scripted --track tracks/train/synthetic_tight_loop.json --config config/simulation.json --participant-id tight-beta --steps 450 --output artifacts/replay/tight_b.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/monaco.json --config config/simulation.json --participant-id monaco-alpha --output artifacts/replay/monaco_a.json
+.venv/bin/python tools/export_replay.py --scripted --track tracks/train/monaco.json --config config/simulation.json --participant-id monaco-beta --steps 450 --output artifacts/replay/monaco_b.json
 ```
 
 ---

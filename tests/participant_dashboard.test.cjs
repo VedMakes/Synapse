@@ -54,7 +54,7 @@ async function dashboard() {
     },
     fetch: (url, options) => {
       calls.push({ url, options });
-       if (url === "/api/maps") return Promise.resolve(response([{ id: "synthetic_oval", display_name: "Oval", path: "tracks/train/synthetic_oval.json" }]));
+       if (url === "/api/maps") return Promise.resolve(response([{ id: "monaco", display_name: "Monaco", path: "tracks/train/monaco.json" }]));
       if (url === "/api/status" && !delayStatus) return Promise.resolve(response(status));
       return new Promise(resolve => deferred.push({ url, resolve }));
     },
@@ -243,7 +243,7 @@ test("live package exports and assigns the validated submission to the selected 
   const calls = h.calls.filter(call => call.url === "/api/package");
   assert.equal(calls.length, 1);
   const payload = JSON.parse(calls[0].options.body);
-  assert.equal(payload.package_track, "tracks/train/synthetic_oval.json");
+  assert.equal(payload.package_track, "tracks/train/monaco.json");
   h.resolve("/api/package", {
     package_dir: "/workspace/artifacts/live-packages/ui-test",
     submission_dir: "/workspace/artifacts/live-packages/ui-test/submission",
