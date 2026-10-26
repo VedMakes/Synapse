@@ -118,6 +118,14 @@ validated ONNX artifacts side by side. Python remains authoritative for the
 observations, model actions, fixed-step physics, deadlines, events, and result;
 the browser is only a control surface and telemetry view. The panel exposes:
 
+Before the heat controls, use **Package for live race** after training. Choose
+the trained run or model source, a new package directory, a public circuit, and
+the racer ID, then press **Build ONNX live package**. The dashboard validates the
+export, copies the matching config and selected track, writes provenance and
+SHA-256 hashes to `package_manifest.json`, and fills the selected grid slot with
+the resulting `submission/` directory. The package also contains a README with
+the ready-to-copy `tools/run_live_onnx.py` command.
+
 - two participant IDs and two artifact directories;
 - one explicit track, simulation config, output directory, and WebSocket port;
 - action budget, live tick limit, and `strict_scored` versus local-demo
@@ -135,7 +143,7 @@ Start the dashboard from the repository root:
 ```
 
 Open **http://127.0.0.1:8766/** and use **03 · Grid control / live heat**.
-Choose two artifact directories, then start the heat. The default renderer HTTP
+Build a package or choose two artifact directories, then start the heat. The default renderer HTTP
 server uses port `8765`; the dashboard's live-heat WebSocket default is `8767`
 so the three local services do not collide. Runtime RSS is measured for the
 supervised race process tree and is intentionally labeled shared; the dashboard

@@ -42,6 +42,27 @@ float32 conversion is preserved. Source artifacts are unchanged. Participants
 may instead export their own supported architecture directly; the converter is
 not a requirement or an architecture prescription.
 
+## Build a live-race package
+
+The participant dashboard's **Build ONNX live package** button performs the
+export and assembles a new directory containing the validated `submission/`,
+matching `config/simulation.json`, the selected public track, bounded run
+provenance, `package_manifest.json` hashes, and a README with the live command.
+The same operation is available without the dashboard:
+
+```bash
+.venv/bin/python tools/package_live_submission.py \
+  --source participant_run \
+  --output artifacts/live-packages/my-model \
+  --track tracks/train/synthetic_oval.json \
+  --participant-id team-a
+```
+
+The output directory must be new. The generated command is intended to run from
+the repository root and uses the package's copied model, config, and track.
+The package does not copy participant training code, Torch checkpoints, or
+reward callbacks into the live submission.
+
 ## ONNX profile v1
 
 Exactly three regular, non-symlink files are accepted:

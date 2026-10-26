@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 import hashlib
 import http.client
+import importlib.util
 import io
 import os
 import json
@@ -27,12 +28,14 @@ from tools.participant_ui import (
     PAGE,
     ROOT,
     TrainingProcess,
+    build_live_package,
     build_live_race_command,
     build_training_command,
     parse_live_telemetry_line,
     parse_update_line,
     public_maps,
 )
+from tests.test_model_artifact import write_artifact
 
 
 class ParticipantUiTests(unittest.TestCase):
@@ -123,6 +126,9 @@ class ParticipantUiTests(unittest.TestCase):
             "Start live heat",
             "Shared race process",
             "model-file sizes",
+            "Build ONNX live package",
+            "package_manifest.json",
+            "/api/package",
         ):
             self.assertIn(text, PAGE)
 
@@ -160,6 +166,37 @@ class ParticipantUiTests(unittest.TestCase):
         self.assertEqual(command[command.index("--port") + 1], "8777")
         with self.assertRaisesRegex(ValueError, "different"):
             build_live_race_command({"participant_a": "same", "participant_b": "same", "artifact_a": str(artifact), "artifact_b": str(artifact)})
+
+    @unittest.skipUnless(
+        importlib.util.find_spec("onnx") and importlib.util.find_spec("onnxruntime"),
+        "optional ONNX packaging checks require requirements-evaluator.lock",
+    )
+    def test_live_package_builds_valid_submission_and_matching_runtime_inputs(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            shutil.copy(ROOT / "config" / "simulation.json", source / "run_config.json")
+            write_artifact(source / "artifact")
+            output = Path(directory) / "package"
+            result = build_live_package({
+                "package_source": str(source),
+                "package_output": str(output),
+                "package_track": "tracks/train/synthetic_oval.json",
+                "package_participant": "packaged-alpha",
+            })
+            self.assertEqual(result["source_kind"], "numpy_artifact")
+            self.assertTrue(Path(result["submission_dir"]).joinpath("model.onnx").is_file())
+            self.assertTrue(Path(result["config_path"]).is_file())
+            self.assertTrue(Path(result["track_path"]).is_file())
+            manifest = json.loads((output / "package_manifest.json").read_text())
+            self.assertEqual(manifest["recommended_command"][1], "tools/run_live_onnx.py")
+            self.assertEqual(manifest["track_id"], "synthetic_oval")
+            with self.assertRaisesRegex(ValueError, "new directory"):
+                build_live_package({
+                    "package_source": str(source),
+                    "package_output": str(output),
+                    "package_track": "tracks/train/synthetic_oval.json",
+                })
 
     def test_process_resource_snapshot_reports_a_process_tree(self) -> None:
         snapshot = ui._process_resource_snapshot(os.getpid())
@@ -624,7 +661,7 @@ class ParticipantUiApiTests(unittest.TestCase):
         export.assert_not_called()
 
     def test_request_length_and_encoding_fail_promptly_for_all_post_routes(self) -> None:
-        for route in ("/api/start", "/api/watch", "/api/setup", "/api/stop", "/api/race/start", "/api/race/stop"):
+        for route in ("/api/start", "/api/watch", "/api/package", "/api/setup", "/api/stop", "/api/race/start", "/api/race/stop"):
             for length in ("-1", "16385", "nonsense", "999999999999999999"):
                 with self.subTest(route=route, length=length):
                     code, _, body = self.request(route, headers={"Content-Length": length}, raw=b"")

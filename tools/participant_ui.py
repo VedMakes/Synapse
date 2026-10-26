@@ -33,6 +33,7 @@ from racing_event.observation import TrainingContract
 from racing_event.reward import RewardConfig
 from racing_event.trajectory import MAX_REPLAY_BYTES, load_replay
 from tools.build_replay import build as build_browser_replay
+from tools.package_live_submission import package_live_submission
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -488,6 +489,39 @@ def build_live_race_command(form: dict[str, object]) -> list[str]:
     if form.get("race_isolate") in (True, "true", "1", 1):
         command.append("--isolate")
     return command
+
+
+def build_live_package(form: dict[str, object]) -> dict[str, object]:
+    """Export a trained run into a self-contained live-race package."""
+    def text(name: str, default: str = "") -> str:
+        value = form.get(name, default)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f"{name} must be a non-empty string")
+        return value.strip()
+
+    source = _workspace_path(text("package_source", "participant_run"), label="package source")
+    output = _workspace_path(text("package_output", "artifacts/live-packages/participant-run"), label="package output")
+    track = _workspace_path(text("package_track", "tracks/train/synthetic_oval.json"), label="package track")
+    participant_id = text("package_participant", "participant-model")
+    if not source.is_dir():
+        raise ValueError(f"package source does not exist: {source}")
+    if not track.is_file():
+        raise ValueError(f"package track does not exist: {track}")
+    if output.exists():
+        raise ValueError("package output already exists; choose a new directory")
+    package = package_live_submission(source, output, track=track, participant_id=participant_id)
+    manifest = package / "package_manifest.json"
+    package_data = json.loads(manifest.read_text(encoding="utf-8"))
+    return {
+        "package_dir": str(package),
+        "submission_dir": str(package / "submission"),
+        "manifest_path": str(manifest),
+        "config_path": str(package / "config" / "simulation.json"),
+        "track_path": str(package / str(package_data["track_path"])),
+        "track_id": package_data["track_id"],
+        "participant_id": participant_id,
+        "source_kind": package_data["source_kind"],
+    }
 
 
 class TrainingProcess:
@@ -995,8 +1029,24 @@ PAGE = r'''<!doctype html>
           <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
         </div>
       </aside>
-       <section class="panel race-panel">
-         <div class="panel-head"><h2>03 · Grid control / live heat</h2><span id="race-state-chip" class="status-chip">idle</span></div>
+        <section class="panel race-panel">
+          <div class="panel-head"><h2>03 · Package for live race</h2><span id="package-state-chip" class="status-chip">ready</span></div>
+          <div class="section">
+            <p class="subcopy">After training, build one clean ONNX bundle. It includes the validated model, matching config, selected public circuit, hashes, and a copy-ready live command.</p>
+            <div class="form-grid">
+              <label>Trained run / model source<input id="package-source" value="participant_run" spellcheck="false"></label>
+              <label>New package directory<input id="package-output" value="artifacts/live-packages/participant-run" spellcheck="false"></label>
+              <label>Live circuit<select id="package-track"></select></label>
+              <label>Package participant ID<input id="package-participant" value="racer-alpha" spellcheck="false"></label>
+              <label>Assign package to<select id="package-entrant"><option value="a">Racer Alpha</option><option value="b">Racer Beta</option></select></label>
+            </div>
+            <div class="actions"><button id="package" data-api-endpoint="/api/package" class="primary">Build ONNX live package</button></div>
+            <p id="package-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
+            <div id="package-result" class="watch-result" role="status" aria-live="polite">No live package built yet. The package output must be a new directory; package_manifest.json will record its hashes.</div>
+          </div>
+        </section>
+        <section class="panel race-panel">
+          <div class="panel-head"><h2>04 · Grid control / live heat</h2><span id="race-state-chip" class="status-chip">idle</span></div>
          <div class="section">
            <div class="form-grid">
              <label>Racer Alpha ID<input id="participant-a" value="racer-alpha" spellcheck="false"></label>
@@ -1037,7 +1087,8 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
      const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
-       const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const packageFields = ["package-source", "package-output", "package-track", "package-participant", "package-entrant"];
        const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
@@ -1109,7 +1160,7 @@ PAGE = r'''<!doctype html>
        $("ray-count").setAttribute("aria-invalid", preview.error ? "true" : "false"); $("ray-angles").setAttribute("aria-invalid", preview.error ? "true" : "false");
      }
       function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
-      function renderRace(data) {
+       function renderRace(data) {
         latestRace = data || {};
         const telemetry = latestRace.telemetry || {}, entrants = telemetry.entrants || [];
         $("race-state-chip").textContent = latestRace.state || "idle";
@@ -1127,9 +1178,19 @@ PAGE = r'''<!doctype html>
           $(`race-failures-${suffix}`).textContent = entrant.inference_failures ?? 0;
         });
         const endpointLine = (latestRace.lines || []).find(line => line.startsWith("Live WebSocket endpoint:"));
-        if (endpointLine) { const endpoint = endpointLine.split(": ").slice(1).join(": "); const link = $("race-open"); link.href = `http://127.0.0.1:8765/?live=${encodeURIComponent(endpoint)}`; link.hidden = false; }
-      }
-      function render(data) {
+         if (endpointLine) { const endpoint = endpointLine.split(": ").slice(1).join(": "); const link = $("race-open"); link.href = `http://127.0.0.1:8765/?live=${encodeURIComponent(endpoint)}`; link.hidden = false; }
+       }
+       function renderPackage(result) {
+         const target = $("package-result");
+         target.textContent = `ONNX live package ready · ${result.source_kind} · ${result.track_id} · package: ${result.package_dir} · submission: ${result.submission_dir} · manifest: ${result.manifest_path}`;
+         $("package-state-chip").textContent = "ready";
+         const entrant = $("package-entrant").value === "b" ? "b" : "a";
+         $(entrant === "a" ? "artifact-a" : "artifact-b").value = result.submission_dir;
+         $(entrant === "a" ? "participant-a" : "participant-b").value = result.participant_id;
+         $("race-track").value = result.track_path;
+         $("race-config").value = result.config_path;
+       }
+       function render(data) {
         latestStatus = data;
       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
@@ -1159,9 +1220,10 @@ PAGE = r'''<!doctype html>
         const active = Boolean(latestStatus.running) || latestStatus.state === "stopping";
         const raceActive = Boolean(latestRace.running) || latestRace.state === "stopping";
         const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
-        const raceBusy = Boolean(pending) || raceActive || active || Boolean(latestStatus.action_busy);
-        fields.forEach(id => { $(id).disabled = busy; });
-        raceFields.forEach(id => { $(id).disabled = raceBusy; });
+         const raceBusy = Boolean(pending) || raceActive || active || Boolean(latestStatus.action_busy);
+         fields.forEach(id => { $(id).disabled = busy; });
+         packageFields.forEach(id => { $(id).disabled = busy || raceActive || active; });
+         raceFields.forEach(id => { $(id).disabled = raceBusy; });
        $("start").disabled = busy || Boolean(trainingError());
        $("setup").disabled = busy;
        $("stop").disabled = Boolean(pending) || !active || latestStatus.state === "stopping";
@@ -1170,13 +1232,19 @@ PAGE = r'''<!doctype html>
        $("artifact-label").hidden = $("watch-source").value !== "artifact";
        $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
         $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value === "artifact" && !$("artifact-dir").value.trim());
-        $("race-start").disabled = raceBusy || Boolean(raceValidation());
-        $("race-stop").disabled = Boolean(pending) || !raceActive || latestRace.state === "stopping";
-        $("race-start").setAttribute("aria-busy", String(pending === "race/start"));
+         $("race-start").disabled = raceBusy || Boolean(raceValidation());
+         $("race-stop").disabled = Boolean(pending) || !raceActive || latestRace.state === "stopping";
+         $("package").disabled = busy || raceActive || active || Boolean(packageValidation());
+         $("package").setAttribute("aria-busy", String(pending === "package"));
+         $("race-start").setAttribute("aria-busy", String(pending === "race/start"));
        $("watch").textContent = pending === "watch" ? "Building replay…" : "Build / watch replay";
-       $("watch").setAttribute("aria-busy", String(pending === "watch"));
-      }
-      function raceValidation() {
+        $("watch").setAttribute("aria-busy", String(pending === "watch"));
+       }
+       function packageValidation() {
+         for (const id of ["package-source", "package-output", "package-track", "package-participant"]) if (!$(id) || !String($(id).value || "").trim()) return `${id} is required.`;
+         return "";
+       }
+       function raceValidation() {
         const ids = [$("participant-a").value.trim(), $("participant-b").value.trim()];
         if (!ids[0] || !ids[1] || ids[0] === ids[1]) return "Use two different racer IDs.";
         for (const id of ["artifact-a", "artifact-b", "race-track", "race-config", "race-output"]) if (!$(id).value.trim()) return `${id} is required.`;
@@ -1186,7 +1254,7 @@ PAGE = r'''<!doctype html>
       }
      async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
      async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
-     async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
+      async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"), packageSelect = $("package-track"); select.replaceChildren(); packageSelect.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); const packageOption = document.createElement("option"); packageOption.value = map.path; packageOption.textContent = map.display_name; packageSelect.appendChild(packageOption); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
      function renderWatch(result) {
        lastWatch = result;
        const target = $("watch-result");
@@ -1199,28 +1267,31 @@ PAGE = r'''<!doctype html>
        $("renderer-status").textContent = result.renderer === "browser" ? "Browser fallback ready · open the link above on this device." : `${result.headless ? "Headless Pygame · one-frame check only; use the browser link for playback" : "Pygame on the server's local display"} · ${result.renderer_state}`;
        if (result.renderer_error) $("watch-error").textContent = result.renderer_error;
      }
-      async function action(name, payload = {}) {
-        const actionButton = name === "race/start" ? $("race-start") : name === "race/stop" ? $("race-stop") : $(name);
-        if (pending || actionButton.disabled) return;
-       if (name === "start" && trainingError()) return;
-       pending = name; actionVersion++;
-        const errorTarget = $(name === "watch" ? "watch-error" : name.startsWith("race/") ? "race-error" : "run-error"); errorTarget.textContent = "";
+       async function action(name, payload = {}) {
+         const actionButton = name === "race/start" ? $("race-start") : name === "race/stop" ? $("race-stop") : $(name);
+         if (pending || actionButton.disabled) return;
+        if (name === "start" && trainingError()) return;
+        if (name === "package" && packageValidation()) return;
+        pending = name; actionVersion++;
+         const errorTarget = $(name === "watch" ? "watch-error" : name === "package" ? "package-error" : name.startsWith("race/") ? "race-error" : "run-error"); errorTarget.textContent = "";
        syncControls();
        try {
          const result = await request(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-          if (name === "watch") renderWatch(result); else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
+           if (name === "watch") renderWatch(result); else if (name === "package") renderPackage(result); else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
        } catch (error) { errorTarget.textContent = error.message; errorTarget.focus(); }
        finally { pending = null; actionVersion++; syncControls(); refresh(); }
      }
       $("start").addEventListener("click", () => action("start", formData()));
-      $("stop").addEventListener("click", () => action("stop"));
-      $("setup").addEventListener("click", () => action("setup"));
-      $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
+       $("stop").addEventListener("click", () => action("stop"));
+       $("setup").addEventListener("click", () => action("setup"));
+       $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_output: $("package-output").value, package_track: $("package-track").value, package_participant: $("package-participant").value }));
+       $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
       $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
       ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
       fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; syncControls(); }); });
-       ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+        ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+        packageFields.forEach(id => $(id).addEventListener("input", syncControls));
        raceFields.forEach(id => $(id).addEventListener("input", () => { $("race-error").textContent = raceValidation(); syncControls(); }));
       renderRayDiagram(); render({}); refreshMaps(); refresh(); setInterval(refresh, 700);
   </script>
@@ -1338,7 +1409,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/race/stop":
                 self._json(200, RACE_PROCESS.stop())
                 return
-            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/race/start"):
+            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/package", "/api/race/start"):
                 self._json(404, {"error": "not found"})
                 return
             acquired = ACTION_LOCK.acquire(blocking=False)
@@ -1352,6 +1423,12 @@ class Handler(BaseHTTPRequestHandler):
                 if RENDER_PROCESS.snapshot()["running"]:
                     raise RuntimeError("close the current Pygame replay before building another")
                 result = build_watch_replay(form)
+            elif path == "/api/package":
+                if PROCESS.snapshot()["running"]:
+                    raise RuntimeError("stop training before building a live package")
+                if RACE_PROCESS.snapshot()["running"]:
+                    raise RuntimeError("stop the live heat before building a live package")
+                result = build_live_package(form)
             elif path == "/api/race/start":
                 if PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop training before starting a live heat")

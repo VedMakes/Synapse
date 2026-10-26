@@ -54,7 +54,7 @@ async function dashboard() {
     },
     fetch: (url, options) => {
       calls.push({ url, options });
-      if (url === "/api/maps") return Promise.resolve(response([{ id: "synthetic_oval", display_name: "Oval" }]));
+       if (url === "/api/maps") return Promise.resolve(response([{ id: "synthetic_oval", display_name: "Oval", path: "tracks/train/synthetic_oval.json" }]));
       if (url === "/api/status" && !delayStatus) return Promise.resolve(response(status));
       return new Promise(resolve => deferred.push({ url, resolve }));
     },
@@ -232,4 +232,31 @@ test("live heat starts as a single-flight race action and renders telemetry/reso
   await h.poll();
   assertRaceFrozen(h, false);
   assert.equal(h.el("race-start").disabled, false);
+});
+
+test("live package exports and assigns the validated submission to the selected racer", async () => {
+  const h = await dashboard();
+  await h.input("package-output", "artifacts/live-packages/ui-test");
+  await h.input("package-entrant", "b");
+  const first = h.click("package");
+  assert.equal(h.el("package").attrs["aria-busy"], "true");
+  const calls = h.calls.filter(call => call.url === "/api/package");
+  assert.equal(calls.length, 1);
+  const payload = JSON.parse(calls[0].options.body);
+  assert.equal(payload.package_track, "tracks/train/synthetic_oval.json");
+  h.resolve("/api/package", {
+    package_dir: "/workspace/artifacts/live-packages/ui-test",
+    submission_dir: "/workspace/artifacts/live-packages/ui-test/submission",
+    manifest_path: "/workspace/artifacts/live-packages/ui-test/package_manifest.json",
+    config_path: "/workspace/artifacts/live-packages/ui-test/config/simulation.json",
+    track_path: "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json",
+    track_id: "synthetic_oval", participant_id: "racer-beta", source_kind: "numpy_artifact",
+  });
+  await first; await flush();
+  assert.match(h.el("package-result").textContent, /ONNX live package ready/);
+  assert.equal(h.el("artifact-b").value, "/workspace/artifacts/live-packages/ui-test/submission");
+  assert.equal(h.el("participant-b").value, "racer-beta");
+  assert.equal(h.el("race-track").value, "/workspace/artifacts/live-packages/ui-test/tracks/synthetic_oval.json");
+  assert.equal(h.el("race-config").value, "/workspace/artifacts/live-packages/ui-test/config/simulation.json");
+  assert.equal(h.el("package").attrs["aria-busy"], "false");
 });
