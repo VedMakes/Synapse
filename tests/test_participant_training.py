@@ -116,6 +116,25 @@ class ParticipantTrainingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "config does not exist"):
             build_training_command(args)
 
+    def test_participant_launcher_rejects_a_single_public_map(self) -> None:
+        with tempfile.TemporaryDirectory(dir=ROOT) as directory:
+            track_dir = Path(directory)
+            (track_dir / "monaco.json").write_bytes((ROOT / "tracks/train/monaco.json").read_bytes())
+            args = Namespace(
+                trainer=ROOT / "examples" / "participant_train.py",
+                reward=DEFAULT_REWARD,
+                track_dir=track_dir,
+                config=DEFAULT_CONFIG,
+                output_dir=ROOT / "participant_run",
+                steps=1,
+                budget_steps=1,
+                n_envs=1,
+                rollout_length=1,
+                seed=17,
+            )
+            with self.assertRaisesRegex(ValueError, "all public training maps"):
+                build_training_command(args)
+
     def test_reference_checkpoint_refuses_inexact_recovery_after_policy_publish_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory) / "recover"

@@ -191,7 +191,7 @@ program.
 
 | Argument | What it tells your script | Example |
 |---|---|---|
-| `--track-dir` | Directory containing one or more public `*.json` maps. | `tracks/train` |
+| `--track-dir` | Directory containing the complete public `*.json` map set. | `tracks/train` |
 | `--config` | The simulation and sensor configuration file. | `config/simulation.json` |
 | `--output-dir` | Where your script must save the run. | `artifacts/runs/team-a` |
 | `--steps` | Maximum transitions requested in this invocation. | `256` |
@@ -339,27 +339,24 @@ For the reference starter you should see `policy.pt`, `policy.json`, and
 `training_contract.json` among the results. If you do not, stop and fix the
 trainer before spending more transitions.
 
-### 4.2 Train on one map only
+### 4.2 Training always uses the complete public set
 
-The launcher takes a directory, not a single track file. Make a small map
-directory when you want a one-map experiment:
+The participant launcher requires `tracks/train` to contain every public
+training map. In this release that means both Monaco and Spa. It rejects a
+directory containing only Monaco or only Spa, because a model trained on one
+map can learn that map's geometry instead of learning a route-following policy
+that transfers to unseen competition maps.
+
+Use this for participant training:
 
 ```bash
-mkdir -p participant_maps/monaco
-cp tracks/train/monaco.json participant_maps/monaco/monaco.json
-
-.venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
-  --reward examples/baseline_reward.json \
-  --track-dir participant_maps/monaco \
-  --config config/simulation.json \
-  --output-dir artifacts/runs/monaco-seed-17 \
-  --steps 256 --budget-steps 10000 \
-  --n-envs 1 --rollout-length 32 --seed 17
+--track-dir tracks/train
 ```
 
-To use Spa instead, copy `tracks/train/spa.json` into a `participant_maps/spa/`
-directory and change `--track-dir` and `--output-dir`.
+The circuit selectors later in this manual are intentionally separate. Choose
+one map when you replay, evaluate, package, or race; do not choose one map for
+the training run. If you want to inspect Monaco alone, use the evaluator or
+replay command with `--track tracks/train/monaco.json` after training.
 
 ### 4.3 Understand steps and budget
 
@@ -377,6 +374,27 @@ The local onboarding budget is a prototype fairness mechanism, not a claim
 that the final event budget has been frozen. Do not edit `budget.json` to try to
 refund work. If your custom trainer has its own budget accounting, keep that
 accounting in its run directory too.
+
+### 4.4 Client retrain cap
+
+The participant launcher now allows **12 independent training allocations** on
+one client. Each allocation can request at most **10,000 transitions**. This
+gives a practical maximum of 120,000 requested training transitions while still
+leaving room for a baseline, multiple reward/model experiments, two seed
+checks, and final confirmation runs.
+
+An allocation is identified by its output directory. Reusing that same
+directory to resume a compatible run does not consume another allocation; a
+new output directory is a new retrain and uses one slot. The local ledger is:
+
+```text
+.synapse/client_training_budget.json
+```
+
+The dashboard shows the remaining allocation count. This is a client-side
+operational guard, not organizer-grade proof: someone who controls the client
+can delete or edit local files. Organizer-side evaluation must enforce the
+actual competition budget separately.
 
 ## 5. Use the dashboard instead of typing commands
 
@@ -405,8 +423,8 @@ In the training panel:
 1. **Trainer script:** type `participant_code/train.py` or
    `participant_code/train_reference.py`. This is the path to your Python
    trainer, not the path to model weights.
-2. **Track directory:** type `tracks/train` for both maps, or a folder such as
-   `participant_maps/monaco` for one map.
+2. **Training maps:** leave `tracks/train`; this always means Monaco and Spa
+   together. The training launcher rejects a one-map directory.
 3. **Output directory:** type a new folder such as
    `artifacts/runs/dashboard-first`.
 4. **Steps:** enter `256` for the first smoke run.
@@ -421,8 +439,9 @@ In the training panel:
 11. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
-and `run_identity.json` beside the run. This is why dashboard-created runs are
-convenient for later replay and packaging.
+and `run_identity.json` beside the run. It also displays the remaining client
+retrain allocations. This is why dashboard-created runs are convenient for
+later replay and packaging.
 
 ## 6. Sensors and actions: what the model sees and does
 

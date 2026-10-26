@@ -28,12 +28,19 @@ from uuid import uuid4
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from racing_event.client_budget import (
+    ClientTrainingBudgetError,
+    DEFAULT_MAX_RETRAINS,
+    DEFAULT_MAX_STEPS_PER_RETRAIN,
+    client_budget_status,
+)
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
 from racing_event.reward import RewardConfig
 from racing_event.trajectory import MAX_REPLAY_BYTES, load_replay
 from tools.build_replay import build as build_browser_replay
 from tools.package_live_submission import package_live_submission
+from tools.train_participant import validate_public_training_tracks
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -385,8 +392,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         raise ValueError(f"config does not exist: {config}")
     if not track_dir.is_dir():
         raise ValueError(f"track_dir is not a directory: {track_dir}")
-    if not any(path.name != "manifest.json" for path in track_dir.glob("*.json")):
-        raise ValueError(f"track_dir contains no JSON tracks: {track_dir}")
+    validate_public_training_tracks(track_dir)
     if reward is not None and not reward.is_file():
         raise ValueError(f"reward does not exist: {reward}")
     if output_dir.exists() and not output_dir.is_dir():
@@ -395,6 +401,10 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
     steps = positive_int("steps", 2048)
     budget_steps = positive_int("budget_steps", 10000)
+    if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
+        raise ValueError(
+            f"budget_steps cannot exceed the client cap of {DEFAULT_MAX_STEPS_PER_RETRAIN:,} transitions per retrain"
+        )
     n_envs = positive_int("n_envs", 4)
     rollout_length = positive_int("rollout_length", 64)
     seed = positive_int("seed", 17)
@@ -994,10 +1004,10 @@ PAGE = r'''<!doctype html>
                  </g>
                  <text class="car-caption" x="320" y="426" text-anchor="middle">CAR HEADING ↑ · 0° = FORWARD</text>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
-            <label>Training maps<input id="track-dir" value="tracks/train" spellcheck="false"></label>
+             <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
             <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="2048"></label>
-            <label>Cumulative budget<input id="budget-steps" type="number" min="1" step="1" value="10000"></label>
+             <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="10000" step="1" value="10000"></label>
             <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="4"></label>
             <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="64"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
@@ -1018,7 +1028,7 @@ PAGE = r'''<!doctype html>
           <div class="watch">
             <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option></select>
             <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="participant_run/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
-            <label for="watch-map">Watch artifact for map:</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
+             <label for="watch-map">Watch artifact for map (replay only):</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
             <label for="watch-renderer">Read-only renderer</label><select id="watch-renderer"><option value="pygame">Pygame · local display / headless check</option><option value="browser">Browser · explicit headless / remote fallback</option></select>
             <p id="watch-hint" class="hint">Uses the selected run's saved run_config.json, including ordered rays. Reference means latest saved, not best. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
             <button id="watch" disabled aria-describedby="watch-hint watch-error">Build / watch replay</button>
@@ -1026,7 +1036,7 @@ PAGE = r'''<!doctype html>
             <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
             <p id="renderer-status" class="watch-result" role="status" aria-live="polite"></p>
           </div>
-          <div class="callout">10,000 transitions is an onboarding example, not the final scored budget.</div>
+           <div id="client-budget-callout" class="callout">12 new training allocations are available; each allocation allows at most 10,000 transitions. Resuming the same output directory does not use another allocation.</div>
         </div>
       </aside>
         <section class="panel race-panel">
@@ -1192,9 +1202,10 @@ PAGE = r'''<!doctype html>
        }
        function render(data) {
         latestStatus = data;
-      const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used);
+       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used), clientBudget = data.client_budget || {};
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
-      $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
+       $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
+       if (clientBudget.error) { $("client-budget-callout").textContent = `Client training cap unavailable: ${clientBudget.error}`; } else if (clientBudget.max_retrains) { $("client-budget-callout").textContent = `${Number(clientBudget.retraining_remaining).toLocaleString()} of ${Number(clientBudget.max_retrains).toLocaleString()} new training allocations remaining; each allows at most ${Number(clientBudget.max_steps_per_retrain).toLocaleString()} transitions. Resuming the same output directory does not use another allocation.`; }
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
        $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
@@ -1208,7 +1219,8 @@ PAGE = r'''<!doctype html>
        for (const id of ["trainer", "track-dir", "output-dir"]) if (!$(id).value.trim()) return `${id} is required.`;
        for (const id of ["steps", "budget-steps", "n-envs", "rollout-length", "seed"]) {
          const value = Number($(id).value);
-         if (!/^\d+$/.test($(id).value.trim()) || !Number.isSafeInteger(value) || value <= 0) return `${id} must be a positive integer.`;
+          if (!/^\d+$/.test($(id).value.trim()) || !Number.isSafeInteger(value) || value <= 0) return `${id} must be a positive integer.`;
+          if (id === "budget-steps" && value > 10000) return "budget-steps cannot exceed 10,000 transitions per retrain.";
        }
        for (const name of signalNames) {
          const raw = $("reward-" + name).value, value = Number(raw);
@@ -1337,8 +1349,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/":
             self._send(200, "text/html; charset=utf-8", PAGE.encode("utf-8"))
         elif path == "/api/status":
+            try:
+                client_budget = client_budget_status(
+                    ROOT / ".synapse" / "client_training_budget.json",
+                    max_retrains=DEFAULT_MAX_RETRAINS,
+                    max_steps_per_retrain=DEFAULT_MAX_STEPS_PER_RETRAIN,
+                )
+            except ClientTrainingBudgetError as exc:
+                client_budget = {"error": str(exc)}
             self._json(200, {
                 **PROCESS.snapshot(),
+                "client_budget": client_budget,
                 "action_busy": ACTION_LOCK.locked(),
                 "renderer": RENDER_PROCESS.snapshot(),
                 "race": RACE_PROCESS.snapshot(),

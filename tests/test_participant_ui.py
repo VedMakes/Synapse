@@ -129,6 +129,8 @@ class ParticipantUiTests(unittest.TestCase):
             "Build ONNX live package",
             "package_manifest.json",
             "/api/package",
+            "Training maps (all public)",
+            "client-budget-callout",
         ):
             self.assertIn(text, PAGE)
 

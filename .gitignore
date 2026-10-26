@@ -7,6 +7,7 @@ __pycache__/
 budget-state*.json
 budget-state*.json.lock
 /artifacts/
+/.synapse/
 # Local dashboard snapshots and participant-only scratch output.
 /ui-run/
 # Local test/coverage/log output.

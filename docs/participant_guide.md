@@ -232,8 +232,9 @@ console for the same `tools/train_participant.py` command. Its run flow is:
 1. Choose your trainer script.
 2. Set the nine static signal weights in the **Reward function** panel.
 3. Set the ray count and ordered angles in **Forward-facing ray sensors**.
-4. Set maps, output directory, steps, cumulative budget, parallel environments,
-   rollout length, and seed.
+4. Confirm the training maps field is the complete public `tracks/train` set,
+   then set output directory, steps, cumulative budget, parallel environments,
+   rollout length, and seed. The launcher rejects one-map training directories.
 5. Click **Start / resume participant training**.
 6. Watch the transition counter, update metrics, and bounded process log. Use
    **Stop after current process boundary** to terminate the trainer.
@@ -437,6 +438,12 @@ diagnostics. Keep calls to `RolloutCollector.collect()` bounded (8,192
 transitions by default) for predictable memory use.
 
 ## Budget and fairness draft
+
+The client launcher also caps independent retraining at 12 new output-directory
+allocations, with at most 10,000 requested transitions per allocation. Reusing
+the same compatible output directory is a resume and does not consume another
+allocation. The local ledger is `.synapse/client_training_budget.json`; it is a
+convenience guard on the participant client, not organizer-grade proof.
 
 The recommended event rule is one cumulative transition budget across the full
 training window. A transition is one accepted action applied to one active
