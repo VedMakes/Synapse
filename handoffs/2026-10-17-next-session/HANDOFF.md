@@ -641,3 +641,47 @@ evidence above.
 Review the generated map previews on a display, then commit the map/source/docs
 slice. Keep final held-out tracks private and do not claim event-grade live
 scoring, Docker isolation, or p99.9 latency from these smoke runs.
+
+## 2026-10-26 continuation: one-click live model packaging and PR resolution
+
+### Implemented
+
+- Added `tools/package_live_submission.py`. It exports a validated ONNX
+  submission from a reference or safe NumPy run, copies the matching simulation
+  config and selected public track, includes bounded provenance snapshots, and
+  writes `package_manifest.json` hashes plus a copy-ready live command. The
+  output is always a new directory and never includes participant training code,
+  Torch checkpoints, or reward callbacks.
+- Added a **Package for live race** panel and `/api/package` endpoint to
+  `tools/participant_ui.py`. The button validates the input, assigns the new
+  `submission/` directory to racer A or B, and fills the live race track/config
+  fields automatically.
+- Updated `README.md`, `docs/submission_runtime.md`, and packaging/dashboard
+  tests. The browser dashboard test now covers package assignment and the
+  optional ONNX packaging test builds its own temporary artifact.
+- Resolved PR #2's renderer conflicts locally. The merged renderer keeps the
+  PR's night-stadium/HUD/audio/assets work and the Python live WebSocket
+  integration. Resolution commit: `6682768 merge: resolve renderer PR with live
+  race support`; packaging commit: `013a635 feat: add dashboard live model
+  packaging`.
+
+### Checks
+
+- Full configured Python suite passed: **259 tests, 1 Docker integration
+  skipped** via direct `unittest discover` with a 360-second allowance.
+- Frontend dashboard/live-source tests passed: **11 Node tests**; `node --check
+  renderer/app.js` passed.
+- Real package smoke passed using the saved reference run and synthetic oval;
+  the generated package ran a two-entrant four-tick live ONNX heat with a
+  written `live-race.json`.
+- PR API status at check time: open, `mergeable: false`,
+  `mergeable_state: dirty`, base `c2c05ed`, head
+  `76dd9a241ab74e...`. The resolved branch was not pushed because GitHub
+  returned HTTP 403 for the unauthenticated local Git remote.
+
+### Next exact action
+
+Push `6682768` to the authenticated PR head branch (`feat/renderer`) or apply
+the same merge resolution through GitHub. Then re-check PR #2's mergeability.
+Manual renderer/browser screenshot review and Docker isolation remain separate
+checks.
