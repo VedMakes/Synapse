@@ -670,11 +670,15 @@ def build_onnx_package(form: dict[str, object]) -> dict[str, object]:
     source = _workspace_path(text("package_source", "artifacts/runs/run-001"), label="package source")
     output = _workspace_path(text("package_output", "artifacts/onnx-packages/participant-run"), label="package output")
     participant_id = text("package_participant", "participant-model")
+    config_value = form.get("package_config", "")
+    config = None if not isinstance(config_value, str) or not config_value.strip() else _workspace_path(config_value.strip(), label="package config")
     if not source.is_dir():
         raise ValueError(f"package source does not exist: {source}")
+    if config is not None and not config.is_file():
+        raise ValueError(f"package config does not exist: {config}")
     if output.exists():
         raise ValueError("package output already exists; choose a new directory")
-    package = package_onnx_submission(source, output, participant_id=participant_id)
+    package = package_onnx_submission(source, output, config=config, participant_id=participant_id)
     manifest = package / "package_manifest.json"
     package_data = json.loads(manifest.read_text(encoding="utf-8"))
     return {
@@ -1286,7 +1290,8 @@ PAGE = r'''<!doctype html>
            <div class="section">
              <p class="subcopy">Build a model-only ONNX bundle. It contains the validated model, matching contract/config snapshot, hashes, and provenance. It contains no track and no replay: the live runner supplies the event or local-test map, and the model produces fresh inferences during the heat.</p>
              <div class="form-grid">
-                <label>Trained run / model source<input id="package-source" value="artifacts/runs/run-001" spellcheck="false"></label>
+                 <label>Trained run / model source<input id="package-source" value="artifacts/runs/run-001" spellcheck="false"></label>
+                 <label>Matching config<input id="package-config" value="artifacts/runs/run-001/run_config.json" spellcheck="false"><span class="hint">Required for imported ONNX without a saved run_config.json.</span></label>
                 <label>New package directory<input id="package-output" value="artifacts/onnx-packages/submission-001" spellcheck="false"></label>
                <label>Package participant ID<input id="package-participant" value="racer-alpha" spellcheck="false"></label>
              </div>
@@ -1344,7 +1349,7 @@ PAGE = r'''<!doctype html>
      const $ = id => document.getElementById(id);
      const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
         const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
-       const packageFields = ["package-source", "package-output", "package-participant"];
+        const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
@@ -1506,8 +1511,8 @@ PAGE = r'''<!doctype html>
        $("watch").textContent = pending === "watch" ? "Building replay…" : "Build / watch replay";
         $("watch").setAttribute("aria-busy", String(pending === "watch"));
        }
-       function packageValidation() {
-          for (const id of ["package-source", "package-output", "package-participant"]) if (!$(id) || !String($(id).value || "").trim()) return `${id} is required.`;
+        function packageValidation() {
+           for (const id of ["package-source", "package-config", "package-output", "package-participant"]) if (!$(id) || !String($(id).value || "").trim()) return `${id} is required.`;
          return "";
        }
        function raceValidation() {
@@ -1544,7 +1549,7 @@ PAGE = r'''<!doctype html>
        syncControls();
        try {
          const result = await request(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-            if (name === "watch") renderWatch(result); else if (name === "package") renderPackage(result); else if (name === "check-model") { $("model-check-result").textContent = `PASS · ${result.parameters} parameters · ${result.nodes} nodes · ${Number(result.latency_ms).toFixed(3)} ms · parity ${Number(result.parity_max_abs_diff).toExponential(2)}`; } else if (name === "evaluate-both") { $("runs-table").textContent = result.tracks.map(track => `${track.track_id}: ${track.repeats[0].status}`).join(" · "); } else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
+            if (name === "watch") renderWatch(result); else if (name === "package") renderPackage(result); else if (name === "check-model") { const timing = result.latency_ok ? "PASS" : "WARN"; const timingNote = result.latency_ok ? "" : " · exceeds live budget"; $("model-check-result").textContent = `${timing} · ${result.parameters} parameters · ${result.nodes} nodes · ${Number(result.latency_ms).toFixed(3)} ms${timingNote} · parity ${Number(result.parity_max_abs_diff).toExponential(2)}`; } else if (name === "evaluate-both") { $("runs-table").textContent = result.tracks.map(track => `${track.track_id}: ${track.repeats[0].status}`).join(" · "); } else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
        } catch (error) { errorTarget.textContent = error.message; errorTarget.focus(); }
        finally { pending = null; actionVersion++; syncControls(); refresh(); }
      }
@@ -1552,7 +1557,7 @@ PAGE = r'''<!doctype html>
         $("check-model").addEventListener("click", () => action("check-model", { model: $("model").value, config: $("config") ? $("config").value : "config/simulation.json" }));
        $("stop").addEventListener("click", () => action("stop"));
        $("setup").addEventListener("click", () => action("setup"));
-        $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_output: $("package-output").value, package_participant: $("package-participant").value }));
+         $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_config: $("package-config").value, package_output: $("package-output").value, package_participant: $("package-participant").value }));
        $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
       $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
@@ -1562,8 +1567,8 @@ PAGE = r'''<!doctype html>
         packageFields.forEach(id => $(id).addEventListener("input", syncControls));
        raceFields.forEach(id => $(id).addEventListener("input", () => { $("race-error").textContent = raceValidation(); syncControls(); }));
        let restoredForm = false;
-       function restoreForm() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem("synapse-participant-form") || "{}"); restoredForm = Object.keys(saved).length > 0; Object.entries(saved).forEach(([id, value]) => { if ($(id) && !["trainer", "output-dir", "package-output", "race-output"].includes(id)) $(id).value = value; }); } catch (_) {} }
-       async function refreshDefaults() { if (restoredForm) return; try { const defaults = await request("/api/defaults"); ["output_dir", "package_output", "race_output"].forEach(key => { const id = key.replaceAll("_", "-"); if ($(id) && defaults[key]) $(id).value = defaults[key]; }); if (defaults.output_dir) { $("package-source").value = defaults.output_dir; $("artifact-dir").value = `${defaults.output_dir}/artifact`; } syncControls(); } catch (_) {} }
+        function restoreForm() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem("synapse-participant-form") || "{}"); restoredForm = Object.keys(saved).length > 0; Object.entries(saved).forEach(([id, value]) => { if ($(id) && !["trainer", "output-dir", "package-output", "race-output"].includes(id)) $(id).value = value; }); } catch (_) {} }
+        async function refreshDefaults() { if (restoredForm) return; try { const defaults = await request("/api/defaults"); ["output_dir", "package_output", "race_output"].forEach(key => { const id = key.replaceAll("_", "-"); if ($(id) && defaults[key]) $(id).value = defaults[key]; }); if (defaults.output_dir) { $("package-source").value = defaults.output_dir; $("package-config").value = `${defaults.output_dir}/run_config.json`; $("artifact-dir").value = `${defaults.output_dir}/artifact`; } syncControls(); } catch (_) {} }
        function persistForm() { if (typeof localStorage === "undefined") return; try { const saved = {}; [...fields, ...packageFields, ...raceFields].filter(id => id !== "trainer").forEach(id => { if ($(id)) saved[id] = $(id).value; }); localStorage.setItem("synapse-participant-form", JSON.stringify(saved)); } catch (_) {} }
        restoreForm();
        [...fields, ...packageFields, ...raceFields].forEach(id => { if ($(id)) $(id).addEventListener("input", persistForm); });

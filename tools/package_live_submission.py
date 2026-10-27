@@ -45,6 +45,13 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _resolve_no_symlink(value: str | Path, label: str) -> Path:
+    raw = Path(value)
+    if raw.is_symlink():
+        raise ValueError(f"{label} must not be a symlink")
+    return raw.resolve()
+
+
 def _copy_regular(source: Path, destination: Path, *, max_bytes: int | None = None) -> None:
     if source.is_symlink() or not source.is_file():
         raise ValueError(f"package input must be a regular file: {source}")
@@ -104,10 +111,10 @@ def package_live_submission(
 ) -> Path:
     """Build a new live package directory and return its path."""
 
-    source_path = Path(source).resolve()
-    output_path = Path(output).resolve()
-    track_path = Path(track).resolve()
-    config_path_arg = None if config is None else Path(config).resolve()
+    source_path = _resolve_no_symlink(source, "model source")
+    output_path = _resolve_no_symlink(output, "package output")
+    track_path = _resolve_no_symlink(track, "track")
+    config_path_arg = None if config is None else _resolve_no_symlink(config, "config")
     if output_path.exists() or output_path.is_symlink():
         raise ValueError("live package output must be a new directory")
     if output_path == source_path or source_path in output_path.parents:
@@ -216,9 +223,9 @@ def package_onnx_submission(
     starts the heat; the ONNX model produces fresh actions during the run.
     """
 
-    source_path = Path(source).resolve()
-    output_path = Path(output).resolve()
-    config_path_arg = None if config is None else Path(config).resolve()
+    source_path = _resolve_no_symlink(source, "model source")
+    output_path = _resolve_no_symlink(output, "package output")
+    config_path_arg = None if config is None else _resolve_no_symlink(config, "config")
     if output_path.exists() or output_path.is_symlink():
         raise ValueError("ONNX submission output must be a new directory")
     if output_path == source_path or source_path in output_path.parents:
@@ -227,6 +234,8 @@ def package_onnx_submission(
         raise ValueError("participant_id must be a simple non-empty label")
 
     artifact_source, source_kind, source_run_dir = _source_kind(source_path)
+    if source_kind == "imported_onnx" and config_path_arg is None and not (source_run_dir / "run_config.json").is_file():
+        raise ValueError("imported ONNX sources require --config because their source directory does not contain run_config.json")
     config_path = _read_config(source_run_dir, config_path_arg)
     config_value = SimulationConfig.from_file(config_path)
 

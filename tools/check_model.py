@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import subprocess
 import sys
@@ -37,6 +38,8 @@ def _probe_import(model: Path, timeout: float) -> None:
 
 
 def check_model(model: Path, config_path: Path = ROOT / "config/simulation.json", *, timeout: float = 10.0, budget_ms: float = 20.0) -> dict[str, object]:
+    if not math.isfinite(float(budget_ms)) or float(budget_ms) <= 0:
+        raise ValueError("budget_ms must be a positive finite number")
     _probe_import(model, timeout)
     config = SimulationConfig.from_file(config_path)
     track = TrackGeometry.from_file(ROOT / "tracks/train/monaco.json")

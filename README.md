@@ -756,6 +756,12 @@ the live runner consumes. It does not select or copy a circuit:
 
 The source run must contain the recognized reference files. For a NumPy source,
 pass the directory that contains its three exact artifact files instead.
+If the source is an imported ONNX artifact without a saved `run_config.json`,
+also pass its matching config explicitly:
+
+```bash
+  --config artifacts/runs/external/run_config.json
+```
 
 The package looks like this:
 
@@ -787,10 +793,12 @@ The dashboard can perform the same operation:
 
 1. Open **Build ONNX submission**.
 2. Select the trained run or model source.
-3. Enter a new package output directory.
-4. Enter a simple submission ID such as `team-a`.
-5. Click **Build ONNX submission package**.
-6. Confirm that the result shows a `submission/` directory and a
+3. Select the matching saved config. Imported ONNX sources require this when
+   they do not contain `run_config.json`.
+4. Enter a new package output directory.
+5. Enter a simple submission ID such as `team-a`.
+6. Click **Build ONNX submission package**.
+7. Confirm that the result shows a `submission/` directory and a
    `package_manifest.json`.
 
 The dashboard does not choose a map for the submission or place it into a race
