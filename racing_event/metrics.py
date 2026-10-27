@@ -28,6 +28,8 @@ class _Summary:
         self.boundary_excess_steps = 0
         self.sector_coverage_sum = 0
         self.sector_coverage_episodes = 0
+        self.sector_coverage_step_sum = 0
+        self.sector_coverage_steps = 0
         self.speed_sum = 0.0
         self.action_saturation_components = 0
         self.action_components = 0
@@ -47,11 +49,15 @@ class _Summary:
         action_delta: float,
         boundary_excess_m: float,
         off_track_progress_m: float,
+        sector_coverage_count: int | None,
     ) -> None:
         self.env_steps += 1
         self.reward_sum += reward
         self.off_track_steps += int(off_track)
         self.off_track_progress_m += off_track_progress_m
+        if sector_coverage_count is not None:
+            self.sector_coverage_step_sum += sector_coverage_count
+            self.sector_coverage_steps += 1
         self.boundary_excess_m_sum += boundary_excess_m
         self.boundary_excess_steps += int(boundary_excess_m > 0.0)
         self.speed_sum += speed
@@ -317,6 +323,7 @@ class RolloutMetrics:
                 "action_delta": action_delta,
                 "boundary_excess_m": float(boundary_excess_values[lane]),
                 "off_track_progress_m": float(off_track_progress_values[lane]),
+                "sector_coverage_count": int(coverage_values[lane]) if coverage_present else None,
             }
             self._summary.add_step(**step_args)
             track_summary.add_step(**step_args)
@@ -391,6 +398,10 @@ class RolloutMetrics:
                 float(summary.sector_coverage_sum / summary.sector_coverage_episodes)
                 if summary.sector_coverage_episodes
                 else None
+            ),
+            "mean_sector_coverage_during_update": (
+                float(summary.sector_coverage_step_sum / summary.sector_coverage_steps)
+                if summary.sector_coverage_steps else None
             ),
             "mean_speed_mps": float(summary.speed_sum / steps) if steps else None,
             "action_saturation_rate": (

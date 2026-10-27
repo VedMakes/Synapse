@@ -1,4 +1,4 @@
-"""Policy-invisible diagnostics for coverage and exploit analysis."""
+"""Policy-invisible progress zones for checkpoint rewards and coverage metrics."""
 
 from __future__ import annotations
 

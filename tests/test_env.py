@@ -53,6 +53,7 @@ class RacingEnvironmentTests(unittest.TestCase):
         self.assertAlmostEqual(reward, expected)
         self.assertEqual(set(info["state"]), {"x", "y", "heading", "speed", "lateral_velocity", "yaw_rate", "steer"})
         self.assertEqual(info["sector_coverage_count"], 1)
+        self.assertEqual(info["signals"]["checkpoint"], 1.0)
         self.assertGreaterEqual(info["sector_index"], 0)
         self.assertGreaterEqual(info["boundary_excess_m"], 0.0)
         self.assertGreaterEqual(info["off_track_progress_m"], 0.0)

@@ -32,6 +32,7 @@ EVENT_LABELS = {
     "off_track_end": "Back on track",
     "barrier_contact": "Barrier contact",
     "lap_complete": "Lap complete",
+    "checkpoint": "Progress zone reached",
 }
 RESULT_LABELS = {
     "finished": "FINISHED",

@@ -52,6 +52,7 @@ UPDATE_PATTERN = re.compile(
     r"update\s+(?P<update>\d+):\s+steps\s+(?P<used>\d+)/(?P<budget>\d+)\s+"
     r"return=(?P<return>\S+)\s+lap=(?P<lap>\S+)\s+speed=(?P<speed>\S+)\s+m/s\s+"
     r"crash=(?P<crash>\S+)\s+off_track=(?P<off_track>\S+)"
+    r"(?:\s+zones=(?P<zones>\S+))?"
 )
 LIVE_TELEMETRY_PREFIX = "LIVE_TELEMETRY "
 SYNAPSE_METRIC_PREFIX = "SYNAPSE_METRIC "
@@ -150,6 +151,9 @@ def parse_update_line(line: str) -> dict[str, object] | None:
         for name in ("return", "lap", "speed", "crash", "off_track"):
             raw = match.group(name)
             values[name] = None if raw == "n/a" else _finite_float(raw, name)
+        if match.group("zones") is not None:
+            raw = match.group("zones")
+            values["zones"] = None if raw == "n/a" else _finite_float(raw, "zones")
     except ValueError:
         return None  # Malformed trainer telemetry is still logged, not authoritative.
     return values
@@ -354,7 +358,7 @@ def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> 
             raise ValueError("reward_weights must be an object")
         return RewardConfig(weights=submitted)
     if reward_path is None:
-        # The reference baseline always trains against the published nine
+        # The reference baseline always trains against the published ten
         # signals. A blank reward-file field therefore cannot silently turn
         # the UI weights into diagnostics-only values.
         return RewardConfig()
@@ -886,7 +890,7 @@ REPLAY_LOCK = Lock()
 ACTION_LOCK = Lock()
 
 
-def public_maps() -> list[dict[str, str]]:
+def public_maps() -> list[dict[str, object]]:
     maps = []
     for path in sorted((ROOT / "tracks" / "train").glob("*.json")):
         try:
@@ -896,7 +900,13 @@ def public_maps() -> list[dict[str, str]]:
             content_hash = str(data["meta"]["content_hash"])
         except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError):
             continue
-        maps.append({"id": map_id, "display_name": display_name, "path": str(path), "content_hash": content_hash})
+        centerline = data.get("centerline")
+        if not isinstance(centerline, list) or len(centerline) < 3:
+            continue
+        maps.append({
+            "id": map_id, "display_name": display_name, "path": str(path),
+            "content_hash": content_hash, "centerline": centerline,
+        })
     return maps
 
 
@@ -1117,6 +1127,15 @@ PAGE = r'''<!doctype html>
      .metric { padding: 11px; border: 1px solid var(--line); border-radius: 3px; background: #0a131f; }
     .metric small { display: block; color: var(--muted); font-size: 10px; }
      .metric strong { display: block; margin-top: 5px; color: var(--cyan); font-size: 18px; font-variant-numeric: tabular-nums; text-shadow: 0 0 10px #45f3ff55; }
+    .training-map { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #08121e; }
+    .training-map-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+    .training-map-head strong { color: var(--cyan); font: 700 11px ui-monospace, monospace; text-transform: uppercase; }
+    .training-map select { width: 115px; padding: 7px; border: 1px solid var(--line); border-radius: 5px; color: var(--text); background: #0b141e; }
+    #training-track { display: block; width: 100%; height: 310px; margin-top: 8px; border-radius: 4px; background: radial-gradient(ellipse, #132333, #081019 72%); }
+    #training-track-line { fill: none; stroke: #557082; stroke-width: 18; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+    #training-track-center { fill: none; stroke: #45f3ff88; stroke-width: 2; stroke-dasharray: 5 6; vector-effect: non-scaling-stroke; }
+    #training-car { fill: var(--pink); stroke: white; stroke-width: 2; filter: drop-shadow(0 0 7px #ff3fa4); }
+    .training-map-status { margin: 6px 0 0; color: var(--muted); font: 11px ui-monospace, monospace; }
     .log { min-height: 166px; max-height: 245px; margin-top: 17px; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #081019; color: #b9d2dc; font: 11px/1.6 ui-monospace, monospace; white-space: pre-wrap; }
     .contract { display: grid; gap: 12px; }
      .contract-item { padding: 12px; border-left: 2px solid var(--pink); background: #0b1521; }
@@ -1206,7 +1225,7 @@ PAGE = r'''<!doctype html>
              <label>Optional actor model.py<input id="model" value="" placeholder="participant_code/model.py" spellcheck="false" aria-describedby="run-error"></label>
              <label>Optional PPO hparams JSON<input id="hparams" value="examples/ppo_hparams.json" spellcheck="false" aria-describedby="run-error"></label>
              <div class="actions"><button id="check-model" type="button">Check actor / ONNX parity</button><span id="model-check-result" class="watch-result" role="status" aria-live="polite">No actor checked yet.</span></div>
-             <div class="subpanel"><h3>Reward function · signal weights</h3><p class="subcopy">Tune the nine published transition signals. Positive rewards attract behavior; negative weights penalize it. Zero disables a signal. Limits: -100 to +100.</p><p id="reward-warnings" class="validation" data-kind="warn" role="status" aria-live="polite"></p><div class="weight-grid">
+             <div class="subpanel"><h3>Reward function · signal weights</h3><p class="subcopy">Tune the ten published transition signals. Positive rewards attract behavior; negative weights penalize it. Zero disables a signal. A checkpoint bonus is awarded once when the car first reaches each of 16 zones in an episode. Limits: -100 to +100.</p><p id="reward-warnings" class="validation" data-kind="warn" role="status" aria-live="polite"></p><div class="weight-grid">
               <label><span class="signal-label">Progress <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>progress</code> Signed forward track advance.</span><input id="reward-progress" type="number" step="0.01" value="12" aria-label="Progress weight"></label>
               <label><span class="signal-label">Speed <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>speed</code> Encourages useful speed above the floor.</span><input id="reward-speed" type="number" step="0.01" value="0.5" aria-label="Speed weight"></label>
               <label><span class="signal-label">Curvature speed <span class="signal-tag">MATCH</span></span><span class="signal-help"><code>curvature_matched_speed</code> Is zero when speed matches the curve target.</span><input id="reward-curvature_matched_speed" type="number" step="0.01" value="0.25" aria-label="Curvature matched speed weight"></label>
@@ -1214,6 +1233,7 @@ PAGE = r'''<!doctype html>
               <label><span class="signal-label">Crash <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>crash</code> One-shot impulse when barrier contact ends the run.</span><input id="reward-crash" type="number" step="0.01" value="-10" aria-label="Crash weight"></label>
               <label><span class="signal-label">Stuck <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>stuck</code> One-shot impulse when the vehicle stalls.</span><input id="reward-stuck" type="number" step="0.01" value="-8" aria-label="Stuck weight"></label>
               <label><span class="signal-label">Lap complete <span class="signal-tag">EVENT +</span></span><span class="signal-help"><code>lap_complete</code> One-shot impulse on a completed lap.</span><input id="reward-lap_complete" type="number" step="0.01" value="20" aria-label="Lap complete weight"></label>
+              <label><span class="signal-label">Checkpoint <span class="signal-tag">ZONE +</span></span><span class="signal-help"><code>checkpoint</code> Optional one-time bonus on first entry into each of 16 progress zones per episode. Zero by default.</span><input id="reward-checkpoint" type="number" step="0.01" value="0" aria-label="Checkpoint weight"></label>
               <label><span class="signal-label">Time <span class="signal-tag">DENSE -</span></span><span class="signal-help"><code>time</code> Charges every transition to discourage stalling.</span><input id="reward-time" type="number" step="0.01" value="-0.15" aria-label="Time weight"></label>
               <label><span class="signal-label">Steer smoothness <span class="signal-tag">ROUGH -</span></span><span class="signal-help"><code>steer_smoothness</code> Measures abrupt steering changes; larger means rougher.</span><input id="reward-steer_smoothness" type="number" step="0.01" value="-0.05" aria-label="Steer smoothness weight"></label>
             </div></div>
@@ -1268,15 +1288,15 @@ PAGE = r'''<!doctype html>
         <div class="section contract">
           <div class="contract-item"><strong>Configurable observation</strong><span>10 self-state values + your ordered rays + four curvature lookaheads.</span></div>
           <div class="contract-item"><strong>2 bounded actions</strong><span>Steering and signed throttle / brake in [-1, 1].</span></div>
-          <div class="contract-item"><strong>UI reward function</strong><span>All nine published signals are editable as static weights; the generated file is saved with the run.</span></div>
+          <div class="contract-item"><strong>UI reward function</strong><span>All ten published signals are editable as static weights, including one-time rewards for 16 progress zones.</span></div>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 2</strong><span>Monaco and Spa development layouts. Final event maps are not here.</span></div>
           <div class="watch">
-            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option><option value="onnx">Imported ONNX artifact</option></select>
+            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Training run · latest saved actor</option><option value="artifact">Participant · safe NumPy artifact</option><option value="onnx">Imported ONNX artifact</option></select>
              <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="artifacts/runs/run-001/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
              <label for="watch-map">Watch artifact for map (replay only):</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
             <label for="watch-renderer">Read-only renderer</label><select id="watch-renderer"><option value="pygame">Pygame · local display / headless check</option><option value="browser">Browser · explicit headless / remote fallback</option></select>
-            <p id="watch-hint" class="hint">Uses the selected run's saved run_config.json, including ordered rays. Reference means latest saved, not best. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
+            <p id="watch-hint" class="hint">Training runs include both the bundled actor and custom model.py architectures. Uses the selected run's saved run_config.json, including ordered rays; the latest saved actor is used. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
             <button id="watch" disabled aria-describedby="watch-hint watch-error">Build / watch replay</button>
             <p id="watch-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
             <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
@@ -1334,7 +1354,17 @@ PAGE = r'''<!doctype html>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
-          <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
+          <div class="training-map">
+            <div class="training-map-head"><strong>Latest training rollout · live car position</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
+            <svg id="training-track" viewBox="0 0 720 420" role="img" aria-labelledby="training-track-title training-track-description">
+              <title id="training-track-title">Training car position on the track</title>
+              <desc id="training-track-description">Shows the final car position from the latest PPO rollout for the selected parallel environment.</desc>
+              <polyline id="training-track-line" points=""></polyline><polyline id="training-track-center" points=""></polyline>
+              <polygon id="training-car" points="0,-11 7,8 0,5 -7,8" transform="translate(0 0)" hidden></polygon>
+            </svg>
+            <p id="training-map-status" class="training-map-status" role="status" aria-live="polite">The map updates after each PPO rollout; no training position yet.</p>
+          </div>
+          <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean zones reached</small><strong id="metric-zones">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
              <div id="log" class="log">Waiting for a local trainer process…</div>
          </div>
        </section>
@@ -1347,13 +1377,15 @@ PAGE = r'''<!doctype html>
   </main>
   <script>
      const $ = id => document.getElementById(id);
-     const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
+        const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "checkpoint", "time", "steer_smoothness"];
         const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
         const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
       const svgNamespace = "http://www.w3.org/2000/svg";
+      const trainingMaps = new Map();
+      let latestTrainingPosition = null;
         let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
        function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
        function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
@@ -1431,6 +1463,40 @@ PAGE = r'''<!doctype html>
        $("ray-count").setAttribute("aria-invalid", preview.error ? "true" : "false"); $("ray-angles").setAttribute("aria-invalid", preview.error ? "true" : "false");
      }
       function format(value, suffix = "") { return value === null || value === undefined ? "—" : `${Number(value).toFixed(3)}${suffix}`; }
+      function renderTrainingPosition(position) {
+        if (position) latestTrainingPosition = position;
+        const payload = latestTrainingPosition;
+        if (!payload || payload.kind !== "training_position" || !Array.isArray(payload.cars) || payload.cars.length === 0) return;
+        const cars = payload.cars.filter(car => car && Number.isInteger(car.lane) && typeof car.track_id === "string" &&
+          [car.x, car.y, car.heading, car.progress_fraction].every(value => Number.isFinite(Number(value))));
+        if (!cars.length) return;
+        const selector = $("training-lane"), available = cars.map(car => String(car.lane));
+        if ([...selector.options].map(option => option.value).filter(Boolean).join(",") !== available.join(",")) {
+          selector.replaceChildren(...cars.map(car => { const option = document.createElement("option"); option.value = String(car.lane); option.textContent = `Environment ${car.lane}`; return option; }));
+        }
+        if (!available.includes(selector.value)) selector.value = available[0];
+        const car = cars.find(item => String(item.lane) === selector.value) || cars[0];
+        const map = trainingMaps.get(car.track_id);
+        if (!map || !Array.isArray(map.centerline)) return;
+        const centerline = map.centerline.filter(point => Array.isArray(point) && point.length >= 2 && point.slice(0, 2).every(Number.isFinite));
+        if (centerline.length < 3) return;
+        const xs = centerline.map(point => point[0]), ys = centerline.map(point => point[1]);
+        const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+        const width = Math.max(1, maxX - minX), height = Math.max(1, maxY - minY), margin = 42;
+        const scale = Math.min((720 - 2 * margin) / width, (420 - 2 * margin) / height);
+        const offsetX = (720 - width * scale) / 2 - minX * scale;
+        const offsetY = (420 - height * scale) / 2 + maxY * scale;
+        const closedCenterline = [...centerline, centerline[0]];
+        const pointText = closedCenterline.map(point => `${(point[0] * scale + offsetX).toFixed(1)},${(-point[1] * scale + offsetY).toFixed(1)}`).join(" ");
+        $("training-track-line").setAttribute("points", pointText);
+        $("training-track-center").setAttribute("points", pointText);
+        const carX = Number(car.x) * scale + offsetX, carY = -Number(car.y) * scale + offsetY;
+        const heading = -Number(car.heading) * 180 / Math.PI;
+        $("training-car").setAttribute("transform", `translate(${carX.toFixed(1)} ${carY.toFixed(1)}) rotate(${heading.toFixed(1)})`);
+        $("training-car").removeAttribute("hidden");
+        const progress = Number(car.progress_fraction) * 100;
+        $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited`;
+      }
        function renderRace(data) {
         latestRace = data || {};
         const telemetry = latestRace.telemetry || {}, entrants = telemetry.entrants || [];
@@ -1463,8 +1529,9 @@ PAGE = r'''<!doctype html>
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
        $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
        if (clientBudget.error) { $("client-budget-callout").textContent = `Client training cap unavailable: ${clientBudget.error}`; } else if (clientBudget.max_retrains) { $("client-budget-callout").textContent = `${Number(clientBudget.retraining_remaining).toLocaleString()} of ${Number(clientBudget.max_retrains).toLocaleString()} new training allocations remaining; each allows at most ${Number(clientBudget.max_steps_per_retrain).toLocaleString()} transitions. Resuming the same output directory does not use another allocation.`; }
-      $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-speed").textContent = format(metrics.speed, " m/s");
+      $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-zones").textContent = format(metrics.zones, " / 16"); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
+      renderTrainingPosition(metrics.training_position);
        $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
         if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
          $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
@@ -1526,7 +1593,7 @@ PAGE = r'''<!doctype html>
      async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
        async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
        async function refreshRuns() { try { renderRuns(await request("/api/runs")); } catch (_) {} }
-       async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
+       async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { trainingMaps.set(map.id, map); const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); renderTrainingPosition(); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
      function renderWatch(result) {
        lastWatch = result;
        const target = $("watch-result");
@@ -1561,6 +1628,7 @@ PAGE = r'''<!doctype html>
        $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
       $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
+       $("training-lane").addEventListener("change", () => renderTrainingPosition());
       ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
        fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; renderRewardWarnings(); syncControls(); }); });
        ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));

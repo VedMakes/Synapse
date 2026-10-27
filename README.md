@@ -41,7 +41,7 @@ manifest is `tracks/train_manifest.json`.
 
 | Word | Plain-English meaning | Example in this repository |
 |---|---|---|
-| **Reference trainer** | The single supported training path. It applies the nine reward weights, runs PPO, and saves the result. | `tools/run_reference_baseline.py` |
+| **Reference trainer** | The single supported training path. It applies the ten reward weights, runs PPO, and saves the result. | `tools/run_reference_baseline.py` |
 | **Actor model** | Optional participant-owned PyTorch architecture supplied to the reference trainer. | `participant_code/model.py` |
 | **Run directory** | A folder containing one training attempt and its saved weights/metadata. | `artifacts/participant/manual-monaco` |
 | **Artifact** | A model saved in a format that the local evaluator can read. | `policy.pt` + `policy.json` + `training_contract.json` |
@@ -133,7 +133,7 @@ tools/run_reference_baseline.py
 ```
 
 This is intentional. It is the single place where SYNAPSE loads the
-environment, applies the nine UI reward weights, collects budgeted rollouts,
+environment, applies the ten UI reward weights, collects budgeted rollouts,
 updates PPO, and writes the checkpoint. The fixed starter actor and every
 custom actor use this same path. The compatibility wrapper
 `examples/participant_train.py` delegates to it, but you do not need to copy or
@@ -171,12 +171,12 @@ bypassed.
 | `--n-envs` | Number of parallel environment lanes requested. | `2` |
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
-| `--reward` | The nine reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
+| `--reward` | The ten reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
 | `--model` | Optional workspace-local `model.py` exposing `build_actor(obs_size)`. | `participant_code/model.py` |
 | `--hparams` | Optional JSON snapshot of PPO hyperparameters. | `examples/ppo_hparams.json` |
 
 The launcher supplies the complete public map set, the simulation contract,
-the persistent transition budget, the selected nine-weight reward file, and
+the persistent transition budget, the selected ten-weight reward file, and
 the optional actor/hyperparameter files. `--trainer` remains only as a
 compatibility flag for the reference path; arbitrary Python trainers are
 rejected. The default PPO and reward behavior are therefore reproducible from
@@ -260,7 +260,7 @@ Read the command from left to right:
 
 1. `.venv/bin/python` uses the installed project environment.
 2. `tools/train_participant.py` is the safe launcher around the reference baseline.
-3. `--reward ...` selects the nine weights used by PPO for every transition.
+3. `--reward ...` selects the ten weights used by PPO for every transition.
 4. `--track-dir ...` exposes Monaco and Spa.
 5. `--config ...` selects the sensor/physics configuration.
 6. `--output-dir ...` selects a new folder for this experiment.
@@ -374,7 +374,7 @@ and is intentionally bound to loopback; do not expose it to the internet.
 In the training panel:
 
 1. **Reference training script:** leave
-   `tools/run_reference_baseline.py` selected. It is fixed so the nine UI
+   `tools/run_reference_baseline.py` selected. It is fixed so the ten UI
    weights are used by every PPO rollout.
 2. **Actor model:** optionally enter `participant_code/model.py` to change the
    network architecture without changing PPO or reward handling.
@@ -388,15 +388,17 @@ In the training panel:
 8. **Rollout length:** enter `32` for a small test.
 9. **Seed:** enter `17`. Use a different seed only for a deliberately new
    experiment.
-10. **Reward function:** tune the nine weights; the reference baseline applies
+10. **Reward function:** tune the ten weights; the reference baseline applies
     them directly to each training transition.
 11. **Ray sensors:** leave the default nine angles in place until the baseline
     works.
 12. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
-and `run_identity.json` beside the run. The reward file always contains all
-nine published signals, even when a weight is zero. It also displays the remaining client
+and `run_identity.json` beside the run. The reward file records the selected
+signal weights. Checkpoint weight gives a one-time bonus for each of 16 zones
+reached per episode; its weight defaults to zero. During training, the status
+panel plots the latest rollout position for each parallel environment. It also displays the remaining client
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
 
@@ -462,7 +464,10 @@ instead of silently feeding the model the wrong numbers.
 ## 7. Reward design and parameter tuning
 
 SYNAPSE publishes raw transition signals, and the reference baseline converts
-the nine dashboard weights into the PPO reward on every training transition.
+the ten dashboard weights into the PPO reward on every training transition.
+The checkpoint signal fires once the first time an episode reaches each of 16
+equal-distance zones. The dashboard reports average zones reached during each
+training update, alongside lap completion and return.
 This keeps reward tuning visible, reproducible, and shared by the default and
 custom-architecture paths. Participant training does not provide a second
 reward callback or a second trainer; change `tools/run_reference_baseline.py`

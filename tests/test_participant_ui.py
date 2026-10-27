@@ -90,6 +90,10 @@ class ParticipantUiTests(unittest.TestCase):
             },
         )
 
+    def test_update_line_exposes_checkpoint_zone_progress(self) -> None:
+        line = "update 4: steps 1024/10000 return=1.000 lap=0.250 speed=20.000 m/s crash=0.000 off_track=0.100 zones=6.500"
+        self.assertEqual(parse_update_line(line)["zones"], 6.5)
+
     def test_command_is_workspace_bound_and_uses_existing_cli(self) -> None:
         with tempfile.TemporaryDirectory(dir=ROOT) as directory:
             output_dir = Path(directory).resolve()
@@ -328,10 +332,16 @@ class ParticipantUiTests(unittest.TestCase):
     def test_public_map_selector_has_two_development_maps(self) -> None:
         maps = public_maps()
         self.assertEqual(len(maps), 2)
+        self.assertGreater(len(maps[0]["centerline"]), 3)
         self.assertEqual(
             {item["id"] for item in maps},
             {"monaco", "spa"},
         )
+
+    def test_training_position_metric_preserves_nested_car_locations(self) -> None:
+        line = 'SYNAPSE_METRIC {"kind":"training_progress","training_position":{"kind":"training_position","update":2,"cars":[{"lane":0,"track_id":"monaco","x":1.5,"y":-2.0,"heading":0.2,"progress_fraction":0.1,"zones_reached":2}]}}'
+        metric = ui.parse_metric_line(line)
+        self.assertEqual(metric["training_position"]["cars"][0]["track_id"], "monaco")
 
     def test_numeric_inputs_reject_fractional_boolean_and_infinite_values(self) -> None:
         for value in (1.5, True, float("nan"), float("inf"), "not-a-number"):

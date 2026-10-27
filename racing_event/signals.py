@@ -23,6 +23,7 @@ def compute_signals(
     crash: bool,
     stuck: bool,
     lap_complete: bool,
+    checkpoint: bool = False,
 ) -> dict[str, float]:
     raw_delta = current_s - previous_s
     if raw_delta < -track.length / 2.0:
@@ -43,6 +44,7 @@ def compute_signals(
         "crash": float(crash),
         "stuck": float(stuck),
         "lap_complete": float(lap_complete),
+        "checkpoint": float(checkpoint),
         "time": dt,
         "steer_smoothness": abs(steering_command - previous_steering_command) * (speed / car.max_speed_mps),
     }

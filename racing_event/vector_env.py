@@ -368,6 +368,7 @@ class VectorizedRacingEnv:
         if ended:
             raise RuntimeError(f"episodes have ended for environments {ended}; call reset()")
         previous_distance = self.distance_since_spawn.copy()
+        previous_sector_coverage = self.sector_coverage_mask.copy()
 
         previous_projections = self._projections(active_indices)
         previous_s = np.asarray([projection.s for projection in previous_projections], dtype=np.float64)
@@ -480,6 +481,10 @@ class VectorizedRacingEnv:
                     self.stuck_ticks[index] >= self.config.episode.stuck_steps
                 ),
                 lap_complete=bool(lap_complete[index]),
+                checkpoint=not bool(
+                    int(previous_sector_coverage[index])
+                    & int(sector_bit(int(self.sector_index[index])))
+                ),
             )
             for name, value in current_signals.items():
                 signals[name][index] = value
@@ -494,6 +499,8 @@ class VectorizedRacingEnv:
                 current_events.append("barrier_contact")
             if lap_complete[index]:
                 current_events.append("lap_complete")
+            if current_signals["checkpoint"]:
+                current_events.append("checkpoint")
             events[index] = current_events
 
         observation = self._observations()

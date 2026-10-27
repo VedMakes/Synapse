@@ -6,7 +6,7 @@ in a new output directory. Fine-tuning preserves source preprocessing, uses a
 fresh optimizer, and selects on public development tracks (not event scoring).
 
 Participants may replace the actor architecture through ``--model``. The
-reference baseline remains the training and reward path so the nine published
+reference baseline remains the training and reward path so the ten published
 reward weights are applied uniformly.
 """
 
@@ -202,6 +202,23 @@ def _write_report(output: Path, state: dict[str, Any]) -> None:
     if state["fine_tune"]:
         text += f"- Selection: {SELECTION_RULE}\n- Best artifact: `best/`; report: `selection_report.json`\n"
     checkpoint.atomic_bytes(output / "training_report.md", text.encode())
+
+
+def _training_position_payload(env: VectorizedRacingEnv, update: int) -> dict[str, Any]:
+    """Expose the latest rollout state for the dashboard's live track view."""
+    cars = []
+    for lane in range(env.n_envs):
+        track = env.tracks[int(env.track_indices[lane])]
+        cars.append({
+            "lane": lane,
+            "track_id": track.track_id,
+            "x": float(env.state.x[lane]),
+            "y": float(env.state.y[lane]),
+            "heading": float(env.state.heading[lane]),
+            "progress_fraction": float(env.distance_since_spawn[lane] / track.length),
+            "zones_reached": int(int(env.sector_coverage_mask[lane]).bit_count()),
+        })
+    return {"kind": "training_position", "update": update, "cars": cars}
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
@@ -452,6 +469,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "update": state["updates"], "budget_used": status["used_steps"],
             "budget_remaining": status["remaining_steps"],
             **{name: rollout.metrics[name] for name in ("mean_episode_return", "lap_completion_rate", "mean_speed_mps", "crash_rate", "off_track_rate")},
+            "mean_sector_coverage_during_update": rollout.metrics.get("mean_sector_coverage_during_update"),
             "signal_contributions": rollout.metrics.get("signal_contributions", {}),
             "weighted_signal_sums": rollout.metrics.get("weighted_signal_sums", {}),
             **ppo_metrics.to_dict(),
@@ -468,8 +486,14 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             f"update {state['updates']}: steps {state['budget_used']}/{args.budget_steps} "
             f"return={display('mean_episode_return')} lap={display('lap_completion_rate')} "
             f"speed={display('mean_speed_mps')} m/s crash={display('crash_rate')} "
-            f"off_track={display('off_track_rate')}", flush=True,
+            f"off_track={display('off_track_rate')} zones={display('mean_sector_coverage_during_update')}", flush=True,
         )
+        print("SYNAPSE_METRIC " + json.dumps({
+            "kind": "training_progress",
+            "training_position": _training_position_payload(env, state["updates"]),
+        },
+            sort_keys=True, separators=(",", ":"), allow_nan=False,
+        ), flush=True)
     _write_report(output, state)
     return state
 

@@ -10,7 +10,7 @@ The action is `float32[2]` in `[-1, 1]`: `steering` followed by signed
 
 Training contracts record observation fields, ray angles, config hash, public
 training track IDs/hashes, deterministic evaluation settings, and the reward
-config hash. Reference training always applies all nine published reward
+config hash. Reference training always applies all ten published reward
 signals; zero is the explicit way to disable one signal. ONNX artifacts embed any trainer-side normalizer in the
 graph; the submitted contract therefore contains no separate normalizer.
 

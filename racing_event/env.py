@@ -185,7 +185,9 @@ class RacingEnv:
         truncated = bool(not terminated and (self.steps >= self.config.episode.max_steps or stuck))
         self._done = terminated or truncated
         self.sector_index = sector_index(self.distance_since_spawn, self.track.length)
-        self.sector_coverage_mask |= sector_bit(self.sector_index)
+        checkpoint_bit = sector_bit(self.sector_index)
+        checkpoint = not (self.sector_coverage_mask & checkpoint_bit)
+        self.sector_coverage_mask |= checkpoint_bit
         boundary_excess_m = max(edge.maximum_left_excess, edge.maximum_right_excess)
         off_track_progress_m = max(delta_s, 0.0) if edge.off_track else 0.0
         events: list[str] = []
@@ -197,6 +199,8 @@ class RacingEnv:
             events.append("barrier_contact")
         if lap_complete:
             events.append("lap_complete")
+        if checkpoint:
+            events.append("checkpoint")
         curvature_ahead = self.track.curvature_at_s(projection.s + max(self.config.sensors.lookahead_distances_m[0], self.state.speed * 0.75))
         signals = compute_signals(
             track=self.track,
@@ -212,6 +216,7 @@ class RacingEnv:
             crash=crash,
             stuck=stuck,
             lap_complete=lap_complete,
+            checkpoint=checkpoint,
         )
         reward = 0.0 if self.reward_config is None else self.reward_config.calculate(signals)
         observation = self._observation()
