@@ -14,7 +14,7 @@ from racing_event.config import SimulationConfig
 from racing_event.evaluation import evaluate_participant_artifact, evaluate_policy, validate_evaluation_contract
 from racing_event.observation import TrainingContract
 from racing_event.submission import load_submission
-from racing_event.ppo import FixedMLPActorCritic
+from racing_event.participant_model import build_policy_from_model, load_policy_state
 from racing_event.track import TrackGeometry
 from racing_event.vector_env import VectorizedRacingEnv
 
@@ -28,7 +28,16 @@ def evaluate_both(source: Path, config_path: Path, track_dir: Path, repeats: int
     normalizer = None
     if reference:
         contract, normalizer = TrainingContract.load(source / "training_contract.json")
-        policy, _ = FixedMLPActorCritic.load_artifact(source / "policy.pt", source / "policy.json")
+        metadata = json.loads((source / "policy.json").read_text(encoding="utf-8"))
+        if metadata.get("format") == "racing_event_actor_critic":
+            model_path = source / "model_source.py"
+            if not model_path.is_file():
+                raise ValueError("custom actor run is missing model_source.py")
+            policy, _ = build_policy_from_model(model_path, contract.observation.size)
+            load_policy_state(policy, source / "policy.pt")
+        else:
+            from racing_event.ppo import FixedMLPActorCritic
+            policy, _ = FixedMLPActorCritic.load_artifact(source / "policy.pt", source / "policy.json")
         if normalizer is not None:
             normalizer.freeze()
     else:

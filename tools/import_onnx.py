@@ -28,12 +28,17 @@ def _sha256(path: Path) -> str:
 
 
 def import_onnx(model: Path, run_dir: Path, output: Path, track_dir: Path) -> Path:
+    model = Path(model)
+    run_dir = Path(run_dir)
+    output = Path(output)
+    if model.is_symlink() or run_dir.is_symlink() or output.is_symlink():
+        raise ValueError("ONNX import paths must not be symlinks")
     model = model.resolve()
     run_dir = run_dir.resolve()
     output = output.resolve()
     if output.exists() or output.is_symlink():
         raise ValueError("ONNX import output must be a new directory")
-    if model.is_symlink() or not model.is_file():
+    if not model.is_file():
         raise ValueError("model.onnx must be a regular file")
     config_path = run_dir / "run_config.json"
     if not config_path.is_file():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import replace
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -46,7 +47,8 @@ def make_env(args: argparse.Namespace) -> BudgetedEnv:
     if not track_paths:
         raise ValueError("track-dir contains no tracks")
     tracks = tuple(TrackGeometry.from_file(path) for path in track_paths)
-    reward = None if getattr(args, "reward", None) is None else RewardConfig.from_file(args.reward)
+    reward_path = getattr(args, "reward", None)
+    reward = None if reward_path is None else RewardConfig.from_file(reward_path)
     env = VectorizedRacingEnv(tracks, config, reward, n_envs=args.n_envs)
     output = Path(args.output_dir).resolve()
     output.mkdir(parents=True, exist_ok=True)
@@ -57,14 +59,28 @@ def make_env(args: argparse.Namespace) -> BudgetedEnv:
     args._synapse_env = env
     args._synapse_budget = budget
     args._synapse_run_id = run_id
+    args._synapse_reward_path = None if reward_path is None else Path(reward_path).resolve()
     return BudgetedEnv(env, budget, run_id)
 
 
 def save(actor: ActorCritic | nn.Module, output_dir: str | Path, args: argparse.Namespace | None = None) -> Path:
     """Export a trained actor into the same validated ONNX flow as the UI."""
-    output = Path(output_dir).resolve()
-    if output.exists() and any(output.iterdir()):
-        raise ValueError("SDK output directory must be new or empty")
+    requested_output = Path(output_dir).expanduser()
+    if requested_output.is_symlink():
+        raise ValueError("SDK output path must not be a symlink")
+    output = requested_output.resolve()
+    if output.exists() and not output.is_dir():
+        raise ValueError("SDK output path must be a regular directory")
+    if output.exists():
+        # make_env owns this file in the run directory. It is expected to be
+        # present when save(actor, args.output_dir) is called after training.
+        sdk_files = {"budget.json", "budget.json.lock"}
+        unexpected = [entry.name for entry in output.iterdir() if entry.name not in sdk_files]
+        if unexpected:
+            raise ValueError(
+                "SDK output directory may contain only make_env's budget files; "
+                "choose a new output directory"
+            )
     output.mkdir(parents=True, exist_ok=True)
     env = getattr(args, "_synapse_env", None) if args is not None else None
     if env is None:
@@ -73,7 +89,14 @@ def save(actor: ActorCritic | nn.Module, output_dir: str | Path, args: argparse.
     policy = actor if isinstance(actor, ActorCritic) else build_actor_critic(actor, base_env.observation_size)
     contract = base_env.training_contract
     if base_env.reward_config is not None:
-        contract = replace(contract, reward_config_hash=base_env.reward_config.content_hash)
+        reward_path = getattr(args, "_synapse_reward_path", None)
+        if reward_path is None or not reward_path.is_file():
+            raise ValueError("the reward config used by make_env is unavailable for artifact provenance")
+        contract = replace(
+            contract,
+            reward_config_hash=base_env.reward_config.content_hash,
+            reward_sha256=hashlib.sha256(reward_path.read_bytes()).hexdigest(),
+        )
     from tools.export_onnx import export_torch_policy
     submission = output / "submission"
     export_torch_policy(policy, contract, None, submission, source_kind="synapse")

@@ -60,8 +60,6 @@ def export(args: argparse.Namespace) -> dict:
             snapshot = SimpleNamespace(track=track, config=config, state=env.state.item(0))
             return scripted_action(snapshot)[None, :]
     else:
-        from racing_event.ppo import FixedMLPActorCritic
-
         if args.contract is None:
             raise ValueError("--weights requires --contract with saved normalizer")
         contract, normalizer = TrainingContract.load(args.contract)
@@ -72,9 +70,25 @@ def export(args: argparse.Namespace) -> dict:
         # Evaluation may use one public or held-out track from a multi-track
         # training contract; preserve strict physics/observation checks.
         validate_evaluation_contract(env, contract, normalizer, require_track_match=False)
-        model, _ = FixedMLPActorCritic.load_artifact(
-            args.weights, args.metadata, expected_observation_size=env.observation_size,
-        )
+        metadata = json.loads(Path(args.metadata).read_text(encoding="utf-8")) if args.metadata else {}
+        if metadata.get("format") == "racing_event_actor_critic":
+            from racing_event.participant_model import build_policy_from_model, load_policy_state
+
+            model_path = getattr(args, "model", None)
+            if model_path is None:
+                candidate = Path(args.weights).parent / "model_source.py"
+                if candidate.is_file():
+                    model_path = candidate
+            if model_path is None:
+                raise ValueError("custom actor replay requires its saved model_source.py")
+            model, _ = build_policy_from_model(model_path, env.observation_size)
+            load_policy_state(model, args.weights)
+        else:
+            from racing_event.ppo import FixedMLPActorCritic
+
+            model, _ = FixedMLPActorCritic.load_artifact(
+                args.weights, args.metadata, expected_observation_size=env.observation_size,
+            )
         policy = model.as_policy(deterministic=True)
 
     header = replay_header(track, config, mode=mode, participant_id=args.participant_id)
@@ -99,6 +113,7 @@ def main() -> None:
     policy_group.add_argument("--artifact-dir", type=Path, help="declarative participant model artifact directory")
     parser.add_argument("--metadata", type=Path)
     parser.add_argument("--contract", type=Path)
+    parser.add_argument("--model", type=Path, help="optional custom actor model.py; auto-detected beside saved weights")
     parser.add_argument("--track", type=Path, default=Path("tracks/train/monaco.json"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--steps", type=int, default=None, help="optional preview horizon; never extends engine limits")

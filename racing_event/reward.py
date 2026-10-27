@@ -25,6 +25,7 @@ SIGNAL_NAMES = (
     "crash",
     "stuck",
     "lap_complete",
+    "checkpoint",
     "time",
     "steer_smoothness",
 )
@@ -117,6 +118,7 @@ class RewardConfig:
         "crash": -10.0,
         "stuck": -8.0,
         "lap_complete": 20.0,
+        "checkpoint": 0.0,
         "time": -0.15,
         "steer_smoothness": -0.05,
     })
@@ -159,7 +161,12 @@ class RewardConfig:
 
     @property
     def content_hash(self) -> str:
-        encoded = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
+        payload = self.to_dict()
+        # Preserve run identities for pre-checkpoint files that implicitly
+        # disabled this signal, while still writing the explicit zero weight.
+        if payload["weights"]["checkpoint"] == 0.0:
+            del payload["weights"]["checkpoint"]
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest()
 
     def save(self, path: str | Path) -> None:

@@ -21,7 +21,7 @@ You will complete this sequence:
 2. Install the local Python environment and optional evaluator/live dependencies.
 3. Choose an actor architecture. The reference PPO trainer is already included.
 4. Run a **tiny** training experiment so failures are cheap.
-5. Open a replay and look at what the car actually did.
+5. Follow the live rollout position in the dashboard, then replay what the car actually did.
 6. Change one parameter at a time and repeat.
 7. Export the best saved model to the validated ONNX format.
 8. Build a model-only ONNX submission package.
@@ -41,7 +41,7 @@ manifest is `tracks/train_manifest.json`.
 
 | Word | Plain-English meaning | Example in this repository |
 |---|---|---|
-| **Reference trainer** | The single supported training path. It applies the nine reward weights, runs PPO, and saves the result. | `tools/run_reference_baseline.py` |
+| **Reference trainer** | The single supported training path. It applies the ten reward weights, runs PPO, and saves the result. | `tools/run_reference_baseline.py` |
 | **Actor model** | Optional participant-owned PyTorch architecture supplied to the reference trainer. | `participant_code/model.py` |
 | **Run directory** | A folder containing one training attempt and its saved weights/metadata. | `artifacts/participant/manual-monaco` |
 | **Artifact** | A model saved in a format that the local evaluator can read. | `policy.pt` + `policy.json` + `training_contract.json` |
@@ -133,7 +133,7 @@ tools/run_reference_baseline.py
 ```
 
 This is intentional. It is the single place where SYNAPSE loads the
-environment, applies the nine UI reward weights, collects budgeted rollouts,
+environment, applies the ten UI reward weights, collects budgeted rollouts,
 updates PPO, and writes the checkpoint. The fixed starter actor and every
 custom actor use this same path. The compatibility wrapper
 `examples/participant_train.py` delegates to it, but you do not need to copy or
@@ -167,16 +167,16 @@ bypassed.
 | `--config` | The simulation and sensor configuration file. | `config/simulation.json` |
 | `--output-dir` | Where your script must save the run. | `artifacts/runs/team-a` |
 | `--steps` | Maximum transitions requested in this invocation. | `256` |
-| `--budget-steps` | Persistent maximum allowed by this local run ledger. | `10000` |
+| `--budget-steps` | Persistent maximum allowed by this local run ledger (up to 1,000,000). | `1000000` |
 | `--n-envs` | Number of parallel environment lanes requested. | `2` |
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
-| `--reward` | The nine reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
+| `--reward` | The ten reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
 | `--model` | Optional workspace-local `model.py` exposing `build_actor(obs_size)`. | `participant_code/model.py` |
 | `--hparams` | Optional JSON snapshot of PPO hyperparameters. | `examples/ppo_hparams.json` |
 
 The launcher supplies the complete public map set, the simulation contract,
-the persistent transition budget, the selected nine-weight reward file, and
+the persistent transition budget, the selected ten-weight reward file, and
 the optional actor/hyperparameter files. `--trainer` remains only as a
 compatibility flag for the reference path; arbitrary Python trainers are
 rejected. The default PPO and reward behavior are therefore reproducible from
@@ -250,7 +250,7 @@ This command runs the reference PPO baseline with its default actor:
   --config config/simulation.json \
   --output-dir artifacts/runs/first-check \
   --steps 256 \
-  --budget-steps 10000 \
+  --budget-steps 1000000 \
   --n-envs 2 \
   --rollout-length 32 \
   --seed 17
@@ -260,12 +260,12 @@ Read the command from left to right:
 
 1. `.venv/bin/python` uses the installed project environment.
 2. `tools/train_participant.py` is the safe launcher around the reference baseline.
-3. `--reward ...` selects the nine weights used by PPO for every transition.
+3. `--reward ...` selects the ten weights used by PPO for every transition.
 4. `--track-dir ...` exposes Monaco and Spa.
 5. `--config ...` selects the sensor/physics configuration.
 6. `--output-dir ...` selects a new folder for this experiment.
 7. `--steps 256` makes this invocation short.
-8. `--budget-steps 10000` creates the local transition ceiling.
+8. `--budget-steps 1000000` creates the local transition ceiling.
 9. `--n-envs 2` asks for two parallel lanes.
 10. `--rollout-length 32` asks for 32 transitions per lane per update.
 11. `--seed 17` makes this attempt reproducible.
@@ -312,8 +312,8 @@ These two numbers are different:
 - `--steps` is the amount requested **this time you start the command**.
 - `--budget-steps` is the persistent local ceiling for the run directory.
 
-For example, `--steps 256 --budget-steps 10000` requests 256 transitions and
-allows future reference-starter resumes to spend up to 10,000 accepted
+For example, `--steps 256 --budget-steps 1000000` requests 256 transitions and
+allows future reference-starter resumes to spend up to 1,000,000 accepted
 transitions in that run ledger. `n_envs` lanes are charged individually. A
 vector call with two active lanes costs two transitions.
 
@@ -325,8 +325,8 @@ every actor architecture.
 ### 4.4 Client retrain cap
 
 The participant launcher now allows **12 independent training allocations** on
-one client. Each allocation can request at most **10,000 transitions**. This
-gives a practical maximum of 120,000 requested training transitions while still
+one client. Each allocation can request at most **1,000,000 transitions**. This
+gives a practical maximum of 12,000,000 requested training transitions while still
 leaving room for a baseline, multiple reward/model experiments, two seed
 checks, and final confirmation runs.
 
@@ -342,6 +342,11 @@ The dashboard shows the remaining allocation count. This is a client-side
 operational guard, not organizer-grade proof: someone who controls the client
 can delete or edit local files. Organizer-side evaluation must enforce the
 actual competition budget separately.
+
+When upgrading from a lower client cap, SYNAPSE raises the ledger cap while
+preserving its allocation history. Existing output folders keep the budget
+assigned when they were first allocated; choose a new output folder to start a
+run with the 1,000,000-step limit.
 
 Teacher demonstrations used by the optional scripted/imitation helpers are
 local diagnostic data and are not event submissions. Participant environment
@@ -374,7 +379,7 @@ and is intentionally bound to loopback; do not expose it to the internet.
 In the training panel:
 
 1. **Reference training script:** leave
-   `tools/run_reference_baseline.py` selected. It is fixed so the nine UI
+   `tools/run_reference_baseline.py` selected. It is fixed so the ten UI
    weights are used by every PPO rollout.
 2. **Actor model:** optionally enter `participant_code/model.py` to change the
    network architecture without changing PPO or reward handling.
@@ -383,22 +388,35 @@ In the training panel:
 4. **Output directory:** type a new folder such as
    `artifacts/runs/dashboard-first`.
 5. **Steps:** enter `256` for the first smoke run.
-6. **Budget steps:** enter `10000` for the local onboarding example.
-7. **Parallel environments:** enter `1` or `2` while learning the workflow.
-8. **Rollout length:** enter `32` for a small test.
-9. **Seed:** enter `17`. Use a different seed only for a deliberately new
+6. **Budget steps:** the default ceiling is `1000000`; the first run can stop
+   much earlier when early stopping detects that validation has plateaued.
+7. **Early stopping:** enabled by default. It checks public-map driving results
+   every few PPO updates and stops after five checks without a new best result.
+   Raise or lower the patience field to change that window, or disable early
+   stopping to use the requested steps. The trainer shows the current validation
+   streak beside the live car position. Validation checks use a separate
+   bounded diagnostic budget and do not spend training transitions.
+8. **Parallel environments:** enter `1` or `2` while learning the workflow.
+9. **Rollout length:** enter `32` for a small test.
+10. **Seed:** enter `17`. Use a different seed only for a deliberately new
    experiment.
-10. **Reward function:** tune the nine weights; the reference baseline applies
+11. **Reward function:** tune the ten weights; the reference baseline applies
     them directly to each training transition.
-11. **Ray sensors:** leave the default nine angles in place until the baseline
+12. **Ray sensors:** leave the default nine angles in place until the baseline
     works.
-12. Press **Start / resume participant training** once.
+13. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
-and `run_identity.json` beside the run. The reward file always contains all
-nine published signals, even when a weight is zero. It also displays the remaining client
+and `run_identity.json` beside the run. The reward file records the selected
+signal weights. Checkpoint weight gives a one-time bonus for each of 16 zones
+reached per episode; its weight defaults to zero. During training, the status
+panel plots the latest rollout position for each parallel environment. It also displays the remaining client
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
+
+While training, use the **Latest training rollout** map to follow each parallel
+environment. Select a lane to inspect its car on Monaco or Spa; the marker and
+lap-distance/zone readout update after each PPO rollout.
 
 ## 6. Sensors and actions: what the model sees and does
 
@@ -462,7 +480,10 @@ instead of silently feeding the model the wrong numbers.
 ## 7. Reward design and parameter tuning
 
 SYNAPSE publishes raw transition signals, and the reference baseline converts
-the nine dashboard weights into the PPO reward on every training transition.
+the ten dashboard weights into the PPO reward on every training transition.
+The checkpoint signal fires once the first time an episode reaches each of 16
+equal-distance zones. The dashboard reports average zones reached during each
+training update, alongside lap completion and return.
 This keeps reward tuning visible, reproducible, and shared by the default and
 custom-architecture paths. Participant training does not provide a second
 reward callback or a second trainer; change `tools/run_reference_baseline.py`
@@ -540,7 +561,7 @@ cp examples/baseline_reward.json participant_code/reward_off_track.json
   --track-dir tracks/train \
   --config config/simulation.json \
   --output-dir artifacts/runs/off-track-stronger \
-  --steps 2048 --budget-steps 10000 \
+  --steps 2048 --budget-steps 1000000 \
   --n-envs 2 --rollout-length 32 --seed 17
 ```
 
@@ -556,13 +577,13 @@ Keep the reward and maps fixed and change only the seed and output folder:
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-17 \
-  --steps 2048 --budget-steps 10000 --n-envs 2 --rollout-length 32 --seed 17
+  --steps 2048 --budget-steps 1000000 --n-envs 2 --rollout-length 32 --seed 17
 
 .venv/bin/python tools/train_participant.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-23 \
-  --steps 2048 --budget-steps 10000 --n-envs 2 --rollout-length 32 --seed 23
+  --steps 2048 --budget-steps 1000000 --n-envs 2 --rollout-length 32 --seed 23
 ```
 
 Two seeds are two separate experiments. They are not two models inside one
@@ -575,7 +596,7 @@ For the reference trainer, begin here:
 | Parameter | First smoke | Small experiment | Why |
 |---|---:|---:|---|
 | `steps` | 256 | 2,048 or more | Invocation work, not the lifetime ledger. |
-| `budget-steps` | 10,000 | 10,000 | Local prototype ceiling. |
+| `budget-steps` | 1,000,000 | 1,000,000 | Local per-run ceiling; early stopping can finish first. |
 | `n-envs` | 1 | 2 or 4 | More lanes collect more data per update. |
 | `rollout-length` | 16 or 32 | 32 or 64 | Must multiply with `n-envs` to at most 8,192. |
 | `seed` | 17 | 17, then 23 | Repeatability and variability checks. |
@@ -596,7 +617,8 @@ it never runs the environment itself.
 After a dashboard training run:
 
 1. Keep **Output directory** set to the exact run directory.
-2. Choose **Reference · latest saved artifact** for a reference run.
+2. Choose **Training run · latest saved actor** for either the bundled actor
+   or a custom `model.py` actor.
 3. Choose `Monaco` or `Spa`.
 4. Choose **Pygame** for a local window or **Browser** for a browser replay.
 5. Click **Build / watch replay**.
@@ -605,7 +627,8 @@ After a dashboard training run:
 
 The selected run must contain `run_config.json`. This file records the actual
 ray order and other settings. The dashboard refuses to guess a default when it
-is missing.
+is missing. You can watch or evaluate a custom actor directly from its training
+run; ONNX packaging is not required for local iteration.
 
 ### 8.2 Command-line replay for a reference run
 
@@ -756,6 +779,12 @@ the live runner consumes. It does not select or copy a circuit:
 
 The source run must contain the recognized reference files. For a NumPy source,
 pass the directory that contains its three exact artifact files instead.
+If the source is an imported ONNX artifact without a saved `run_config.json`,
+also pass its matching config explicitly:
+
+```bash
+  --config artifacts/runs/external/run_config.json
+```
 
 The package looks like this:
 
@@ -787,10 +816,12 @@ The dashboard can perform the same operation:
 
 1. Open **Build ONNX submission**.
 2. Select the trained run or model source.
-3. Enter a new package output directory.
-4. Enter a simple submission ID such as `team-a`.
-5. Click **Build ONNX submission package**.
-6. Confirm that the result shows a `submission/` directory and a
+3. Select the matching saved config. Imported ONNX sources require this when
+   they do not contain `run_config.json`.
+4. Enter a new package output directory.
+5. Enter a simple submission ID such as `team-a`.
+6. Click **Build ONNX submission package**.
+7. Confirm that the result shows a `submission/` directory and a
    `package_manifest.json`.
 
 The dashboard does not choose a map for the submission or place it into a race
@@ -898,7 +929,7 @@ limit when you understand the checkpoint rules:
   --track-dir tracks/train \
   --config config/simulation.json \
   --output-dir artifacts/runs/first-check \
-  --steps 256 --budget-steps 10000 \
+  --steps 256 --budget-steps 1000000 \
   --n-envs 2 --rollout-length 32 --seed 17
 ```
 
@@ -971,6 +1002,9 @@ as `--config`:
 mkdir -p artifacts/runs/cli-run
 cp config/simulation.json artifacts/runs/cli-run/run_config.json
 ```
+
+Use the same config file that trained the model, especially if you changed ray
+count or order. A mismatch changes the model's observation contract.
 
 Then use `--config artifacts/runs/cli-run/run_config.json` during training.
 Keep the file in the run directory for replay and packaging.

@@ -33,7 +33,7 @@ FRAME_FIELDS = {
     "terminated", "truncated",
 }
 STATUSES = {"finished", "dnf_crash", "dnf_stuck", "dnf_backward", "dnf_timeout"}
-EVENTS = {"off_track_start", "off_track_end", "barrier_contact", "lap_complete"}
+EVENTS = {"off_track_start", "off_track_end", "barrier_contact", "lap_complete", "checkpoint"}
 TRACK_ARRAYS = (
     "centerline", "s", "heading", "curvature", "half_width_left", "half_width_right",
     "left_boundary", "right_boundary", "barrier_left", "barrier_right",

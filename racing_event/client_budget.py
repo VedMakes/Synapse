@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_RETRAINS = 12
-DEFAULT_MAX_STEPS_PER_RETRAIN = 10_000
+DEFAULT_MAX_STEPS_PER_RETRAIN = 1_000_000
 _TOP_LEVEL_KEYS = {"schema_version", "max_retrains", "max_steps_per_retrain", "allocations", "head_hash"}
 _ALLOCATION_KEYS = {"slot", "output_dir", "budget_steps"}
 
@@ -149,6 +149,19 @@ def _validate_limits(max_retrains: int, max_steps_per_retrain: int) -> None:
         raise ClientTrainingBudgetError("max_steps_per_retrain must be a positive integer")
 
 
+def _upgrade_step_limit(state: dict[str, Any], max_retrains: int, max_steps_per_retrain: int) -> bool:
+    """Raise a persisted client cap without discarding its allocation history."""
+    if state["max_retrains"] != max_retrains:
+        raise ClientTrainingBudgetError("client training budget configuration changed")
+    current_limit = state["max_steps_per_retrain"]
+    if current_limit == max_steps_per_retrain:
+        return False
+    if current_limit < max_steps_per_retrain:
+        state["max_steps_per_retrain"] = max_steps_per_retrain
+        return True
+    raise ClientTrainingBudgetError("client training budget configuration changed")
+
+
 def reserve_training_allocation(
     path: str | os.PathLike[str],
     output_dir: str | os.PathLike[str],
@@ -170,10 +183,8 @@ def reserve_training_allocation(
     output_key = str(Path(output_dir).resolve())
     with _exclusive_lock(budget_path):
         state = _read(budget_path) if budget_path.exists() else _new_state(max_retrains, max_steps_per_retrain)
-        if state["max_retrains"] != max_retrains or state["max_steps_per_retrain"] != max_steps_per_retrain:
-            raise ClientTrainingBudgetError(
-                "client training budget configuration changed; remove the local client only when intentionally resetting it"
-            )
+        if _upgrade_step_limit(state, max_retrains, max_steps_per_retrain):
+            _write_state_locked(budget_path, state)
         for allocation in state["allocations"]:
             if allocation["output_dir"] == output_key:
                 if allocation["budget_steps"] != budget_steps:
@@ -218,8 +229,8 @@ def release_training_allocation(
         if not budget_path.exists():
             return False
         state = _read(budget_path)
-        if state["max_retrains"] != max_retrains or state["max_steps_per_retrain"] != max_steps_per_retrain:
-            raise ClientTrainingBudgetError("client training budget configuration changed")
+        if _upgrade_step_limit(state, max_retrains, max_steps_per_retrain):
+            _write_state_locked(budget_path, state)
         before = len(state["allocations"])
         state["allocations"] = [item for item in state["allocations"] if item["output_dir"] != output_key]
         if len(state["allocations"]) == before:
@@ -242,8 +253,8 @@ def client_budget_status(
     budget_path = _path_for(path)
     with _exclusive_lock(budget_path):
         state = _read(budget_path) if budget_path.exists() else _new_state(max_retrains, max_steps_per_retrain)
-    if state["max_retrains"] != max_retrains or state["max_steps_per_retrain"] != max_steps_per_retrain:
-        raise ClientTrainingBudgetError("client training budget configuration changed")
+        if _upgrade_step_limit(state, max_retrains, max_steps_per_retrain):
+            _write_state_locked(budget_path, state)
     return {
         "max_retrains": state["max_retrains"],
         "retraining_started": len(state["allocations"]),
