@@ -101,7 +101,8 @@ python3.11 tools/setup_participant.py
 ```
 
 This creates `.venv/` and installs the locked CPU dependencies. A GPU is not
-required. If setup succeeds, check the environment with:
+required. The training UI has a separate CUDA processor option and checks GPU
+readiness when selected. If setup succeeds, check the environment with:
 
 ```bash
 .venv/bin/python --version
@@ -171,6 +172,7 @@ bypassed.
 | `--n-envs` | Number of parallel environment lanes requested. | `2` |
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
+| `--device` | PPO processor (`cpu` or `cuda`); the simulator remains CPU-side. | `cpu` |
 | `--reward` | The ten reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
 | `--model` | Optional workspace-local `model.py` exposing `build_actor(obs_size)`. | `participant_code/model.py` |
 | `--hparams` | Optional JSON snapshot of PPO hyperparameters. | `examples/ppo_hparams.json` |
@@ -390,6 +392,13 @@ alone.
 References: [Stable-Baselines3 policy network guidance](https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html),
 [Stable-Baselines3 PPO parameters](https://stable-baselines3.readthedocs.io/en/v1.0/modules/ppo.html),
 [neural-network controllers for autonomous racing with LiDAR](https://arxiv.org/abs/1910.11309).
+
+The training UI defaults to CPU and also offers **GPU · CUDA**. GPU selection
+places the policy, PPO update tensors, and optimizer on CUDA; the simulator and
+rollout collection remain CPU-side. The trainer checks CUDA availability in the
+selected Python environment and reports the missing PyTorch/CUDA/driver/device
+component instead of silently falling back to CPU. CPU and GPU checkpoints have
+different runtime identities, so resume a run on its original processor.
 
 Teacher demonstrations used by the optional scripted/imitation helpers are
 local diagnostic data and are not event submissions. Participant environment

@@ -178,9 +178,8 @@ class ActorCritic(nn.Module):
         log_std = self.log_std.clamp(-5.0, 2.0).expand_as(mean)
         return Normal(mean, log_std.exp())
 
-    @staticmethod
-    def _tensor(value: Tensor | np.ndarray, width: int, name: str) -> Tensor:
-        tensor = value if isinstance(value, Tensor) else torch.as_tensor(value)
+    def _tensor(self, value: Tensor | np.ndarray, width: int, name: str) -> Tensor:
+        tensor = torch.as_tensor(value, device=self.log_std.device)
         if tensor.ndim != 2 or tensor.shape[1] != width:
             raise ValueError(f"{name} must have shape (batch, {width})")
         if not torch.isfinite(tensor).all():
@@ -344,9 +343,8 @@ class FixedMLPActorCritic(ActorCritic):
         entropy = distribution.entropy().sum(dim=-1)
         return log_probability, entropy, value
 
-    @staticmethod
-    def _tensor(value: Tensor | np.ndarray, width: int, name: str) -> Tensor:
-        tensor = value if isinstance(value, Tensor) else torch.as_tensor(value)
+    def _tensor(self, value: Tensor | np.ndarray, width: int, name: str) -> Tensor:
+        tensor = torch.as_tensor(value, device=self.log_std.device)
         if tensor.ndim != 2 or tensor.shape[1] != width:
             raise ValueError(f"{name} must have shape (batch, {width})")
         if not torch.isfinite(tensor).all():
@@ -619,9 +617,10 @@ class PPOTrainer:
             active_observations, observation_size, "observations"
         )
         action_tensor = self.policy._tensor(active_actions, PPO_ACTION_SIZE, "actions")
-        old_log_probability_tensor = torch.as_tensor(old_log_probabilities, dtype=torch.float32)
-        advantage_tensor = torch.as_tensor(active_advantages, dtype=torch.float32)
-        return_tensor = torch.as_tensor(active_returns, dtype=torch.float32)
+        device = observation_tensor.device
+        old_log_probability_tensor = torch.as_tensor(old_log_probabilities, dtype=torch.float32, device=device)
+        advantage_tensor = torch.as_tensor(active_advantages, dtype=torch.float32, device=device)
+        return_tensor = torch.as_tensor(active_returns, dtype=torch.float32, device=device)
 
         last_policy_loss = 0.0
         last_value_loss = 0.0

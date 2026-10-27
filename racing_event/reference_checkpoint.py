@@ -105,19 +105,26 @@ def writer_lock(output: Path) -> Iterator[None]:
             fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
 
 
-def runtime_identity() -> dict[str, Any]:
+def runtime_identity(device: str = "cpu") -> dict[str, Any]:
     root = Path(__file__).resolve().parents[1]
     names = (
         "racing_event/ppo.py", "racing_event/rollout.py", "racing_event/metrics.py",
         "racing_event/reference_checkpoint.py", "racing_event/evaluation.py",
         "racing_event/evaluation_audit.py", "tools/run_reference_baseline.py",
     )
+    processor: dict[str, Any] = {"device": device}
+    if device.startswith("cuda"):
+        processor.update({
+            "cuda_version": torch.version.cuda,
+            "device_name": torch.cuda.get_device_name(torch.device(device)),
+            "device_capability": list(torch.cuda.get_device_capability(torch.device(device))),
+        })
     return {
         "engine": engine_code_hash(),
         "trainer_sources": {name: sha256(root / name) for name in names},
         "python": platform.python_version(), "numpy": np.__version__,
         "torch": str(torch.__version__), "machine": platform.machine(),
-        "torch_threads": torch.get_num_threads(), "device": "cpu",
+        "torch_threads": torch.get_num_threads(), "processor": processor,
         "deterministic_algorithms": torch.are_deterministic_algorithms_enabled(),
     }
 
@@ -213,8 +220,13 @@ def restore_collector(collector: Any, payload: Any) -> None:
 
 
 def save_local_state(path: Path, trainer: Any) -> None:
+    device = next(trainer.policy.parameters()).device
+    cuda_rng = torch.cuda.get_rng_state(device) if device.type == "cuda" else None
     with path.open("wb") as stream:
-        torch.save({"optimizer": trainer.optimizer.state_dict(), "torch_rng": torch.get_rng_state()}, stream)
+        torch.save({
+            "optimizer": trainer.optimizer.state_dict(), "torch_rng": torch.get_rng_state(),
+            "cuda_rng": cuda_rng,
+        }, stream)
         stream.flush()
         os.fsync(stream.fileno())
 
@@ -222,7 +234,7 @@ def save_local_state(path: Path, trainer: Any) -> None:
 def restore_local_state(path: Path, trainer: Any) -> None:
     try:
         state = torch.load(path, map_location="cpu", weights_only=True)
-        if set(state) != {"optimizer", "torch_rng"}:
+        if set(state) not in ({"optimizer", "torch_rng"}, {"optimizer", "torch_rng", "cuda_rng"}):
             raise ValueError("missing local state")
         optimizer = state["optimizer"]
         live = trainer.optimizer.state_dict()
@@ -243,6 +255,14 @@ def restore_local_state(path: Path, trainer: Any) -> None:
                     raise ValueError("optimizer tensor shape mismatch")
         trainer.optimizer.load_state_dict(optimizer)
         torch.set_rng_state(state["torch_rng"])
+        device = next(trainer.policy.parameters()).device
+        cuda_rng = state.get("cuda_rng")
+        if device.type == "cuda":
+            if not isinstance(cuda_rng, torch.Tensor):
+                raise ValueError("GPU checkpoint is missing its CUDA random state")
+            torch.cuda.set_rng_state(cuda_rng, device)
+        elif cuda_rng is not None:
+            raise ValueError("CPU training cannot resume a CUDA checkpoint")
     except Exception as exc:
         raise ValueError(f"invalid safe local Torch checkpoint: {path.name}") from exc
 

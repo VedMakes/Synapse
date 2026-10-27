@@ -69,6 +69,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("participant_run"))
     parser.add_argument("--budget-steps", type=int, default=1_000_000)
     parser.add_argument("--steps", type=int, default=1_000_000, help="maximum training transitions in this invocation")
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu", help="PPO training processor")
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--rollout-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=17)
@@ -245,15 +246,32 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise ValueError("--steps, --n-envs, and --rollout-length must be positive")
     if args.n_envs * args.rollout_length > 8_192:
         raise ValueError("n_envs * rollout_length must be at most 8192 for the bounded reference trainer")
+    requested_device = getattr(args, "device", "cpu")
+    if requested_device == "cuda":
+        if torch.version.cuda is None:
+            raise ValueError(
+                f"GPU selected, but this PyTorch build ({torch.__version__}) has no CUDA support"
+            )
+        if not torch.cuda.is_available():
+            raise ValueError(
+                f"GPU selected, but CUDA is unavailable (PyTorch CUDA build {torch.version.cuda}, "
+                f"visible devices {torch.cuda.device_count()}); check GPU driver/device visibility"
+            )
+        args._resolved_device = torch.device("cuda:0")
+    elif requested_device == "cpu":
+        args._resolved_device = torch.device("cpu")
+    else:
+        raise ValueError("--device must be cpu or cuda")
     output = args.output_dir.resolve()
     with checkpoint.writer_lock(output):
         return _run_locked(args, output)
 
 
 def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
-    # The tiny CPU reference model has no need for a large thread pool; fixing
-    # this also makes the numerical runtime contract independent of host cores.
+    # The reference model has no need for a large CPU thread pool; fixing this
+    # keeps its host-side simulator and data processing consistent on either device.
     torch.set_num_threads(1)
+    device = getattr(args, "_resolved_device", torch.device("cpu"))
     current = checkpoint.load_current(output)
     saved_manifest = None if current is None else current[1]
     saved_identity = None if current is None else saved_manifest["identity"]
@@ -397,7 +415,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         }
     hparams_path = getattr(args, "hparams", None)
     identity = {
-        "runtime": checkpoint.runtime_identity(), "contract": contract.to_dict(),
+        "runtime": checkpoint.runtime_identity(str(device)), "contract": contract.to_dict(),
         "ppo": hp.to_dict(), "n_envs": args.n_envs, "seed": args.seed,
         "budget_steps": args.budget_steps, "warm_start": origin,
         "preprocessing": "running_reference_normalizer" if origin is None else origin["preprocessing"],
@@ -476,6 +494,9 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             raise ValueError("external budget differs from committed boundary; spent steps retained, exact recovery refused (interrupted update)")
     elif status["used_steps"]:
         raise ValueError("external budget already spent without an authoritative checkpoint; exact recovery refused")
+    policy.to(device)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(args.seed)
     trainer = PPOTrainer(policy, hp)
     collector = RolloutCollector(env, policy.as_policy(), budget, run_id, normalizer=normalizer, seed=args.seed)
     if current is not None:
@@ -547,6 +568,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
 
     if current is None:
         save(evaluate=selection_enabled)
+    print(f"training processor: {device}" + (f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""), flush=True)
     target = 0 if state.get("early_stopped", False) else min(args.steps, status["remaining_steps"])
     invocation_updates = 0
     while target > 0 and invocation_updates < max_updates and not state.get("early_stopped", False):

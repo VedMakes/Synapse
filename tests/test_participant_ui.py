@@ -99,6 +99,8 @@ class ParticipantUiTests(unittest.TestCase):
             output_dir = Path(directory).resolve()
             command = build_training_command({"output_dir": str(output_dir), "trainer": "examples/participant_train.py", "steps": 16})
         self.assertTrue(command[1].endswith("tools/train_participant.py"))
+        self.assertIn("--device", command)
+        self.assertEqual(command[command.index("--device") + 1], "cpu")
         self.assertIn("--trainer", command)
         self.assertTrue(command[command.index("--trainer") + 1].endswith("/tools/run_reference_baseline.py"))
         self.assertIn("--output-dir", command)
@@ -110,6 +112,8 @@ class ParticipantUiTests(unittest.TestCase):
         for text in (
             "Start / resume participant training",
             "Steps this run",
+            'id="processor"',
+            "GPU · CUDA",
             "Spend 1 iteration · add 1,000,000 steps to this model",
             "Pause freezes the trainer process",
             "Reward function · signal weights",

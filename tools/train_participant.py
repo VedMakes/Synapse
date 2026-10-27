@@ -136,6 +136,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--track-dir", type=Path, default=Path("tracks/train"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runs/run-001"))
+    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu", help="PPO training processor")
     parser.add_argument("--model", type=Path, default=None, help="optional participant model.py exposing build_actor(obs_size)")
     parser.add_argument("--hparams", type=Path, default=None, help="optional JSON PPO hyperparameter snapshot")
     parser.add_argument("--init-from", type=Path, default=None, help="optional run/artifact to warm-start in a new output directory")
@@ -188,6 +189,7 @@ def build_training_command(args: argparse.Namespace) -> list[str]:
         "--output-dir", str(output_dir),
         "--steps", str(steps),
         "--budget-steps", str(budget_steps),
+        "--device", getattr(args, "device", "cpu"),
         "--n-envs", str(n_envs),
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
