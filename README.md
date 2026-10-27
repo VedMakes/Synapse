@@ -416,8 +416,13 @@ later replay and packaging.
 
 While training, use the **Latest driven position** map to follow each parallel
 environment. Select a lane to inspect its car on Monaco or Spa; the forward
-marker, lap-distance, and zone readout update after each PPO rollout. The map
-holds the lane's last driven position if an episode ends at the rollout boundary,
+marker, lap-distance, speed, and time-in-episode readout update after each PPO
+rollout. The **Public-map validation** panel compares the most recent
+fixed-start checks with the best checkpoint, including lap finishes, lap time,
+average speed, and off-track time for each public map. Validation changes only
+after an evaluation check, so use its update number to see how recent it is.
+The map holds the lane's last driven position if an episode ends at the rollout
+boundary,
 so it does not jump to a randomized spawn before the trainer can inspect the
 crash or final lap position. Going off the road onto runoff does not itself
 respawn the car; it can recover. Barrier contact, lap completion, driving too
