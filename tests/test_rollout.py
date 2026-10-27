@@ -123,7 +123,7 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertIsNone(env.reward_config)
         self.assertEqual(len(calls), 3)
         np.testing.assert_allclose(result.batch.rewards[result.batch.active_mask], 2.5)
-        self.assertEqual(set(calls[0][0]), {"progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"})
+        self.assertEqual(set(calls[0][0]), {"progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness", "checkpoint"})
 
     def test_participant_reward_sees_applied_bounded_action(self) -> None:
         env = VectorizedRacingEnv(TRACK, CONFIG, reward=None, n_envs=1)
@@ -209,6 +209,27 @@ class RolloutCollectorTests(unittest.TestCase):
         # from the old spawn; no reset itself is stored as a PPO transition.
         self.assertEqual(result.batch.transitions, 2)
         self.assertTrue(np.all(result.batch.signals["lap_complete"] == 0))
+        self.assertEqual(result.training_position[0]["end_reason"], "barrier contact")
+
+    def test_runoff_is_a_recoverable_position_and_not_an_automatic_reset(self) -> None:
+        class RunoffProbe(VectorizedRacingEnv):
+            def __init__(self):
+                super().__init__(TRACK, CONFIG, n_envs=1)
+                self.reset_count = 0
+
+            def reset(self, *args, **kwargs):
+                self.reset_count += 1
+                kwargs.update(spawn_s=0.0, lateral_offset=4.0, initial_speed=0.0, heading_error=0.0)
+                return super().reset(*args, **kwargs)
+
+        env = RunoffProbe()
+        collector = RolloutCollector(env, ZeroPolicy(), self.budget, self.run_id, seed=17)
+        result = collector.collect(2)
+        self.assertEqual(env.reset_count, 1)
+        self.assertFalse(np.any(result.batch.terminated))
+        self.assertFalse(np.any(result.batch.truncated))
+        self.assertTrue(result.training_position[0]["off_track"])
+        self.assertIsNone(result.training_position[0]["end_reason"])
 
     def test_hyperparameters_are_explicit_and_serializable(self) -> None:
         hyperparameters = PPOHyperparameters()
