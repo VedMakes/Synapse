@@ -9,8 +9,9 @@ The action is `float32[2]` in `[-1, 1]`: `steering` followed by signed
 `throttle_brake` (positive throttle, zero coast, negative brake).
 
 Training contracts record observation fields, ray angles, config hash, public
-training track IDs/hashes, deterministic evaluation settings, and optional
-reward provenance. ONNX artifacts embed any trainer-side normalizer in the
+training track IDs/hashes, deterministic evaluation settings, and the reward
+config hash. Reference training always applies all nine published reward
+signals; zero is the explicit way to disable one signal. ONNX artifacts embed any trainer-side normalizer in the
 graph; the submitted contract therefore contains no separate normalizer.
 
 The safe NumPy artifact contains exactly `manifest.json`,

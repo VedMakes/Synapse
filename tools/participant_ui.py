@@ -40,7 +40,11 @@ from racing_event.reward import RewardConfig
 from racing_event.trajectory import MAX_REPLAY_BYTES, load_replay
 from tools.build_replay import build as build_browser_replay
 from tools.package_live_submission import package_live_submission, package_onnx_submission
-from tools.train_participant import validate_public_training_tracks
+from tools.train_participant import (
+    REFERENCE_TRAINER,
+    canonical_reference_trainer,
+    validate_public_training_tracks,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -343,14 +347,17 @@ def _parse_ray_angles(value: object, *, default: tuple[float, ...]) -> list[floa
     return angles
 
 
-def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> RewardConfig | None:
+def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> RewardConfig:
     submitted = form.get("reward_weights")
     if submitted is not None:
         if not isinstance(submitted, dict):
             raise ValueError("reward_weights must be an object")
         return RewardConfig(weights=submitted)
     if reward_path is None:
-        return None
+        # The reference baseline always trains against the published nine
+        # signals. A blank reward-file field therefore cannot silently turn
+        # the UI weights into diagnostics-only values.
+        return RewardConfig()
     return RewardConfig.from_file(reward_path)
 
 
@@ -448,7 +455,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
             raise ValueError(f"{name} must be a positive integer")
         return parsed
 
-    trainer = _workspace_path(text("trainer", "examples/participant_train.py"), label="trainer")
+    trainer = canonical_reference_trainer(text("trainer", str(REFERENCE_TRAINER.relative_to(ROOT))))
     reward_value = form.get("reward", "examples/baseline_reward.json")
     if reward_value is None or (isinstance(reward_value, str) and not reward_value.strip()):
         reward = None
@@ -491,8 +498,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     hparams = None if hparams_value is None or (isinstance(hparams_value, str) and not hparams_value.strip()) else _workspace_path(text("hparams", ""), label="hparams")
     if hparams is not None and not hparams.is_file():
         raise ValueError(f"hparams does not exist: {hparams}")
-    reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
-    python = _ready_python(require_torch=reference_trainer)
+    python = _ready_python(require_torch=True)
     effective_config, effective_reward, _, _ = _prepare_run_inputs(
         form, config=config, output_dir=output_dir, reward_path=reward, model=model, python=python, hparams=hparams,
     )
@@ -1191,7 +1197,8 @@ PAGE = r'''<!doctype html>
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
         <div class="section">
           <div class="form-grid">
-             <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
+             <label class="full">Reference training script<input id="trainer" value="tools/run_reference_baseline.py" spellcheck="false" readonly aria-describedby="trainer-hint"></label>
+             <p id="trainer-hint" class="hint full">All training uses this reference PPO path. Change <code>--model</code> for architecture; edit <code>tools/run_reference_baseline.py</code> for PPO behavior.</p>
              <label>Optional actor model.py<input id="model" value="" placeholder="participant_code/model.py" spellcheck="false" aria-describedby="run-error"></label>
              <label>Optional PPO hparams JSON<input id="hparams" value="examples/ppo_hparams.json" spellcheck="false" aria-describedby="run-error"></label>
              <div class="actions"><button id="check-model" type="button">Check actor / ONNX parity</button><span id="model-check-result" class="watch-result" role="status" aria-live="polite">No actor checked yet.</span></div>
@@ -1555,9 +1562,9 @@ PAGE = r'''<!doctype html>
         packageFields.forEach(id => $(id).addEventListener("input", syncControls));
        raceFields.forEach(id => $(id).addEventListener("input", () => { $("race-error").textContent = raceValidation(); syncControls(); }));
        let restoredForm = false;
-       function restoreForm() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem("synapse-participant-form") || "{}"); restoredForm = Object.keys(saved).length > 0; Object.entries(saved).forEach(([id, value]) => { if ($(id) && !["output-dir", "package-output", "race-output"].includes(id)) $(id).value = value; }); } catch (_) {} }
+       function restoreForm() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem("synapse-participant-form") || "{}"); restoredForm = Object.keys(saved).length > 0; Object.entries(saved).forEach(([id, value]) => { if ($(id) && !["trainer", "output-dir", "package-output", "race-output"].includes(id)) $(id).value = value; }); } catch (_) {} }
        async function refreshDefaults() { if (restoredForm) return; try { const defaults = await request("/api/defaults"); ["output_dir", "package_output", "race_output"].forEach(key => { const id = key.replaceAll("_", "-"); if ($(id) && defaults[key]) $(id).value = defaults[key]; }); if (defaults.output_dir) { $("package-source").value = defaults.output_dir; $("artifact-dir").value = `${defaults.output_dir}/artifact`; } syncControls(); } catch (_) {} }
-       function persistForm() { if (typeof localStorage === "undefined") return; try { const saved = {}; [...fields, ...packageFields, ...raceFields].forEach(id => { if ($(id)) saved[id] = $(id).value; }); localStorage.setItem("synapse-participant-form", JSON.stringify(saved)); } catch (_) {} }
+       function persistForm() { if (typeof localStorage === "undefined") return; try { const saved = {}; [...fields, ...packageFields, ...raceFields].filter(id => id !== "trainer").forEach(id => { if ($(id)) saved[id] = $(id).value; }); localStorage.setItem("synapse-participant-form", JSON.stringify(saved)); } catch (_) {} }
        restoreForm();
        [...fields, ...packageFields, ...raceFields].forEach(id => { if ($(id)) $(id).addEventListener("input", persistForm); });
        renderRayDiagram(); renderRewardWarnings(); render({}); refreshDefaults(); refreshMaps(); refreshRuns(); refresh(); setInterval(refresh, 700); setInterval(refreshRuns, 3000);

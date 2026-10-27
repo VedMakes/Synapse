@@ -5,15 +5,15 @@ bring-your-own-architecture workflow.
 
 ## Architecture choices
 
-Use the bundled fixed reference with `examples/participant_train.py`, or pass
-`--model participant_code/model.py`. A model file defines `build_actor(obs_size)`
+Use the reference baseline at `tools/run_reference_baseline.py`; omit `--model`
+for the bundled fixed actor or pass `--model participant_code/model.py` for a
+custom architecture. A model file defines `build_actor(obs_size)`
 and may define `build_critic(obs_size)`. The actor returns pre-tanh means; the
 platform owns the tanh-normal action distribution and critic. A deterministic
 replay/evaluation uses `tanh(mean)`.
 
 ```bash
 .venv/bin/python tools/train_participant.py \
-  --trainer examples/participant_train.py \
   --model participant_code/model.py \
   --hparams examples/ppo_hparams.json \
   --reward examples/baseline_reward.json \
@@ -43,11 +43,12 @@ It imports the model in a bounded subprocess, validates shape/finite outputs,
 exports and validates ONNX, checks Torch/ONNX parity, counts parameters/nodes,
 and measures single-thread latency against the 20 ms live budget.
 
-## SDK
+## SDK (advanced local research)
 
-Custom algorithms can use `synapse.make_env(args)` and `synapse.save(policy,
-args.output_dir)`. The returned environment reserves active-lane transitions
-before every step, so algorithms do not need to duplicate budget bookkeeping.
+The participant workflow above is the supported event-training path. The
+optional `synapse` facade is for local algorithm experiments; it reserves
+active-lane transitions before every step, but it does not replace the
+reference baseline's enforced reward/PPO path.
 
 ## Selection and evaluation
 

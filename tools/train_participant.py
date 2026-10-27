@@ -1,10 +1,9 @@
-"""Launch a participant-owned training program.
+"""Launch the canonical SYNAPSE reference PPO training path.
 
-SYNAPSE does not construct a participant model, choose an algorithm, or
-calculate participant reward. This launcher only validates workspace paths and
-forwards the published environment/training inputs to the participant's own
-script. The bundled ``examples/participant_train.py`` is an optional reference
-starter and may be replaced with any participant implementation.
+The actor architecture is participant-selectable through ``--model``. The
+training algorithm and nine-signal reward application stay in
+``tools/run_reference_baseline.py`` so the dashboard cannot accidentally run a
+trainer that ignores its weights.
 """
 
 from __future__ import annotations
@@ -30,6 +29,9 @@ from racing_event.client_budget import (
 
 ROOT = Path(__file__).resolve().parents[1]
 CLIENT_BUDGET_PATH = ROOT / ".synapse" / "client_training_budget.json"
+REFERENCE_TRAINER = ROOT / "tools" / "run_reference_baseline.py"
+REFERENCE_TRAINER_ALIAS = ROOT / "examples" / "participant_train.py"
+DEFAULT_REWARD = ROOT / "examples" / "baseline_reward.json"
 
 
 def _sha256(path: Path) -> str:
@@ -75,6 +77,27 @@ def _workspace_path(value: str, *, label: str) -> Path:
     return resolved
 
 
+def canonical_reference_trainer(value: str | Path) -> Path:
+    """Accept the reference entrypoint and its compatibility wrapper only.
+
+    Architecture changes belong in ``--model``. Keeping one launcher here is
+    what guarantees that dashboard reward weights reach the same PPO rollout
+    for fixed and custom actors alike.
+    """
+    trainer = _workspace_path(str(value), label="trainer")
+    if not trainer.is_file():
+        raise ValueError(
+            f"trainer does not exist: {trainer}. The supported training path is "
+            "tools/run_reference_baseline.py."
+        )
+    if trainer not in (REFERENCE_TRAINER, REFERENCE_TRAINER_ALIAS):
+        raise ValueError(
+            "participant training always uses tools/run_reference_baseline.py; "
+            "change that file to modify PPO and use --model for a custom architecture"
+        )
+    return REFERENCE_TRAINER
+
+
 def _positive(value: str, name: str) -> int:
     try:
         parsed = int(value)
@@ -96,10 +119,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--trainer",
         type=Path,
-        default=Path("examples/participant_train.py"),
-        help="participant-owned Python training entrypoint",
+        default=Path("tools/run_reference_baseline.py"),
+        help="compatibility alias; training always runs tools/run_reference_baseline.py",
     )
-    parser.add_argument("--reward", type=Path, default=None, help="optional participant reward input")
+    parser.add_argument("--reward", type=Path, default=Path("examples/baseline_reward.json"), help="nine-signal reward weights")
     parser.add_argument("--track-dir", type=Path, default=Path("tracks/train"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runs/run-001"))
@@ -115,22 +138,18 @@ def parse_args() -> argparse.Namespace:
 
 
 def build_training_command(args: argparse.Namespace) -> list[str]:
-    trainer = _workspace_path(str(args.trainer), label="trainer")
+    trainer = canonical_reference_trainer(getattr(args, "trainer", REFERENCE_TRAINER))
     track_dir = _workspace_path(str(args.track_dir), label="track_dir")
     config = _workspace_path(str(args.config), label="config")
     output_dir = _workspace_path(str(args.output_dir), label="output_dir")
-    if not trainer.is_file():
-        raise ValueError(
-            f"participant trainer does not exist: {trainer}. Copy the starter or set --trainer to your own script."
-        )
     if not config.is_file():
         raise ValueError(f"config does not exist: {config}")
     if not track_dir.is_dir():
         raise ValueError(f"track_dir is not a directory: {track_dir}")
     validate_public_training_tracks(track_dir)
-    reward_value = getattr(args, "reward", None)
-    reward = None if reward_value is None else _workspace_path(str(reward_value), label="reward")
-    if reward is not None and not reward.is_file():
+    reward_value = getattr(args, "reward", None) or DEFAULT_REWARD
+    reward = _workspace_path(str(reward_value), label="reward")
+    if not reward.is_file():
         raise ValueError(f"reward does not exist: {reward}")
     if output_dir.exists() and not output_dir.is_dir():
         raise ValueError(f"output_dir must be a directory path: {output_dir}")

@@ -1,9 +1,13 @@
-"""Optional local reference PPO lifecycle; participants own their trainers/models.
+"""Canonical local reference PPO lifecycle for every participant actor.
 
 Exact CPU process resume uses reference_checkpoint.json, never the dashboard
 mirrors. Legacy prototype artifacts can only be explicit non-exact warm starts
 in a new output directory. Fine-tuning preserves source preprocessing, uses a
 fresh optimizer, and selects on public development tracks (not event scoring).
+
+Participants may replace the actor architecture through ``--model``. The
+reference baseline remains the training and reward path so the nine published
+reward weights are applied uniformly.
 """
 
 from __future__ import annotations

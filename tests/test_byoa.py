@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from argparse import Namespace
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,9 +12,14 @@ from racing_event.budget import RunBudget
 from racing_event.budgeted_env import BudgetedEnv
 from racing_event.client_budget import release_training_allocation, reserve_training_allocation
 from racing_event.participant_model import build_policy_from_model
+from racing_event.observation import TrainingContract
 from racing_event.rollout import RolloutCollector
+from racing_event.reward import RewardConfig, SIGNAL_NAMES
 from racing_event.vector_env import VectorizedRacingEnv
 from tests.test_model_artifact import CONFIG, TRACK
+from tools.run_reference_baseline import run
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class BringYourOwnArchitectureTests(unittest.TestCase):
@@ -33,6 +40,43 @@ class BringYourOwnArchitectureTests(unittest.TestCase):
             self.assertEqual(policy.actor[-1].out_features, 2)
             self.assertGreater(info["parameters"], info["actor_parameters"])
             self.assertEqual(policy.act(np.zeros((2, 23), dtype=np.float32)).shape, (2, 2))
+
+    def test_custom_actor_still_uses_the_nine_reference_reward_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            weights = dict(RewardConfig().weights)
+            weights["progress"] = 4.0
+            reward_path = root / "reward.json"
+            reward = RewardConfig(weights=weights)
+            reward.save(reward_path)
+            output = root / "run"
+            run(Namespace(
+                reward=reward_path,
+                track_dir=ROOT / "tracks/train",
+                tracks=None,
+                config=ROOT / "config/simulation.json",
+                output_dir=output,
+                budget_steps=2,
+                steps=2,
+                n_envs=1,
+                rollout_length=2,
+                seed=17,
+                model=self.write_model(root),
+                hparams=None,
+                init_from=None,
+                warm_start=None,
+                fine_tune=False,
+                max_updates=None,
+                learning_rate=1.0e-4,
+                update_epochs=1,
+                eval_every=1,
+                eval_max_steps=10,
+                eval_track_dir=ROOT / "tracks/train",
+            ))
+            contract, _ = TrainingContract.load(output / "training_contract.json")
+            self.assertEqual(contract.reward_config_hash, reward.content_hash)
+            row = json.loads((output / "training_metrics.jsonl").read_text().splitlines()[0])
+            self.assertEqual(set(row["weighted_signal_sums"]), set(SIGNAL_NAMES))
 
     def test_budgeted_env_and_collector_charge_each_lane_once(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
