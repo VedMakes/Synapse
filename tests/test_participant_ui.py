@@ -109,7 +109,9 @@ class ParticipantUiTests(unittest.TestCase):
     def test_page_contains_participant_contract_and_controls(self) -> None:
         for text in (
             "Start / resume participant training",
-            "Cumulative budget",
+            "Steps this run",
+            "Spend 1 iteration · add 1,000,000 steps to this model",
+            "Pause freezes the trainer process",
             "Reward function · signal weights",
             "Forward-facing ray sensors",
             "Watch artifact for map",
@@ -139,6 +141,7 @@ class ParticipantUiTests(unittest.TestCase):
             "client-budget-callout",
         ):
             self.assertIn(text, PAGE)
+        self.assertNotIn("Cumulative budget", PAGE)
 
     def test_live_telemetry_line_parser_accepts_ticks_and_rejects_untrusted_lines(self) -> None:
         payload = {

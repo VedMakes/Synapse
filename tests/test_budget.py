@@ -125,6 +125,17 @@ class RunBudgetTests(unittest.TestCase):
         self.assertEqual(first_handle.consume(run_id, 3), 0)
         self.assertEqual(second_handle.remaining(run_id), 0)
 
+    def test_extension_is_hashed_and_visible_to_an_already_open_handle(self) -> None:
+        budget = RunBudget.create(self.path, max_runs=1, max_steps_per_run=5)
+        run_id = budget.start_run()
+        budget.consume(run_id, 5)
+        stale_handle = RunBudget.open(self.path)
+        RunBudget.open(self.path).extend_run(run_id, 7)
+        self.assertEqual(stale_handle.remaining(run_id), 7)
+        self.assertEqual(stale_handle.consume(run_id, 7), 0)
+        reopened = RunBudget.open(self.path, max_runs=1, max_steps_per_run=12)
+        self.assertEqual(reopened.status(run_id)["used_steps"], 12)
+
     def test_concurrent_processes_get_distinct_runs_without_lost_updates(self) -> None:
         RunBudget.create(self.path, max_runs=2, max_steps_per_run=5)
         context = multiprocessing.get_context("fork")

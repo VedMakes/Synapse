@@ -339,6 +339,11 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "rule": SELECTION_RULE, "every": eval_every, "max_steps": eval_max_steps,
             "tracks": [[track.track_id, track.content_hash] for track in evaluation_tracks],
         }
+        # Keep the saved validation cadence stable when a participant spends a
+        # new allocation to extend the same exact-resume checkpoint.
+        if (current is not None and saved_identity is not None
+                and args.budget_steps > int(saved_identity["budget_steps"])):
+            selection_settings = saved_identity["selection"]
     early_stopping_settings = (
         {"patience": early_stop_patience, "monitor": SELECTION_RULE}
         if early_stopping else None
@@ -404,8 +409,15 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         identity["hparams"] = hp.to_dict()
     if model_identity is not None:
         identity["model"] = model_identity
+    extended_budget = bool(
+        current is not None and saved_identity is not None
+        and args.budget_steps > int(saved_identity["budget_steps"])
+    )
     if current is not None:
-        if identity != saved_identity:
+        comparable_identity = dict(identity)
+        if extended_budget:
+            comparable_identity["budget_steps"] = saved_identity["budget_steps"]
+        if comparable_identity != saved_identity:
             raise ValueError("saved reference checkpoint identity does not match this invocation (config, tracks, seed, PPO, budget, preprocessing, selection or runtime)")
         directory, manifest = current
         if not (output / "budget.json").exists():
@@ -434,8 +446,9 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         if type(state["updates"]) is not int or state["updates"] < 0 or len(metrics) != state["updates"]:
             raise ValueError("checkpoint update/metrics mismatch")
         if (type(state["budget_used"]) is not int or state["budget_used"] < 0
-                or state["budget_steps"] != args.budget_steps
-                or state["budget_remaining"] != args.budget_steps - state["budget_used"]
+                or state["budget_steps"] > args.budget_steps
+                or state["budget_remaining"] != state["budget_steps"] - state["budget_used"]
+                or (state["budget_steps"] != args.budget_steps and not extended_budget)
                 or state["fine_tune"] != fine_tune):
             raise ValueError("checkpoint training state/budget mismatch")
         budget = RunBudget.open(output / "budget.json", max_runs=1, max_steps_per_run=args.budget_steps)
@@ -448,7 +461,18 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     status = budget.status(run_id)
     head = budget.status()["head_hash"]
     if current is not None:
-        if state["run_id"] != run_id or status["used_steps"] != state["budget_used"] or head != manifest["budget_head"]:
+        budget_extension_is_authorized = False
+        if extended_budget and head != manifest["budget_head"]:
+            records = checkpoint.read_json(output / "budget.json")["records"]
+            pointer = next((index for index, row in enumerate(records) if row.get("hash") == manifest["budget_head"]), None)
+            tail = [] if pointer is None else records[pointer + 1:]
+            budget_extension_is_authorized = (
+                pointer is not None and bool(tail)
+                and all(row.get("type") == "budget_extended" for row in tail)
+                and sum(row.get("steps", 0) for row in tail) == args.budget_steps - state["budget_steps"]
+            )
+        if (state["run_id"] != run_id or status["used_steps"] != state["budget_used"]
+                or (head != manifest["budget_head"] and not budget_extension_is_authorized)):
             raise ValueError("external budget differs from committed boundary; spent steps retained, exact recovery refused (interrupted update)")
     elif status["used_steps"]:
         raise ValueError("external budget already spent without an authoritative checkpoint; exact recovery refused")
@@ -514,6 +538,13 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         selection = _selection_with_best_hash(output, selection)
         _write_report(output, state)
 
+    if extended_budget:
+        state["budget_steps"] = args.budget_steps
+        state["budget_remaining"] = status["remaining_steps"]
+        state["early_stopped"] = False
+        state["early_stopping_stale_evaluations"] = 0
+        save(evaluate=False)
+
     if current is None:
         save(evaluate=selection_enabled)
     target = 0 if state.get("early_stopped", False) else min(args.steps, status["remaining_steps"])
@@ -523,6 +554,15 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         rollout = collector.collect(batch_steps)
         ppo_metrics = trainer.update(rollout.batch)
         status = budget.status(run_id)
+        live_budget = budget.status()
+        if live_budget["max_steps_per_run"] > state["budget_steps"]:
+            extension = live_budget["max_steps_per_run"] - state["budget_steps"]
+            target += extension
+            state["budget_steps"] = live_budget["max_steps_per_run"]
+            state["early_stopped"] = False
+            state["early_stopping_stale_evaluations"] = 0
+            identity["budget_steps"] = live_budget["max_steps_per_run"]
+            args.budget_steps = live_budget["max_steps_per_run"]
         state["updates"] += 1
         state["budget_used"], state["budget_remaining"] = status["used_steps"], status["remaining_steps"]
         metrics.append({

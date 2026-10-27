@@ -93,6 +93,39 @@ class ReferenceCheckpointTests(unittest.TestCase):
             self.assertTrue(np.all(env_arrays["steps"] <= 2))
             self.assertEqual(checkpoint.read_json(current_directory(split) / "training_state.json")["updates"], 3)
 
+    def test_budget_extension_resumes_same_checkpoint_and_optimizer(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "extended"
+            args = arguments(output, budget_steps=12, steps=12)
+            first = runner.run(args)
+            self.assertEqual(first["budget_used"], 12)
+            RunBudget.open(output / "budget.json").extend_run(first["run_id"], 12)
+            continued = runner.run(arguments(output, budget_steps=24, steps=12))
+            self.assertEqual(continued["budget_used"], 24)
+            self.assertEqual(continued["updates"], 4)
+            self.assertEqual(continued["run_id"], first["run_id"])
+
+    def test_live_budget_extension_adds_steps_to_the_current_invocation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "live-extended"
+            args = arguments(output, budget_steps=12, steps=12)
+            collect = runner.RolloutCollector.collect
+            extended = False
+
+            def collect_then_extend(collector, steps):
+                nonlocal extended
+                batch = collect(collector, steps)
+                if not extended:
+                    state = RunBudget.open(output / "budget.json").status()
+                    RunBudget.open(output / "budget.json").extend_run(state["runs"][0]["run_id"], 12)
+                    extended = True
+                return batch
+
+            with patch.object(runner.RolloutCollector, "collect", collect_then_extend):
+                state = runner.run(args)
+            self.assertEqual(state["budget_used"], 24)
+            self.assertEqual(state["budget_steps"], 24)
+
     def test_interruption_before_pointer_keeps_previous_generation_and_budget(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             output = Path(temporary) / "run"
