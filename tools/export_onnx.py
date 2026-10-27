@@ -18,18 +18,109 @@ from racing_event.model_artifact import load_participant_artifact
 from racing_event.observation import TrainingContract
 from racing_event.onnx_artifact import FORMAT, load_onnx_artifact
 from racing_event.trajectory import engine_code_hash
+from racing_event.participant_model import build_policy_from_model, load_policy_state
 
 
-def export(source: Path, output: Path, *, reference: bool = False) -> Path:
+def _normalizer_values(normalizer):
+    if normalizer is None:
+        return None
+    return normalizer.mean, normalizer.std, normalizer.clip
+
+
+def export_torch_policy(policy, contract, normalizer, output: Path, *, source_kind: str = "synapse") -> Path:
+    """Export a participant actor using the pinned generic Torch path."""
+    import torch
+    from torch import nn
+    import onnx
+    from onnx import helper as h, numpy_helper as nh
+
+    if output.exists() or output.is_symlink():
+        raise ValueError("ONNX output must be a new directory")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    class Wrapper(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.actor = policy.actor
+            values = _normalizer_values(normalizer)
+            self.register_buffer("mean", None if values is None else torch.as_tensor(values[0], dtype=torch.float64))
+            self.register_buffer("scale", None if values is None else torch.as_tensor(values[1], dtype=torch.float64))
+            self.register_buffer("clip", None if values is None else torch.as_tensor(values[2], dtype=torch.float64))
+
+        def forward(self, observations):
+            values = observations
+            if self.mean is not None:
+                values = values.to(torch.float64)
+                values = (values - self.mean) / self.scale
+                values = torch.maximum(torch.minimum(values, self.clip), -self.clip).to(torch.float32)
+            return torch.tanh(self.actor(values))
+
+    wrapper = Wrapper().eval()
+    temporary = Path(tempfile.mkdtemp(prefix=".onnx-", dir=output.parent))
+    try:
+        model_path = temporary / "model.onnx"
+        dummy = torch.zeros((1, contract.observation.size), dtype=torch.float32)
+        torch.onnx.export(
+            wrapper,
+            (dummy,),
+            str(model_path),
+            input_names=["observations"],
+            output_names=["actions"],
+            opset_version=17,
+            do_constant_folding=True,
+            dynamo=False,
+        )
+        model = onnx.load(model_path)
+        # Torch may emit Constant nodes for scalar arithmetic. Convert the
+        # safe tensor form into initializers before the strict profile check.
+        retained = []
+        for node in model.graph.node:
+            if node.op_type == "Constant" and len(node.attribute) == 1 and node.attribute[0].name == "value":
+                tensor = node.attribute[0].t
+                tensor.name = node.output[0]
+                model.graph.initializer.append(tensor)
+            else:
+                retained.append(node)
+        del model.graph.node[:]
+        model.graph.node.extend(retained)
+        model.ir_version = 10
+        del model.metadata_props[:]
+        onnx.save(model, model_path)
+        contract.save(temporary / "training_contract.json")
+        manifest = {
+            "format": FORMAT,
+            "format_version": 1,
+            "profile": "static_vector_cpu_opset17_v1",
+            "environment_code_hash": engine_code_hash(),
+            "source_kind": source_kind,
+        }
+        for name, key in (("model.onnx", "model_sha256"), ("training_contract.json", "training_contract_sha256")):
+            manifest[key] = hashlib.sha256((temporary / name).read_bytes()).hexdigest()
+        (temporary / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        load_onnx_artifact(temporary)
+        os.rename(temporary, output)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return output
+
+
+def export(source: Path, output: Path, *, reference: bool = False, model: Path | None = None) -> Path:
     import onnx
     from onnx import helper as h, numpy_helper as nh
 
     if output.exists() or output.is_symlink():
         raise ValueError("ONNX output must be a new directory")
     if reference:
+        contract, normalizer = TrainingContract.load(source / "training_contract.json")
+        metadata = json.loads((source / "policy.json").read_text(encoding="utf-8"))
+        if model is not None or metadata.get("format") == "racing_event_actor_critic":
+            model_path = model or (source / "model_source.py")
+            policy, _ = build_policy_from_model(model_path, contract.observation.size)
+            load_policy_state(policy, source / "policy.pt")
+            return export_torch_policy(policy, contract, normalizer, output, source_kind="synapse")
         from racing_event.ppo import FixedMLPActorCritic
         policy, _ = FixedMLPActorCritic.load_artifact(source / "policy.pt", source / "policy.json")
-        contract, normalizer = TrainingContract.load(source / "training_contract.json")
         state = policy.state_dict()
         layers = [(state[f"{name}.weight"].numpy(), state[f"{name}.bias"].numpy(), "tanh")
                   for name in ("trunk.0", "trunk.2", "policy_mean")]
@@ -84,7 +175,7 @@ def export(source: Path, output: Path, *, reference: bool = False) -> Path:
     try:
         (temporary / "model.onnx").write_bytes(model.SerializeToString())
         contract.save(temporary / "training_contract.json")
-        manifest = {"format": FORMAT, "format_version": 1, "profile": "static_vector_cpu_opset17_v1", "environment_code_hash": engine_code_hash()}
+        manifest = {"format": FORMAT, "format_version": 1, "profile": "static_vector_cpu_opset17_v1", "environment_code_hash": engine_code_hash(), "source_kind": "synapse"}
         for name, key in (("model.onnx", "model_sha256"), ("training_contract.json", "training_contract_sha256")):
             manifest[key] = hashlib.sha256((temporary / name).read_bytes()).hexdigest()
         (temporary / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n")
@@ -101,9 +192,10 @@ def main():
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--reference", action="store_true", help="source is optional Torch reference actor, not NumPy artifact")
+    parser.add_argument("--model", type=Path, help="participant model.py for a pluggable reference actor")
     args = parser.parse_args()
     try:
-        print(export(args.source, args.output, reference=args.reference))
+        print(export(args.source, args.output, reference=args.reference, model=args.model))
     except (ValueError, OSError, ImportError) as exc:
         parser.exit(2, f"ONNX export failed: {exc}\n")
 

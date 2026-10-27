@@ -18,8 +18,8 @@ starter model with your own training program.
 You will complete this sequence:
 
 1. Open a terminal in this repository.
-2. Install the local Python environment.
-3. Choose a trainer script. The starter is already included.
+2. Install the local Python environment and optional evaluator/live dependencies.
+3. Choose an actor architecture. The reference PPO trainer is already included.
 4. Run a **tiny** training experiment so failures are cheap.
 5. Open a replay and look at what the car actually did.
 6. Change one parameter at a time and repeat.
@@ -41,15 +41,16 @@ manifest is `tracks/train_manifest.json`.
 
 | Word | Plain-English meaning | Example in this repository |
 |---|---|---|
-| **Trainer script** | Your Python program. It creates the model, collects experience, updates weights, and saves the result. | `examples/participant_train.py` |
+| **Reference trainer** | The single supported training path. It applies the nine reward weights, runs PPO, and saves the result. | `tools/run_reference_baseline.py` |
+| **Actor model** | Optional participant-owned PyTorch architecture supplied to the reference trainer. | `participant_code/model.py` |
 | **Run directory** | A folder containing one training attempt and its saved weights/metadata. | `artifacts/participant/manual-monaco` |
 | **Artifact** | A model saved in a format that the local evaluator can read. | `policy.pt` + `policy.json` + `training_contract.json` |
 | **ONNX submission package** | A new folder containing `model.onnx`, its contract, matching config snapshot, hashes, and provenance. It contains no track or replay. | `artifacts/onnx-packages/team-a` |
 
-The word **model script** can be confusing. In this manual, the script is the
-program that **trains** the model. The trained weights are saved later in the
-run directory. You point the launcher at the script with `--trainer`; you do
-not point `--trainer` at a `.pt`, `.onnx`, or `.npz` file.
+The word **model script** can be confusing. In this manual, `model.py` defines
+the actor architecture; `tools/run_reference_baseline.py` is the program that
+trains it. The trained weights are saved later in the run directory. You do not
+point `--model` at a `.pt`, `.onnx`, or `.npz` file.
 
 ## 2. Open the repository correctly
 
@@ -123,71 +124,42 @@ You should see `validated 2 public training maps` and a list containing
 `monaco` and `spa`. This command checks geometry, hashes, widths, boundaries,
 and the published training contract. It does not train a model.
 
-## 3. Choose the model program
+## 3. Choose the actor architecture
 
-There are two sensible first choices.
-
-### Choice A: run the included starter
-
-The included file is:
+Every participant training run uses the same reference PPO entrypoint:
 
 ```text
-examples/participant_train.py
+tools/run_reference_baseline.py
 ```
 
-It delegates to the inspectable reference PPO trainer. It is a runnable
-onboarding example, **not** the event algorithm and not a requirement. It is
-useful for confirming that your installation, maps, replay viewer, and package
-pipeline work before you write your own algorithm.
+This is intentional. It is the single place where SYNAPSE loads the
+environment, applies the nine UI reward weights, collects budgeted rollouts,
+updates PPO, and writes the checkpoint. The fixed starter actor and every
+custom actor use this same path. The compatibility wrapper
+`examples/participant_train.py` delegates to it, but you do not need to copy or
+replace that wrapper.
 
-Make your own copy so you know which file you changed:
-
-```bash
-mkdir -p participant_code
-cp examples/participant_train.py participant_code/train_reference.py
-```
-
-You will point the launcher at that copy with:
-
-```text
---trainer participant_code/train_reference.py
-```
-
-### Choice B: use your own trainer
-
-Put your program inside the repository, for example:
+To change the network architecture, provide a model file:
 
 ```text
 participant_code/
-  train.py                 # the file passed to --trainer
-  reward.py                # optional; only your trainer may import it
-  model.py                 # optional model definition
-  checkpoints/             # optional intermediate files
+  model.py                 # build_actor(obs_size), optional build_critic(obs_size)
 ```
 
-The launcher checks that the trainer path stays inside this repository. These
-are valid examples:
+The launcher imports `build_actor(obs_size)` locally, wraps it with the
+reference PPO distribution and critic, and passes it to
+`tools/run_reference_baseline.py`. The actor returns two pre-tanh means in
+steering/throttle-brake order. See [`participant_code/model.py`](participant_code/model.py).
 
-```bash
---trainer participant_code/train.py
---trainer participant_code/my_algorithm/train.py
---trainer /absolute/path/to/Synapse/participant_code/train.py
-```
+If you want to change PPO behavior, change the reference implementation in
+`tools/run_reference_baseline.py` (and its explicitly imported PPO helper when
+an algorithm-level primitive changes). Do not create a second trainer: the
+launcher rejects arbitrary trainer paths so the UI reward weights cannot be
+bypassed.
 
-This is not valid because it points outside the workspace:
+### 3.1 Reference training inputs
 
-```bash
---trainer /home/me/Desktop/random-trainer.py
-```
-
-Copy that file into `participant_code/` first. This path rule keeps a run
-repeatable and prevents an accidental command from launching an unrelated
-program.
-
-### 3.1 What your trainer must accept
-
-`tools/train_participant.py` forwards these options to the file named by
-`--trainer`:
+`tools/train_participant.py` forwards these options to the reference baseline:
 
 | Argument | What it tells your script | Example |
 |---|---|---|
@@ -199,45 +171,16 @@ program.
 | `--n-envs` | Number of parallel environment lanes requested. | `2` |
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
-| `--reward` | Optional reward JSON selected by the participant UI. | `examples/baseline_reward.json` |
+| `--reward` | The nine reward weights used by every PPO rollout. | `examples/baseline_reward.json` |
+| `--model` | Optional workspace-local `model.py` exposing `build_actor(obs_size)`. | `participant_code/model.py` |
+| `--hparams` | Optional JSON snapshot of PPO hyperparameters. | `examples/ppo_hparams.json` |
 
-Your parser should accept `--reward` with a default of `None`, because the
-launcher does not send it when you choose a custom reward implementation. The
-other arguments should be required or have sensible defaults. A small parser
-blueprint looks like this:
-
-```python
-import argparse
-from pathlib import Path
-
-
-def parse_args():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--reward", type=Path, default=None)
-    parser.add_argument("--track-dir", type=Path, required=True)
-    parser.add_argument("--config", type=Path, required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
-    parser.add_argument("--steps", type=int, required=True)
-    parser.add_argument("--budget-steps", type=int, required=True)
-    parser.add_argument("--n-envs", type=int, required=True)
-    parser.add_argument("--rollout-length", type=int, required=True)
-    parser.add_argument("--seed", type=int, required=True)
-    return parser.parse_args()
-
-
-if __name__ == "__main__":
-    args = parse_args()
-    # 1. Load args.config and the JSON maps in args.track_dir.
-    # 2. Build your model and optimizer.
-    # 3. Collect at most args.steps transitions.
-    # 4. Update your model using your own algorithm and reward.
-    # 5. Save a recognized artifact below args.output_dir.
-```
-
-This is a shape guide, not a complete learning algorithm. The included
-starter is the complete runnable example. A custom script owns its model
-architecture, policy distribution, optimizer, preprocessing, reward, and
-checkpoint logic.
+The launcher supplies the complete public map set, the simulation contract,
+the persistent transition budget, the selected nine-weight reward file, and
+the optional actor/hyperparameter files. `--trainer` remains only as a
+compatibility flag for the reference path; arbitrary Python trainers are
+rejected. The default PPO and reward behavior are therefore reproducible from
+one script.
 
 ![Annotated trainer structure: parse arguments, load data, update the model, and save an artifact](docs/assets/training-script-shape.svg)
 
@@ -298,11 +241,10 @@ for producing a fast racer.
 
 ### 4.1 Train on both public maps
 
-This command points at the copied starter script:
+This command runs the reference PPO baseline with its default actor:
 
 ```bash
 .venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train \
   --config config/simulation.json \
@@ -317,17 +259,22 @@ This command points at the copied starter script:
 Read the command from left to right:
 
 1. `.venv/bin/python` uses the installed project environment.
-2. `tools/train_participant.py` is the safe launcher.
-3. `--trainer ...` selects **your training script**.
-4. `--reward ...` selects the starter reward weights.
-5. `--track-dir ...` exposes Monaco and Spa.
-6. `--config ...` selects the sensor/physics configuration.
-7. `--output-dir ...` selects a new folder for this experiment.
-8. `--steps 256` makes this invocation short.
-9. `--budget-steps 10000` creates the local transition ceiling.
-10. `--n-envs 2` asks for two parallel lanes.
-11. `--rollout-length 32` asks for 32 transitions per lane per update.
-12. `--seed 17` makes this attempt reproducible.
+2. `tools/train_participant.py` is the safe launcher around the reference baseline.
+3. `--reward ...` selects the nine weights used by PPO for every transition.
+4. `--track-dir ...` exposes Monaco and Spa.
+5. `--config ...` selects the sensor/physics configuration.
+6. `--output-dir ...` selects a new folder for this experiment.
+7. `--steps 256` makes this invocation short.
+8. `--budget-steps 10000` creates the local transition ceiling.
+9. `--n-envs 2` asks for two parallel lanes.
+10. `--rollout-length 32` asks for 32 transitions per lane per update.
+11. `--seed 17` makes this attempt reproducible.
+
+To use a custom actor while keeping the same PPO and reward path, add:
+
+```bash
+  --model participant_code/model.py
+```
 
 When it succeeds, inspect the output:
 
@@ -335,9 +282,9 @@ When it succeeds, inspect the output:
 find artifacts/runs/first-check -maxdepth 2 -type f -printf '%P\n' | sort
 ```
 
-For the reference starter you should see `policy.pt`, `policy.json`, and
+For the reference run you should see `policy.pt`, `policy.json`, and
 `training_contract.json` among the results. If you do not, stop and fix the
-trainer before spending more transitions.
+reference baseline before spending more transitions.
 
 ### 4.2 Training always uses the complete public set
 
@@ -372,8 +319,8 @@ vector call with two active lanes costs two transitions.
 
 The local onboarding budget is a prototype fairness mechanism, not a claim
 that the final event budget has been frozen. Do not edit `budget.json` to try to
-refund work. If your custom trainer has its own budget accounting, keep that
-accounting in its run directory too.
+refund work. The reference baseline owns the training budget accounting for
+every actor architecture.
 
 ### 4.4 Client retrain cap
 
@@ -395,6 +342,12 @@ The dashboard shows the remaining allocation count. This is a client-side
 operational guard, not organizer-grade proof: someone who controls the client
 can delete or edit local files. Organizer-side evaluation must enforce the
 actual competition budget separately.
+
+Teacher demonstrations used by the optional scripted/imitation helpers are
+local diagnostic data and are not event submissions. Participant environment
+transitions collected through `tools/train_participant.py` or the `synapse`
+SDK are the budgeted unit; the SDK reserves them before each active-lane step.
+Deleting `.synapse/` or re-cloning resets the local guard.
 
 ## 5. Use the dashboard instead of typing commands
 
@@ -420,26 +373,30 @@ and is intentionally bound to loopback; do not expose it to the internet.
 
 In the training panel:
 
-1. **Trainer script:** type `participant_code/train.py` or
-   `participant_code/train_reference.py`. This is the path to your Python
-   trainer, not the path to model weights.
-2. **Training maps:** leave `tracks/train`; this always means Monaco and Spa
+1. **Reference training script:** leave
+   `tools/run_reference_baseline.py` selected. It is fixed so the nine UI
+   weights are used by every PPO rollout.
+2. **Actor model:** optionally enter `participant_code/model.py` to change the
+   network architecture without changing PPO or reward handling.
+3. **Training maps:** leave `tracks/train`; this always means Monaco and Spa
    together. The training launcher rejects a one-map directory.
-3. **Output directory:** type a new folder such as
+4. **Output directory:** type a new folder such as
    `artifacts/runs/dashboard-first`.
-4. **Steps:** enter `256` for the first smoke run.
-5. **Budget steps:** enter `10000` for the local onboarding example.
-6. **Parallel environments:** enter `1` or `2` while learning the workflow.
-7. **Rollout length:** enter `32` for a small test.
-8. **Seed:** enter `17`. Use a different seed only for a deliberately new
+5. **Steps:** enter `256` for the first smoke run.
+6. **Budget steps:** enter `10000` for the local onboarding example.
+7. **Parallel environments:** enter `1` or `2` while learning the workflow.
+8. **Rollout length:** enter `32` for a small test.
+9. **Seed:** enter `17`. Use a different seed only for a deliberately new
    experiment.
-9. **Reward function:** leave the starter weights in place for the first run.
-10. **Ray sensors:** leave the default nine angles in place until the baseline
+10. **Reward function:** tune the nine weights; the reference baseline applies
+    them directly to each training transition.
+11. **Ray sensors:** leave the default nine angles in place until the baseline
     works.
-11. Press **Start / resume participant training** once.
+12. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
-and `run_identity.json` beside the run. It also displays the remaining client
+and `run_identity.json` beside the run. The reward file always contains all
+nine published signals, even when a weight is zero. It also displays the remaining client
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
 
@@ -504,9 +461,12 @@ instead of silently feeding the model the wrong numbers.
 
 ## 7. Reward design and parameter tuning
 
-SYNAPSE publishes raw transition signals. A participant may use the dashboard's
-nine weighted signals or write a completely custom finite reward inside its
-trainer. The organizer evaluator does not import participant reward code.
+SYNAPSE publishes raw transition signals, and the reference baseline converts
+the nine dashboard weights into the PPO reward on every training transition.
+This keeps reward tuning visible, reproducible, and shared by the default and
+custom-architecture paths. Participant training does not provide a second
+reward callback or a second trainer; change `tools/run_reference_baseline.py`
+when the reference PPO behavior itself needs to change.
 
 The starter reward file is:
 
@@ -548,11 +508,13 @@ Plain-English meanings:
 Use this loop instead of changing five values and guessing which one helped:
 
 1. **Baseline:** run 256 transitions with the starter reward, seed 17, default
-   rays, and one map.
+   rays, and the complete public training set (`tracks/train`). Replay or
+   evaluate one map at a time after training.
 2. **Inspect:** build a replay. Look for a crash, a stuck start, excessive
    steering oscillation, or a car that is safe but motionless.
 3. **Change one input:** for example, change only `off_track` from `-1.5` to
-   `-3.0`.
+   `-3.0`. The reference baseline receives the resulting weight through
+   `reward_config.json`; the actor architecture and PPO stay fixed.
 4. **Use a new output directory:** for example,
    `artifacts/runs/off-track-stronger`. This prevents incompatible run identity
    files from being mixed together.
@@ -574,7 +536,6 @@ cp examples/baseline_reward.json participant_code/reward_off_track.json
 # Edit only "off_track": -1.5 to "off_track": -3.0
 
 .venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
   --reward participant_code/reward_off_track.json \
   --track-dir tracks/train \
   --config config/simulation.json \
@@ -592,14 +553,12 @@ Keep the reward and maps fixed and change only the seed and output folder:
 
 ```bash
 .venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-17 \
   --steps 2048 --budget-steps 10000 --n-envs 2 --rollout-length 32 --seed 17
 
 .venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-23 \
@@ -611,7 +570,7 @@ run directory.
 
 ### 7.4 Safe starter values for reference PPO
 
-For the optional reference trainer, begin here:
+For the reference trainer, begin here:
 
 | Parameter | First smoke | Small experiment | Why |
 |---|---:|---:|---|
@@ -926,8 +885,8 @@ thread count. It intentionally labels these as shared resources.
 
 ## 13. Optional reference resume and fine-tuning
 
-The reference PPO has a checkpoint-aware command for experiments. This is a
-convenience for the included starter, not a requirement for your algorithm.
+The reference PPO has a checkpoint-aware command for experiments. This is the
+same training path used by the default and custom-architecture runs.
 
 To continue the same reference run, reuse the same output directory, reward,
 config, maps, ray order, seed, and budget identity. Change only the invocation
@@ -935,7 +894,6 @@ limit when you understand the checkpoint rules:
 
 ```bash
 .venv/bin/python tools/train_participant.py \
-  --trainer participant_code/train_reference.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train \
   --config config/simulation.json \
@@ -985,16 +943,12 @@ the replay and evaluator result are the evidence.
 
 ## 15. Troubleshooting
 
-### “participant trainer does not exist”
+### “participant training always uses tools/run_reference_baseline.py”
 
-You supplied the wrong path. Run:
-
-```bash
-find participant_code -type f -name '*.py' -print
-```
-
-Then use the printed path after `--trainer`, for example
-`--trainer participant_code/train.py`. Run from the repository root.
+The participant launcher intentionally rejects arbitrary trainer scripts. Leave
+the reference entrypoint selected, put architecture changes in
+`participant_code/model.py`, and edit `tools/run_reference_baseline.py` when
+you need to change PPO behavior.
 
 ### “track_dir is not a directory” or “contains no JSON tracks”
 
@@ -1078,7 +1032,15 @@ isolation boundaries are documented in
 [`docs/submission_runtime.md`](docs/submission_runtime.md); read that document
 before treating a local preview as an event submission.
 
-## 17. Useful reference documents
+## 17. Platform and security notes
+
+The local participant tooling targets POSIX/Linux (native Windows is
+unsupported; use WSL or Linux) and Python 3.11. `model.py`, trainer scripts,
+and reward callbacks are participant code and execute locally. The evaluator
+does not import them; it accepts only the validated ONNX submission and should
+run it in the model-only isolated worker.
+
+## 18. Useful reference documents
 
 - [`docs/participant_guide.md`](docs/participant_guide.md) — exact reference
   resume, warm-start, selection, replay, and dashboard details.

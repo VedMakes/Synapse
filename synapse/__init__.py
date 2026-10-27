@@ -1,0 +1,94 @@
+"""Small participant SDK facade for custom SYNAPSE algorithms."""
+
+from __future__ import annotations
+
+import argparse
+from dataclasses import replace
+import json
+from pathlib import Path
+import shutil
+from typing import Any
+
+import torch
+from torch import nn
+
+from racing_event.budget import RunBudget
+from racing_event.budgeted_env import BudgetedEnv
+from racing_event.config import SimulationConfig
+from racing_event.observation import TrainingContract
+from racing_event.ppo import ActorCritic, build_actor_critic
+from racing_event.reward import RewardConfig
+from racing_event.track import TrackGeometry
+from racing_event.vector_env import VectorizedRacingEnv
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="SYNAPSE participant SDK")
+    parser.add_argument("--reward", type=Path, default=None)
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--hparams", type=Path, default=None)
+    parser.add_argument("--track-dir", type=Path, default=Path("tracks/train"))
+    parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
+    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--steps", type=int, required=True)
+    parser.add_argument("--budget-steps", type=int, required=True)
+    parser.add_argument("--n-envs", type=int, required=True)
+    parser.add_argument("--rollout-length", type=int, required=True)
+    parser.add_argument("--seed", type=int, required=True)
+    return parser.parse_args(argv)
+
+
+def make_env(args: argparse.Namespace) -> BudgetedEnv:
+    config = SimulationConfig.from_file(args.config)
+    track_paths = sorted(path for path in Path(args.track_dir).glob("*.json") if path.name != "manifest.json")
+    if not track_paths:
+        raise ValueError("track-dir contains no tracks")
+    tracks = tuple(TrackGeometry.from_file(path) for path in track_paths)
+    reward = None if getattr(args, "reward", None) is None else RewardConfig.from_file(args.reward)
+    env = VectorizedRacingEnv(tracks, config, reward, n_envs=args.n_envs)
+    output = Path(args.output_dir).resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    budget_path = output / "budget.json"
+    budget = RunBudget.open(budget_path, max_runs=1, max_steps_per_run=args.budget_steps) if budget_path.exists() else RunBudget.create(budget_path, max_runs=1, max_steps_per_run=args.budget_steps)
+    status = budget.status()
+    run_id = status["runs"][0]["run_id"] if status["runs"] else budget.start_run()
+    args._synapse_env = env
+    args._synapse_budget = budget
+    args._synapse_run_id = run_id
+    return BudgetedEnv(env, budget, run_id)
+
+
+def save(actor: ActorCritic | nn.Module, output_dir: str | Path, args: argparse.Namespace | None = None) -> Path:
+    """Export a trained actor into the same validated ONNX flow as the UI."""
+    output = Path(output_dir).resolve()
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("SDK output directory must be new or empty")
+    output.mkdir(parents=True, exist_ok=True)
+    env = getattr(args, "_synapse_env", None) if args is not None else None
+    if env is None:
+        raise ValueError("call synapse.make_env(args) before synapse.save")
+    base_env = getattr(env, "env", env)
+    policy = actor if isinstance(actor, ActorCritic) else build_actor_critic(actor, base_env.observation_size)
+    contract = base_env.training_contract
+    if base_env.reward_config is not None:
+        contract = replace(contract, reward_config_hash=base_env.reward_config.content_hash)
+    from tools.export_onnx import export_torch_policy
+    submission = output / "submission"
+    export_torch_policy(policy, contract, None, submission, source_kind="synapse")
+    shutil.copyfile(args.config, output / "run_config.json")
+    hparams = getattr(args, "hparams", None)
+    if hparams is not None:
+        shutil.copyfile(hparams, output / "hparams.json")
+    budget = getattr(args, "_synapse_budget", None)
+    if budget is not None:
+        (output / "budget_status.json").write_text(json.dumps(budget.status(getattr(args, "_synapse_run_id", None)), indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    (output / "training_report.md").write_text(
+        "# SYNAPSE SDK run\n\nThis run was saved by the participant SDK. The model-only ONNX submission is in `submission/`.\n",
+        encoding="utf-8",
+    )
+    return submission
+
+
+__all__ = ["make_env", "parse_args", "save"]

@@ -1,10 +1,9 @@
-"""Optional participant starter.
+"""Compatibility wrapper for the single SYNAPSE reference PPO trainer.
 
-This file is deliberately participant-owned: replace it with the complete
-training program you want to use. The current body delegates to the local PPO
-reference only so a clean checkout has a runnable onboarding smoke test. The
-reference model, optimizer, hyperparameters, and reward adapter are not part
-of the SYNAPSE event contract.
+All participant training uses ``tools/run_reference_baseline.py`` so the nine
+dashboard reward weights are applied consistently. Use ``--model`` to supply
+a custom actor architecture; change the reference baseline when changing PPO
+behavior.
 """
 
 import sys
@@ -15,7 +14,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.run_reference_baseline import main
-
 
 if __name__ == "__main__":
     main()

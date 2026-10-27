@@ -3,10 +3,11 @@
 import importlib.util
 
 from .config import SimulationConfig
+from .budgeted_env import BudgetedEnv
 from .env import RacingEnv
 from .evaluation import EvaluationResult, evaluate_policy, validate_evaluation_contract
 from .evaluation import evaluate_participant_artifact
-from .model_artifact import ArtifactLimits, ParticipantModelArtifact, load_participant_artifact
+from .model_artifact import ArtifactLimits, ParticipantModelArtifact, load_participant_artifact, save_layers
 from .live_race import LiveRaceOptions, LiveRaceReport, run_live_onnx_race
 from .live_protocol import LiveStatePublisher
 from .observation import (
@@ -21,11 +22,12 @@ from .rollout import PPOHyperparameters, RolloutBatch, RolloutCollector, Rollout
 from .track import TrackGeometry
 from .vector_env import RacingVectorEnv, VectorizedRacingEnv
 
-_PPO_EXPORTS = {"FixedMLPActorCritic", "PPOTrainer", "PPOUpdateMetrics", "compute_masked_gae"}
+_PPO_EXPORTS = {"ActorCritic", "FixedMLPActorCritic", "PPOTrainer", "PPOUpdateMetrics", "build_actor_critic", "compute_masked_gae"}
 
 __all__ = [
     "ObservationSchema",
     "RacingEnv",
+    "BudgetedEnv",
     "RacingVectorEnv",
     "RewardConfig",
     "RewardFunction",
@@ -33,6 +35,7 @@ __all__ = [
     "ArtifactLimits",
     "ParticipantModelArtifact",
     "load_participant_artifact",
+    "save_layers",
     "PPOHyperparameters",
     "RolloutBatch",
     "RolloutCollector",

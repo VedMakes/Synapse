@@ -77,7 +77,7 @@ class ParticipantTrainingTests(unittest.TestCase):
             self.assertEqual(contract.reward_config_hash, "4b0eca661d514c3747def79073badd780d77780d1e65d9174a0bd4591622b930")
             self.assertEqual(len(contract.reward_sha256 or ""), 64)
 
-    def test_participant_launcher_forwards_owned_trainer(self) -> None:
+    def test_participant_launcher_canonicalizes_to_reference_trainer(self) -> None:
         args = Namespace(
             trainer=ROOT / "examples" / "participant_train.py",
             reward=DEFAULT_REWARD,
@@ -91,13 +91,17 @@ class ParticipantTrainingTests(unittest.TestCase):
             seed=17,
         )
         command = build_training_command(args)
-        self.assertTrue(command[1].endswith("examples/participant_train.py"))
+        self.assertTrue(command[1].endswith("tools/run_reference_baseline.py"))
         self.assertIn("--steps", command)
         with self.assertRaises(ValueError):
             args.trainer = ROOT.parent / "outside.py"
             build_training_command(args)
 
-    def test_participant_launcher_validates_inputs_and_allows_no_reward(self) -> None:
+        args.trainer = ROOT / "participant_code" / "model.py"
+        with self.assertRaisesRegex(ValueError, "always uses tools/run_reference_baseline.py"):
+            build_training_command(args)
+
+    def test_participant_launcher_uses_the_baseline_reward_by_default(self) -> None:
         args = Namespace(
             trainer=ROOT / "examples" / "participant_train.py",
             reward=None,
@@ -111,7 +115,8 @@ class ParticipantTrainingTests(unittest.TestCase):
             seed=17,
         )
         command = build_training_command(args)
-        self.assertNotIn("--reward", command)
+        self.assertIn("--reward", command)
+        self.assertTrue(command[command.index("--reward") + 1].endswith("examples/baseline_reward.json"))
         args.config = ROOT / "artifacts" / "missing-config.json"
         with self.assertRaisesRegex(ValueError, "config does not exist"):
             build_training_command(args)

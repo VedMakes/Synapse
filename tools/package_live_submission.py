@@ -65,6 +65,8 @@ def _source_kind(source: Path) -> tuple[Path, str, Path]:
         return nested, "numpy_artifact", source
     if (source / "manifest.json").is_file() and (source / "weights.npz").is_file():
         return source, "numpy_artifact", source.parent
+    if (source / "manifest.json").is_file() and (source / "model.onnx").is_file():
+        return source, "imported_onnx", source.parent
     if all((source / name).is_file() for name in ("policy.pt", "policy.json", "training_contract.json")):
         return source, "reference", source
     raise ValueError(
@@ -122,7 +124,12 @@ def package_live_submission(
     temporary = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.", dir=output_path.parent))
     try:
         submission = temporary / "submission"
-        export(artifact_source, submission, reference=source_kind == "reference")
+        if source_kind == "imported_onnx":
+            submission.mkdir(parents=True, exist_ok=True)
+            for name in ("manifest.json", "training_contract.json", "model.onnx"):
+                _copy_regular(artifact_source / name, submission / name)
+        else:
+            export(artifact_source, submission, reference=source_kind == "reference")
         onnx_artifact = load_onnx_artifact(submission)
         contract, _ = TrainingContract.load(submission / "training_contract.json")
         expected_config_hash = TrainingContract.config_hash_for(config_value)
@@ -227,7 +234,12 @@ def package_onnx_submission(
     temporary = Path(tempfile.mkdtemp(prefix=f".{output_path.name}.", dir=output_path.parent))
     try:
         submission = temporary / "submission"
-        export(artifact_source, submission, reference=source_kind == "reference")
+        if source_kind == "imported_onnx":
+            submission.mkdir(parents=True, exist_ok=True)
+            for name in ("manifest.json", "training_contract.json", "model.onnx"):
+                _copy_regular(artifact_source / name, submission / name)
+        else:
+            export(artifact_source, submission, reference=source_kind == "reference")
         onnx_artifact = load_onnx_artifact(submission)
         contract, _ = TrainingContract.load(submission / "training_contract.json")
         expected_config_hash = TrainingContract.config_hash_for(config_value)

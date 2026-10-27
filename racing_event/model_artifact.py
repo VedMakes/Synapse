@@ -12,8 +12,11 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 import re
+import shutil
+import tempfile
 from typing import Any
 
 import numpy as np
@@ -408,4 +411,73 @@ def load_participant_artifact(
     )
 
 
-__all__ = ["ARTIFACT_FORMAT", "ARTIFACT_FORMAT_VERSION", "ArtifactLimits", "ParticipantModelArtifact", "load_participant_artifact"]
+def save_layers(
+    layers: list[tuple[np.ndarray, np.ndarray, str]] | tuple[tuple[np.ndarray, np.ndarray, str], ...],
+    output: str | Path,
+    contract: TrainingContract,
+    *,
+    preprocessing: dict[str, Any] | None = None,
+    environment_code_hash: str | None = None,
+) -> Path:
+    """Write the safe declarative artifact for NumPy/sklearn-style models."""
+    from .trajectory import engine_code_hash
+
+    destination = Path(output).resolve()
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("artifact output must be a new directory")
+    if not isinstance(contract, TrainingContract):
+        raise TypeError("contract must be a TrainingContract")
+    if not layers:
+        raise ValueError("layers must contain at least one dense layer")
+    processing = preprocessing or {"kind": "identity"}
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = Path(tempfile.mkdtemp(prefix=f".{destination.name}.", dir=destination.parent))
+    try:
+        arrays: dict[str, np.ndarray] = {}
+        manifest_layers: list[dict[str, str]] = []
+        input_size = contract.observation.size
+        for index, (raw_weights, raw_bias, activation) in enumerate(layers):
+            weights = np.asarray(raw_weights, dtype=np.float32)
+            bias = np.asarray(raw_bias, dtype=np.float32)
+            if weights.ndim != 2 or bias.ndim != 1 or weights.shape[1] != input_size or bias.shape != (weights.shape[0],):
+                raise ValueError(f"layer {index} has incompatible dense shapes")
+            if activation not in _ACTIVATIONS:
+                raise ValueError(f"unsupported artifact activation: {activation!r}")
+            if not np.all(np.isfinite(weights)) or not np.all(np.isfinite(bias)):
+                raise ValueError("layer weights and biases must be finite")
+            weights_name, bias_name = f"layer_{index}_weights", f"layer_{index}_bias"
+            arrays[weights_name] = weights
+            arrays[bias_name] = bias
+            manifest_layers.append({"name": f"layer_{index}", "weights": weights_name, "bias": bias_name, "activation": activation})
+            input_size = weights.shape[0]
+        if input_size != 2 or manifest_layers[-1]["activation"] != "tanh":
+            raise ValueError("artifact layers must end in two tanh actions")
+        np.savez(temporary / "weights.npz", **arrays)
+        contract.save(temporary / "training_contract.json")
+        manifest = {
+            "format": ARTIFACT_FORMAT,
+            "format_version": ARTIFACT_FORMAT_VERSION,
+            "environment_code_hash": environment_code_hash or engine_code_hash(),
+            "observation": {
+                "schema_version": contract.observation.version,
+                "size": contract.observation.size,
+                "dtype": contract.observation.dtype,
+                "ray_angles_deg": list(contract.observation.ray_angles_deg),
+                "ray_count": len(contract.observation.ray_angles_deg),
+            },
+            "action": {"schema_version": "1.0", "size": 2, "dtype": "float32", "bounds": [[-1.0, 1.0], [-1.0, 1.0]], "output_activation": "tanh"},
+            "preprocessing": processing,
+            "layers": manifest_layers,
+            "weights_sha256": _sha256_bytes(temporary / "weights.npz"),
+            "training_contract_sha256": _sha256_bytes(temporary / "training_contract.json"),
+        }
+        (temporary / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        load_participant_artifact(temporary)
+        os.rename(temporary, destination)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return destination
+
+
+__all__ = ["ARTIFACT_FORMAT", "ARTIFACT_FORMAT_VERSION", "ArtifactLimits", "ParticipantModelArtifact", "load_participant_artifact", "save_layers"]

@@ -21,6 +21,7 @@ import numpy as np
 
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
+from racing_event.reward import SIGNAL_NAMES
 from racing_event.trajectory import engine_code_hash, load_replay
 from tools import participant_ui as ui
 from tools.participant_ui import (
@@ -95,7 +96,7 @@ class ParticipantUiTests(unittest.TestCase):
             command = build_training_command({"output_dir": str(output_dir), "trainer": "examples/participant_train.py", "steps": 16})
         self.assertTrue(command[1].endswith("tools/train_participant.py"))
         self.assertIn("--trainer", command)
-        self.assertTrue(command[command.index("--trainer") + 1].endswith("/examples/participant_train.py"))
+        self.assertTrue(command[command.index("--trainer") + 1].endswith("/tools/run_reference_baseline.py"))
         self.assertIn("--output-dir", command)
         self.assertEqual(Path(command[command.index("--output-dir") + 1]), output_dir)
         with self.assertRaises(ValueError):
@@ -242,7 +243,9 @@ class ParticipantUiTests(unittest.TestCase):
             })
             reward_path = Path(command[command.index("--reward") + 1])
             config_path = Path(command[command.index("--config") + 1])
-            self.assertEqual(json.loads(reward_path.read_text())["weights"]["progress"], 4.5)
+            reward_data = json.loads(reward_path.read_text())
+            self.assertEqual(reward_data["weights"]["progress"], 4.5)
+            self.assertEqual(set(reward_data["weights"]), set(SIGNAL_NAMES))
             self.assertEqual(json.loads(config_path.read_text())["sensors"]["ray_angles_deg"], [-30.0, 0.0, 30.0])
             identity = json.loads((output_dir / "run_identity.json").read_text())
             self.assertTrue(identity["reward_sha256"])
@@ -645,7 +648,7 @@ class ParticipantUiApiTests(unittest.TestCase):
         self.assertFalse(result["headless"])
         self.assertEqual(self.request(result["download_url"], method="GET")[0], 200)
 
-    def test_start_stop_api_and_duplicate_start_preserve_run_snapshots(self) -> None:
+    def test_arbitrary_trainer_is_rejected_before_start(self) -> None:
         trainer = self.root / "trainer.py"
         trainer.write_text("import time\nprint('participant ready', flush=True)\ntime.sleep(10)\n")
         output = self.root / "training"
@@ -653,16 +656,9 @@ class ParticipantUiApiTests(unittest.TestCase):
             "trainer": str(trainer), "output_dir": str(output), "steps": 1,
             "ray_count": 3, "ray_angles_deg": "90,0,-90", "reward_weights": {"progress": 4},
         })
-        self.assertEqual(status, 200, result)
-        wait_for(lambda: "participant ready" in ui.PROCESS.snapshot()["lines"])
-        before = {path.name: path.read_bytes() for path in output.iterdir()}
-        status, result = self.post("/api/start", {"output_dir": str(output), "ray_angles_deg": "0"})
         self.assertEqual(status, 400, result)
-        self.assertEqual(before, {path.name: path.read_bytes() for path in output.iterdir()})
-        self.assertEqual(self.post("/api/watch", self.form)[0], 400)
-        self.assertEqual(self.post("/api/stop", {})[0], 200)
-        wait_for(lambda: not ui.PROCESS.snapshot()["running"])
-        self.assertEqual(ui.PROCESS.snapshot()["state"], "stopped")
+        self.assertIn("always uses tools/run_reference_baseline.py", result["error"])
+        self.assertFalse(output.exists())
 
     def test_live_race_api_supervises_command_and_exposes_telemetry(self) -> None:
         command = [sys.executable, "-c", "import time; print('Live WebSocket endpoint: ws://127.0.0.1:8777/live/v1', flush=True); print('LIVE_TELEMETRY {\"kind\":\"live_tick\",\"entrants\":[]}', flush=True); time.sleep(10)"]

@@ -125,7 +125,154 @@ def compute_masked_gae(
     return advantages, returns
 
 
-class FixedMLPActorCritic(nn.Module):
+class ActorCritic(nn.Module):
+    """PPO policy boundary with a participant-owned actor and platform critic.
+
+    ``actor`` must return the *pre-tanh* action mean with shape ``[B, 2]``.
+    The platform owns the tanh-normal distribution and the value head so custom
+    architectures cannot accidentally change the action contract.
+    """
+
+    def __init__(
+        self,
+        actor: nn.Module | None = None,
+        observation_size: int | None = None,
+        *,
+        critic: nn.Module | None = None,
+        log_std_init: float = -0.5,
+    ) -> None:
+        super().__init__()
+        if actor is None:
+            return
+        if observation_size is None or isinstance(observation_size, bool) or not isinstance(observation_size, Integral) or observation_size <= 0:
+            raise ValueError("observation_size must be a positive integer")
+        if not isinstance(actor, nn.Module):
+            raise TypeError("actor must be a torch.nn.Module")
+        if not np.isfinite(float(log_std_init)):
+            raise ValueError("log_std_init must be finite")
+        self.actor = actor
+        self.critic = critic or default_critic(int(observation_size))
+        self.observation_size = int(observation_size)
+        self.action_size = PPO_ACTION_SIZE
+        self.hidden_sizes = ()
+        self.log_std_init = float(log_std_init)
+        self.log_std = nn.Parameter(torch.full((self.action_size,), self.log_std_init))
+
+    def forward(self, observations: Tensor) -> tuple[Tensor, Tensor]:
+        if not hasattr(self, "actor"):
+            raise NotImplementedError("the actor-critic must implement forward")
+        if observations.ndim != 2 or observations.shape[1] != self.observation_size:
+            raise ValueError(f"observations must have shape (batch, {self.observation_size})")
+        values = observations.float()
+        mean = self.actor(values)
+        if mean.ndim != 2 or mean.shape[1] != self.action_size:
+            raise ValueError(f"actor must return shape (batch, {self.action_size})")
+        critic_value = self.critic(values)
+        if critic_value.ndim == 2 and critic_value.shape[1] == 1:
+            critic_value = critic_value[:, 0]
+        if critic_value.ndim != 1:
+            raise ValueError("critic must return shape (batch,) or (batch, 1)")
+        return mean, critic_value
+
+    def _distribution(self, mean: Tensor) -> Normal:
+        log_std = self.log_std.clamp(-5.0, 2.0).expand_as(mean)
+        return Normal(mean, log_std.exp())
+
+    @staticmethod
+    def _tensor(value: Tensor | np.ndarray, width: int, name: str) -> Tensor:
+        tensor = value if isinstance(value, Tensor) else torch.as_tensor(value)
+        if tensor.ndim != 2 or tensor.shape[1] != width:
+            raise ValueError(f"{name} must have shape (batch, {width})")
+        if not torch.isfinite(tensor).all():
+            raise ValueError(f"{name} must contain only finite values")
+        return tensor.float()
+
+    def evaluate_actions(
+        self,
+        observations: Tensor | np.ndarray,
+        actions: Tensor | np.ndarray,
+    ) -> tuple[Tensor, Tensor, Tensor]:
+        observation_tensor = self._tensor(observations, self.observation_size, "observations")
+        action_tensor = self._tensor(actions, self.action_size, "actions")
+        if not torch.isfinite(action_tensor).all() or torch.any(torch.abs(action_tensor) > 1.0 + 1.0e-6):
+            raise ValueError("PPO actions must be finite and inside [-1, 1]")
+        mean, value = self(observation_tensor)
+        distribution = self._distribution(mean)
+        bounded = action_tensor.clamp(-1.0 + _LOG_PROB_EPSILON, 1.0 - _LOG_PROB_EPSILON)
+        latent = torch.atanh(bounded)
+        log_probability = (distribution.log_prob(latent) - torch.log(1.0 - bounded.square() + _LOG_PROB_EPSILON)).sum(dim=-1)
+        entropy = distribution.entropy().sum(dim=-1)
+        return log_probability, entropy, value
+
+    def act(self, observations: np.ndarray, *, deterministic: bool = False) -> np.ndarray:
+        observation_tensor = self._tensor(observations, self.observation_size, "observations")
+        with torch.no_grad():
+            mean, _ = self(observation_tensor)
+            latent = mean if deterministic else self._distribution(mean).sample()
+            actions = torch.tanh(latent)
+        return actions.cpu().numpy().astype(np.float64, copy=False)
+
+    def value(self, observations: np.ndarray | Tensor) -> np.ndarray:
+        observation_tensor = self._tensor(observations, self.observation_size, "observations")
+        with torch.no_grad():
+            _, values = self(observation_tensor)
+        return values.cpu().numpy().astype(np.float64, copy=False)
+
+    def as_policy(self, *, deterministic: bool = False):
+        return lambda observations: self.act(observations, deterministic=deterministic)
+
+    @property
+    def parameter_count(self) -> int:
+        return sum(int(value.numel()) for value in self.parameters())
+
+    def artifact_metadata(self, hyperparameters: PPOHyperparameters | None = None) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "format": "racing_event_actor_critic",
+            "format_version": 1,
+            "observation_size": self.observation_size,
+            "action_size": self.action_size,
+            "distribution": "tanh_normal",
+            "actor_parameters": sum(int(value.numel()) for value in self.actor.parameters()),
+            "parameters": self.parameter_count,
+        }
+        if hyperparameters is not None:
+            payload["ppo"] = hyperparameters.to_dict()
+        return payload
+
+    def save_artifact(
+        self,
+        weights_path: str | Path,
+        metadata_path: str | Path | None = None,
+        *,
+        hyperparameters: PPOHyperparameters | None = None,
+    ) -> tuple[Path, Path]:
+        if not hasattr(self, "actor"):
+            raise TypeError("generic artifact saving requires a participant-owned actor")
+        weights = Path(weights_path)
+        metadata = Path(metadata_path) if metadata_path is not None else weights.with_suffix(".json")
+        weights.parent.mkdir(parents=True, exist_ok=True)
+        state = {name: value.detach().cpu() for name, value in self.state_dict().items()}
+        torch.save(state, weights)
+        metadata.write_text(json.dumps(self.artifact_metadata(hyperparameters), sort_keys=True, indent=2) + "\n", encoding="utf-8")
+        return weights, metadata
+
+
+def default_critic(observation_size: int) -> nn.Module:
+    return nn.Sequential(nn.Linear(observation_size, 64), nn.Tanh(), nn.Linear(64, 1))
+
+
+def build_actor_critic(
+    actor: nn.Module,
+    observation_size: int,
+    *,
+    critic: nn.Module | None = None,
+    log_std_init: float = -0.5,
+) -> ActorCritic:
+    """Wrap a participant actor in the platform-owned PPO contract."""
+    return ActorCritic(actor, observation_size, critic=critic, log_std_init=log_std_init)
+
+
+class FixedMLPActorCritic(ActorCritic):
     """The fixed event policy: 23-ish inputs, two tanh layers, two actions."""
 
     def __init__(
@@ -399,15 +546,13 @@ class PPOTrainer:
 
     def __init__(
         self,
-        policy: FixedMLPActorCritic,
+        policy: ActorCritic,
         hyperparameters: PPOHyperparameters | None = None,
     ) -> None:
-        if not isinstance(policy, FixedMLPActorCritic):
-            raise TypeError("policy must be a FixedMLPActorCritic")
+        if not isinstance(policy, ActorCritic):
+            raise TypeError("policy must be an ActorCritic")
         self.policy = policy
         self.hyperparameters = hyperparameters or PPOHyperparameters()
-        if tuple(self.hyperparameters.hidden_sizes) != PPO_HIDDEN_SIZES:
-            raise ValueError("the fixed PPO trainer requires hidden_sizes=(64, 64)")
         self.optimizer = torch.optim.Adam(
             self.policy.parameters(),
             lr=self.hyperparameters.learning_rate,
@@ -587,8 +732,11 @@ class PPOTrainer:
 
 
 __all__ = [
+    "ActorCritic",
     "FixedMLPActorCritic",
     "PPOTrainer",
     "PPOUpdateMetrics",
+    "build_actor_critic",
     "compute_masked_gae",
+    "default_critic",
 ]
