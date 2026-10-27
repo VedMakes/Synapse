@@ -207,20 +207,8 @@ def _write_report(output: Path, state: dict[str, Any]) -> None:
     checkpoint.atomic_bytes(output / "training_report.md", text.encode())
 
 
-def _training_position_payload(env: VectorizedRacingEnv, update: int) -> dict[str, Any]:
-    """Expose the latest rollout state for the dashboard's live track view."""
-    cars = []
-    for lane in range(env.n_envs):
-        track = env.tracks[int(env.track_indices[lane])]
-        cars.append({
-            "lane": lane,
-            "track_id": track.track_id,
-            "x": float(env.state.x[lane]),
-            "y": float(env.state.y[lane]),
-            "heading": float(env.state.heading[lane]),
-            "progress_fraction": float(env.distance_since_spawn[lane] / track.length),
-            "zones_reached": int(int(env.sector_coverage_mask[lane]).bit_count()),
-        })
+def _training_position_payload(cars: list[dict[str, Any]], update: int) -> dict[str, Any]:
+    """Expose each lane's latest driven position, before any autoreset."""
     return {"kind": "training_position", "update": update, "cars": cars}
 
 
@@ -534,7 +522,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         )
         print("SYNAPSE_METRIC " + json.dumps({
             "kind": "training_progress",
-            "training_position": _training_position_payload(env, state["updates"]),
+            "training_position": _training_position_payload(rollout.training_position or [], state["updates"]),
             "early_stopping": {
                 "enabled": early_stopping,
                 "patience": early_stop_patience,

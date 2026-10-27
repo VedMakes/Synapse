@@ -1363,14 +1363,14 @@ PAGE = r'''<!doctype html>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 1,000,000 transitions</span><span id="remaining-label">1,000,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
           <p id="early-stop-status" class="hint" role="status" aria-live="polite">Early stopping enabled · waiting for public-map validation.</p>
           <div class="training-map">
-            <div class="training-map-head"><strong>Latest training rollout · live car position</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
+            <div class="training-map-head"><strong>Latest driven position · training car</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
             <svg id="training-track" viewBox="0 0 720 420" role="img" aria-labelledby="training-track-title training-track-description">
               <title id="training-track-title">Training car position on the track</title>
-              <desc id="training-track-description">Shows the final car position from the latest PPO rollout for the selected parallel environment.</desc>
+              <desc id="training-track-description">Shows each selected lane's last driven position and forward heading before any episode reset.</desc>
               <polyline id="training-track-line" points=""></polyline><polyline id="training-track-center" points=""></polyline>
-              <polygon id="training-car" points="0,-11 7,8 0,5 -7,8" transform="translate(0 0)" hidden></polygon>
+              <polygon id="training-car" points="11,0 -8,-7 -5,0 -8,7" transform="translate(0 0)" hidden></polygon>
             </svg>
-            <p id="training-map-status" class="training-map-status" role="status" aria-live="polite">The map updates after each PPO rollout; no training position yet.</p>
+            <p id="training-map-status" class="training-map-status" role="status" aria-live="polite">The map updates after each PPO rollout and holds the final driven position if an episode reset follows.</p>
           </div>
           <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean zones reached</small><strong id="metric-zones">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
              <div id="log" class="log">Waiting for a local trainer process…</div>
@@ -1503,7 +1503,8 @@ PAGE = r'''<!doctype html>
         $("training-car").setAttribute("transform", `translate(${carX.toFixed(1)} ${carY.toFixed(1)}) rotate(${heading.toFixed(1)})`);
         $("training-car").removeAttribute("hidden");
         const progress = Number(car.progress_fraction) * 100;
-        $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited`;
+        const end = car.end_reason ? ` · episode ended: ${car.end_reason}` : " · latest driven position";
+        $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited${car.off_track ? " · off track" : ""}${end}`;
       }
        function renderRace(data) {
         latestRace = data || {};

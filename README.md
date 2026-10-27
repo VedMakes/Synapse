@@ -414,9 +414,15 @@ panel plots the latest rollout position for each parallel environment. It also d
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
 
-While training, use the **Latest training rollout** map to follow each parallel
-environment. Select a lane to inspect its car on Monaco or Spa; the marker and
-lap-distance/zone readout update after each PPO rollout.
+While training, use the **Latest driven position** map to follow each parallel
+environment. Select a lane to inspect its car on Monaco or Spa; the forward
+marker, lap-distance, and zone readout update after each PPO rollout. The map
+holds the lane's last driven position if an episode ends at the rollout boundary,
+so it does not jump to a randomized spawn before the trainer can inspect the
+crash or final lap position. Going off the road onto runoff does not itself
+respawn the car; it can recover. Barrier contact, lap completion, driving too
+far backward, getting stuck, or reaching the episode step limit ends that
+episode and starts another when collection continues.
 
 ## 6. Sensors and actions: what the model sees and does
 

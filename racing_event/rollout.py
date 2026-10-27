@@ -119,6 +119,7 @@ class RolloutResult:
     batch: RolloutBatch
     metrics: dict[str, Any]
     wall_time_s: float
+    training_position: list[dict[str, Any]] | None = None
 
 
 Policy = Callable[[np.ndarray], np.ndarray]
@@ -234,7 +235,7 @@ class RolloutCollector:
             signals={name: np.empty((0, self.env.n_envs), dtype=np.float64) for name in SIGNAL_NAMES},
             track_ids=(),
         )
-        return RolloutResult(batch=batch, metrics=RolloutMetrics(self.env.n_envs, self.env.config.dt, self.reward_weights).snapshot(wall_time_s=wall_time_s), wall_time_s=wall_time_s)
+        return RolloutResult(batch=batch, metrics=RolloutMetrics(self.env.n_envs, self.env.config.dt, self.reward_weights).snapshot(wall_time_s=wall_time_s), wall_time_s=wall_time_s, training_position=[])
 
     def collect(self, steps: int, *, metrics: RolloutMetrics | None = None) -> RolloutResult:
         """Collect exactly ``steps`` transitions or raise before stepping.
@@ -278,6 +279,7 @@ class RolloutCollector:
             name: [] for name in SIGNAL_NAMES
         }
         track_history: list[tuple[str, ...]] = []
+        latest_positions: dict[int, dict[str, Any]] = {}
         collected = 0
         started = time.perf_counter()
 
@@ -328,6 +330,32 @@ class RolloutCollector:
                 active_mask=active_mask,
             )
 
+            state = info["state"]
+            for lane in active_indices:
+                lane = int(lane)
+                track = self.env.tracks[int(self.env.track_indices[lane])]
+                reason = None
+                if term[lane]:
+                    if info["crash"][lane]:
+                        reason = "barrier contact"
+                    elif info["lap_complete"][lane]:
+                        reason = "lap completed"
+                    else:
+                        reason = "backward limit"
+                elif trunc[lane]:
+                    reason = "stuck" if info["signals"]["stuck"][lane] else "episode time limit"
+                latest_positions[lane] = {
+                    "lane": lane,
+                    "track_id": info["track_id"][lane],
+                    "x": float(state["x"][lane]),
+                    "y": float(state["y"][lane]),
+                    "heading": float(state["heading"][lane]),
+                    "progress_fraction": float(info["distance_since_spawn"][lane] / track.length),
+                    "zones_reached": int(info["sector_coverage_count"][lane]),
+                    "off_track": bool(info["off_track"][lane]),
+                    "end_reason": reason,
+                }
+
             observations.append(observation.copy())
             next_observations.append(next_observation.copy())
             actions.append(raw_action.copy())
@@ -362,7 +390,11 @@ class RolloutCollector:
             signals={name: np.stack(values).astype(np.float64, copy=False) for name, values in signal_history.items()},
             track_ids=tuple(track_history),
         )
-        return RolloutResult(batch=batch, metrics=metrics.snapshot(wall_time_s=wall_time_s), wall_time_s=wall_time_s)
+        return RolloutResult(
+            batch=batch, metrics=metrics.snapshot(wall_time_s=wall_time_s),
+            wall_time_s=wall_time_s,
+            training_position=[latest_positions[lane] for lane in sorted(latest_positions)],
+        )
 
 
 __all__ = ["PPOHyperparameters", "RolloutBatch", "RolloutCollector", "RolloutResult"]
