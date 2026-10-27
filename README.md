@@ -324,11 +324,25 @@ every actor architecture.
 
 ### 4.4 Client retrain cap
 
-The participant launcher now allows **12 independent training allocations** on
-one client. Each allocation can request at most **1,000,000 transitions**. This
-gives a practical maximum of 12,000,000 requested training transitions while still
-leaving room for a baseline, multiple reward/model experiments, two seed
-checks, and final confirmation runs.
+The participant launcher allows **12 training iterations** on one client. Each
+iteration funds up to **1,000,000 additional transitions**. A new output
+directory spends one iteration; resuming that same directory does not. When a
+run needs more training, pause it and choose **Spend 1 iteration · add
+1,000,000 steps to this model**. This raises that checkpoint's transition cap
+and continues from its actor, optimizer, normalizer, environment state, and
+random-number state. If training already completed, the same action resumes
+from the last saved checkpoint.
+The step target is normally frozen once training starts; this explicit extension
+is the only UI action that raises it, and it is recorded against one of the 12
+iterations. The extension preserves the saved validation cadence and resets an
+early-stop plateau counter so training can continue.
+
+Use **Pause** and **Continue** to suspend and resume the live trainer process.
+Pause freezes the process in place, including its optimizer and active rollout;
+Continue resumes that same process state. Stop terminates immediately. If Stop
+interrupts an update after its environment steps were reserved, exact checkpoint
+resume may be refused to avoid silently reusing charged transitions; use
+Pause/Continue when you need an interruption-free hold.
 
 An allocation is identified by its output directory. Reusing that same
 directory to resume a compatible run does not consume another allocation; a
@@ -338,7 +352,7 @@ new output directory is a new retrain and uses one slot. The local ledger is:
 .synapse/client_training_budget.json
 ```
 
-The dashboard shows the remaining allocation count. This is a client-side
+The dashboard shows the remaining iteration count. This is a client-side
 operational guard, not organizer-grade proof: someone who controls the client
 can delete or edit local files. Organizer-side evaluation must enforce the
 actual competition budget separately.
@@ -346,7 +360,36 @@ actual competition budget separately.
 When upgrading from a lower client cap, SYNAPSE raises the ledger cap while
 preserving its allocation history. Existing output folders keep the budget
 assigned when they were first allocated; choose a new output folder to start a
-run with the 1,000,000-step limit.
+run with the 1,000,000-step limit. Spend an iteration to extend an existing
+checkpoint instead of creating a new output folder when you want more training
+for that model.
+
+### 4.5 Research-based starting point for training
+
+SYNAPSE provides a compact, low-dimensional state vector with car telemetry,
+ray distances, and track lookahead, plus two bounded continuous controls. Start
+with a feed-forward MLP rather than a vision CNN or recurrent network. Two
+64-unit hidden layers are a sensible baseline; compare two 128-unit layers if
+validation shows underfitting. Stable-Baselines3 uses two 64-unit layers as its
+PPO default for 1D observations, and an autonomous racing study tested compact
+two-layer policies (64 or 128 units) with LiDAR observations. These are starting
+points, not a proven optimum for SYNAPSE.
+
+Use **1,000,000 environment transitions as an initial experiment ceiling**, not
+a promise of convergence. Continuous-control performance varies substantially
+by environment and reward design. The dashboard's current default of two
+parallel environments and 32 steps per environment yields only 64 transitions
+per PPO update. Benchmark longer rollouts, such as 256–2,048 steps per
+environment, with the same total transition count and several seeds. PPO's
+commonly documented 2,048-step rollout is a reference point; it has not been
+validated as best for these maps. Keep the checkpoint selected by fixed-start
+public-map validation, and compare lap completion, lap time, average speed,
+crashes, and off-track time rather than choosing by shaped training reward
+alone.
+
+References: [Stable-Baselines3 policy network guidance](https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html),
+[Stable-Baselines3 PPO parameters](https://stable-baselines3.readthedocs.io/en/v1.0/modules/ppo.html),
+[neural-network controllers for autonomous racing with LiDAR](https://arxiv.org/abs/1910.11309).
 
 Teacher demonstrations used by the optional scripted/imitation helpers are
 local diagnostic data and are not event submissions. Participant environment

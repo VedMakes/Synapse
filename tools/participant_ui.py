@@ -33,7 +33,9 @@ from racing_event.client_budget import (
     DEFAULT_MAX_RETRAINS,
     DEFAULT_MAX_STEPS_PER_RETRAIN,
     client_budget_status,
+    extend_training_allocation,
 )
+from racing_event.budget import RunBudget
 from racing_event.config import SimulationConfig
 from racing_event.observation import TrainingContract
 from racing_event.reward import RewardConfig
@@ -486,11 +488,9 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     if output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
     steps = positive_int("steps", 1000000)
-    budget_steps = positive_int("budget_steps", 1000000)
-    if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
-        raise ValueError(
-            f"budget_steps cannot exceed the client cap of {DEFAULT_MAX_STEPS_PER_RETRAIN:,} transitions per retrain"
-        )
+    budget_steps = positive_int("budget_steps", DEFAULT_MAX_STEPS_PER_RETRAIN)
+    if budget_steps > DEFAULT_MAX_RETRAINS * DEFAULT_MAX_STEPS_PER_RETRAIN:
+        raise ValueError("budget_steps exceeds the total 12-iteration client cap")
     n_envs = positive_int("n_envs", 2)
     rollout_length = positive_int("rollout_length", 32)
     seed = positive_int("seed", 17)
@@ -725,6 +725,7 @@ class TrainingProcess:
             current["resources"] = dict(self._status["resources"])
             # Keep inputs frozen until the output reader has finalized this run.
             current["running"] = self._process is not None
+            current["paused"] = self._status.get("state") == "paused"
             return current
 
     def start(self, form: dict[str, object]) -> dict[str, object]:
@@ -788,6 +789,27 @@ class TrainingProcess:
                 Thread(target=self._escalate_stop, args=(process,), daemon=True).start()
         return self.snapshot()
 
+    def pause(self) -> dict[str, object]:
+        with self._lock:
+            process = self._process
+            if process is None or process.poll() is not None:
+                raise RuntimeError("there is no active training process to pause")
+            if self._status.get("kind") != "training":
+                raise RuntimeError("only a training process can be paused here")
+            if self._status.get("state") != "paused":
+                os.killpg(os.getpgid(process.pid), signal.SIGSTOP)
+                self._status["state"] = "paused"
+        return self.snapshot()
+
+    def resume(self) -> dict[str, object]:
+        with self._lock:
+            process = self._process
+            if process is None or process.poll() is not None or self._status.get("state") != "paused":
+                raise RuntimeError("there is no paused training process to continue")
+            os.killpg(os.getpgid(process.pid), signal.SIGCONT)
+            self._status["state"] = "running"
+        return self.snapshot()
+
     @staticmethod
     def _escalate_stop(process: subprocess.Popen[str]) -> None:
         try:
@@ -819,7 +841,7 @@ class TrainingProcess:
                     live = parse_live_telemetry_line(line)
                     if live is not None:
                         self._status["telemetry"] = live
-                    if self._status["state"] != "stopping":
+                    if self._status["state"] not in ("stopping", "paused"):
                         self._status["state"] = "running"
             return_code = process.wait()
             with self._lock:
@@ -1140,6 +1162,7 @@ PAGE = r'''<!doctype html>
     #training-track-center { fill: none; stroke: #45f3ff88; stroke-width: 2; stroke-dasharray: 5 6; vector-effect: non-scaling-stroke; }
     #training-car { fill: var(--pink); stroke: white; stroke-width: 2; filter: drop-shadow(0 0 7px #ff3fa4); }
     .training-map-status { margin: 6px 0 0; color: var(--muted); font: 11px ui-monospace, monospace; }
+    .training-map-status[data-event="true"] { color: #ffcb73; font-weight: 800; text-shadow: 0 0 10px #ffad4238; }
     .validation-panel { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #08121e; }
     .validation-panel strong { color: var(--cyan); font: 700 11px ui-monospace, monospace; text-transform: uppercase; }
     .validation-panel .log { min-height: 3.5em; max-height: 10em; margin-top: 8px; }
@@ -1279,8 +1302,7 @@ PAGE = r'''<!doctype html>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
              <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
               <label>Output directory<input id="output-dir" value="artifacts/runs/run-001" spellcheck="false"></label>
-             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="1000000"></label>
-             <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="1000000" step="1" value="1000000"></label>
+             <label>Steps this run<input id="steps" type="number" min="1" max="1000000" step="1" value="1000000"></label>
              <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
              <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
@@ -1288,7 +1310,8 @@ PAGE = r'''<!doctype html>
              <label>Validation checks without improvement<input id="early-stop-patience" type="number" min="1" max="20" step="1" value="5" aria-describedby="early-stop-hint run-error"></label>
              <p id="early-stop-hint" class="hint full">Training stops after this many validation checks in a row fail to improve the best public-map result. Validation work is capped separately from training transitions.</p>
           </div>
-           <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="stop" disabled>Stop now (force after 2s)</button><button id="setup">Set up / repair Python</button></div>
+           <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="pause" disabled>Pause</button><button id="continue" disabled>Continue</button><button id="stop" disabled>Stop now (force after 2s)</button><button id="extend" disabled>Spend 1 iteration · add 1,000,000 steps to this model</button><button id="setup">Set up / repair Python</button></div>
+          <p class="hint">Pause freezes the trainer process and Continue resumes it with its live optimizer and environment state intact. The step target stays locked after training begins. When a run reaches its cap, the explicit extension action spends one of the 12 iterations to add 1,000,000 transitions to this same checkpoint.</p>
           <p id="run-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
           <p class="hint">The trainer script is yours to replace. If NumPy is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
         </div>
@@ -1312,7 +1335,7 @@ PAGE = r'''<!doctype html>
             <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
             <p id="renderer-status" class="watch-result" role="status" aria-live="polite"></p>
           </div>
-           <div id="client-budget-callout" class="callout">12 new training allocations are available; each allocation allows at most 1,000,000 transitions. Resuming the same output directory does not use another allocation.</div>
+           <div id="client-budget-callout" class="callout">12 training iterations are available. A new run uses one; resuming the same output directory is free, and an explicit extension spends one iteration for 1,000,000 more transitions on that checkpoint.</div>
         </div>
       </aside>
          <section class="panel race-panel">
@@ -1390,16 +1413,17 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
         const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "checkpoint", "time", "steer_smoothness"];
-        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
         const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
-     const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
+     const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", paused: "Training paused", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
       const svgNamespace = "http://www.w3.org/2000/svg";
       const trainingMaps = new Map();
       let latestTrainingPosition = null;
+      let trainingEventFlash = "", trainingEventFlashUntil = 0;
         let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
-       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: latestStatus.metrics && latestStatus.metrics.budget_steps || "1000000", n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
        function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
        function rewardWarnings() {
@@ -1511,6 +1535,17 @@ PAGE = r'''<!doctype html>
         const speed = Number.isFinite(Number(car.speed_mps)) ? ` · ${Number(car.speed_mps).toFixed(1)} m/s` : "";
         const elapsed = Number.isFinite(Number(car.episode_time_s)) ? ` · ${Number(car.episode_time_s).toFixed(1)} s in episode` : "";
         $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited${speed}${elapsed}${car.off_track ? " · off track" : ""}${end}`;
+        if (car.end_reason) {
+          trainingEventFlash = `EVENT · ${String(car.end_reason).toUpperCase()} · environment ${car.lane}`;
+          trainingEventFlashUntil = Date.now() + 1500;
+        }
+        if (trainingEventFlash && Date.now() < trainingEventFlashUntil) {
+          $("training-map-status").textContent = `${trainingEventFlash} · ${$("training-map-status").textContent}`;
+          $("training-map-status").dataset.event = "true";
+        } else {
+          trainingEventFlash = "";
+          $("training-map-status").dataset.event = "false";
+        }
       }
       function renderPublicValidation(validation) {
         const target = $("validation-summary");
@@ -1555,10 +1590,10 @@ PAGE = r'''<!doctype html>
        function renderRuns(runs) { const target = $("runs-table"); target.replaceChildren(); if (!runs.length) { target.textContent = "No saved runs yet."; return; } runs.forEach(run => { const row = document.createElement("div"); row.className = "run-row"; const identity = run.identity || {}, metrics = run.metrics || {}; row.textContent = `${run.name} · model ${identity.model ? identity.model.model_sha256.slice(0, 10) : "reference"} · steps ${metrics.budget_used ?? "—"} · `; const clone = document.createElement("button"); clone.textContent = "Clone"; clone.dataset.run = run.path; clone.addEventListener("click", () => { $("output-dir").value = `${run.path}-clone`; if (run.reward && run.reward.weights) Object.entries(run.reward.weights).forEach(([name, value]) => { if ($(`reward-${name}`)) $(`reward-${name}`).value = value; }); renderRewardWarnings(); syncControls(); }); row.appendChild(clone); const compare = document.createElement("button"); compare.textContent = "Evaluate both maps"; compare.addEventListener("click", () => action("evaluate-both", { source: run.path })); row.appendChild(compare); target.appendChild(row); }); }
        function render(data) {
         latestStatus = data;
-       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used), clientBudget = data.client_budget || {};
+       const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || 1000000), remaining = Math.max(0, budget - used), clientBudget = data.client_budget || {};
       $("state-chip").textContent = state; $("state-label").textContent = stateText[state] || state; $("state-dot").dataset.state = state; $("runtime").textContent = data.running ? "Process active" : (data.returncode === undefined ? "No process running" : `Exit ${data.returncode}`);
        $("budget-label").textContent = `${used.toLocaleString()} / ${budget.toLocaleString()} transitions`; $("remaining-label").textContent = `${remaining.toLocaleString()} remaining`; $("progress-fill").style.width = `${Math.min(100, used / Math.max(1, budget) * 100)}%`;
-       if (clientBudget.error) { $("client-budget-callout").textContent = `Client training cap unavailable: ${clientBudget.error}`; } else if (clientBudget.max_retrains) { $("client-budget-callout").textContent = `${Number(clientBudget.retraining_remaining).toLocaleString()} of ${Number(clientBudget.max_retrains).toLocaleString()} new training allocations remaining; each allows at most ${Number(clientBudget.max_steps_per_retrain).toLocaleString()} transitions. Resuming the same output directory does not use another allocation.`; }
+       if (clientBudget.error) { $("client-budget-callout").textContent = `Client training cap unavailable: ${clientBudget.error}`; } else if (clientBudget.max_retrains) { $("client-budget-callout").textContent = `${Number(clientBudget.retraining_remaining).toLocaleString()} of ${Number(clientBudget.max_retrains).toLocaleString()} training iterations remaining. New runs receive ${Number(clientBudget.max_steps_per_retrain).toLocaleString()} transitions; resuming the same run is free, while extending its checkpoint spends one iteration for another ${Number(clientBudget.max_steps_per_retrain).toLocaleString()} transitions.`; }
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-zones").textContent = format(metrics.zones, " / 16"); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
       renderTrainingPosition(metrics.training_position);
@@ -1577,10 +1612,10 @@ PAGE = r'''<!doctype html>
      }
      function trainingError() {
        for (const id of ["trainer", "track-dir", "output-dir"]) if (!$(id).value.trim()) return `${id} is required.`;
-       for (const id of ["steps", "budget-steps", "n-envs", "rollout-length", "seed"]) {
+       for (const id of ["steps", "n-envs", "rollout-length", "seed"]) {
          const value = Number($(id).value);
           if (!/^\d+$/.test($(id).value.trim()) || !Number.isSafeInteger(value) || value <= 0) return `${id} must be a positive integer.`;
-          if (id === "budget-steps" && value > 1000000) return "budget-steps cannot exceed 1,000,000 transitions per retrain.";
+          if (id === "steps" && value > 1000000) return "Steps this run cannot exceed 1,000,000 transitions.";
        }
        for (const name of signalNames) {
          const raw = $("reward-" + name).value, value = Number(raw);
@@ -1598,12 +1633,16 @@ PAGE = r'''<!doctype html>
         const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
          const raceBusy = Boolean(pending) || raceActive || active || Boolean(latestStatus.action_busy);
          fields.forEach(id => { $(id).disabled = busy; });
+        $("steps").disabled = busy || Number((latestStatus.metrics || {}).budget_used || 0) > 0;
          packageFields.forEach(id => { $(id).disabled = busy || raceActive || active; });
          raceFields.forEach(id => { $(id).disabled = raceBusy; });
         $("start").disabled = busy || Boolean(trainingError());
         $("check-model").disabled = busy || !$("model").value.trim();
        $("setup").disabled = busy;
        $("stop").disabled = Boolean(pending) || !active || latestStatus.state === "stopping";
+       $("pause").disabled = Boolean(pending) || !active || latestStatus.state === "paused" || latestStatus.state === "stopping";
+       $("continue").disabled = Boolean(pending) || !active || latestStatus.state !== "paused";
+       $("extend").disabled = Boolean(pending) || (!latestStatus.paused && latestStatus.state !== "completed") || Number((latestStatus.metrics || {}).budget_used || 0) <= 0 || Number((latestStatus.client_budget || {}).retraining_remaining || 0) <= 0;
        const watchBusy = busy || Boolean(latestStatus.renderer && latestStatus.renderer.running);
        ["watch-source", "watch-map", "watch-renderer"].forEach(id => { $(id).disabled = watchBusy; });
         $("artifact-label").hidden = $("watch-source").value === "reference";
@@ -1662,6 +1701,9 @@ PAGE = r'''<!doctype html>
        $("start").addEventListener("click", () => action("start", formData()));
         $("check-model").addEventListener("click", () => action("check-model", { model: $("model").value, config: $("config") ? $("config").value : "config/simulation.json" }));
        $("stop").addEventListener("click", () => action("stop"));
+       $("pause").addEventListener("click", () => action("pause"));
+       $("continue").addEventListener("click", () => action("continue"));
+       $("extend").addEventListener("click", () => action("extend", { ...formData(), steps: "1000000" }));
        $("setup").addEventListener("click", () => action("setup"));
          $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_config: $("package-config").value, package_output: $("package-output").value, package_participant: $("package-participant").value }));
        $("race-start").addEventListener("click", () => { const error = raceValidation(); $("race-error").textContent = error; if (!error) action("race/start", raceFormData()); });
@@ -1811,10 +1853,16 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/stop":
                 self._json(200, PROCESS.stop())
                 return
+            if path == "/api/pause":
+                self._json(200, PROCESS.pause())
+                return
+            if path == "/api/continue":
+                self._json(200, PROCESS.resume())
+                return
             if path == "/api/race/stop":
                 self._json(200, RACE_PROCESS.stop())
                 return
-            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/package", "/api/check-model", "/api/evaluate-both", "/api/race/start"):
+            if path not in ("/api/start", "/api/extend", "/api/setup", "/api/watch", "/api/package", "/api/check-model", "/api/evaluate-both", "/api/race/start"):
                 self._json(404, {"error": "not found"})
                 return
             acquired = ACTION_LOCK.acquire(blocking=False)
@@ -1836,6 +1884,46 @@ class Handler(BaseHTTPRequestHandler):
                 result = build_onnx_package(form)
             elif path == "/api/check-model":
                 result = check_participant_model(form)
+            elif path == "/api/extend":
+                process_state = PROCESS.snapshot()
+                paused = bool(process_state.get("paused"))
+                if process_state["running"] and not paused:
+                    raise RuntimeError("pause training before spending an iteration to extend it")
+                if not process_state["running"] and process_state.get("state") != "completed":
+                    raise RuntimeError("training must be paused or completed before extending it")
+                output_dir = _workspace_path(str(form.get("output_dir", "")), label="output_dir")
+                _reject_symlinked_workspace_entry(output_dir, label="output_dir")
+                if paused:
+                    command = process_state.get("command", [])
+                    try:
+                        running_output = _workspace_path(command[command.index("--output-dir") + 1], label="running output_dir")
+                    except (ValueError, IndexError, TypeError) as exc:
+                        raise RuntimeError("cannot identify the paused training output directory") from exc
+                    if running_output != output_dir:
+                        raise RuntimeError("the selected output directory differs from the paused model run")
+                budget_path = output_dir / "budget.json"
+                if not budget_path.is_file():
+                    raise ValueError("the selected output directory has no resumable training budget")
+                budget = RunBudget.open(budget_path)
+                budget_state = budget.status()
+                if budget_state["runs_started"] != 1:
+                    raise ValueError("the selected output directory does not contain one resumable model run")
+                old_cap = budget_state["max_steps_per_run"]
+                allocation = extend_training_allocation(
+                    ROOT / ".synapse" / "client_training_budget.json", output_dir,
+                    max_retrains=DEFAULT_MAX_RETRAINS,
+                    max_steps_per_retrain=DEFAULT_MAX_STEPS_PER_RETRAIN,
+                )
+                new_cap = budget.extend_run(budget_state["runs"][0]["run_id"], DEFAULT_MAX_STEPS_PER_RETRAIN)
+                form["budget_steps"] = str(new_cap)
+                form["steps"] = str(DEFAULT_MAX_STEPS_PER_RETRAIN)
+                result = PROCESS.resume() if paused else PROCESS.start(form)
+                result["extension"] = {
+                    "added_steps": DEFAULT_MAX_STEPS_PER_RETRAIN,
+                    "budget_steps": new_cap,
+                    "iteration_slot": allocation.slot,
+                    "iterations_remaining": allocation.remaining_retrains,
+                }
             elif path == "/api/evaluate-both":
                 result = evaluate_run_both(form)
             elif path == "/api/race/start":

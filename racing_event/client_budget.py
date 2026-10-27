@@ -175,31 +175,66 @@ def reserve_training_allocation(
     _validate_limits(max_retrains, max_steps_per_retrain)
     if not isinstance(budget_steps, int) or isinstance(budget_steps, bool) or budget_steps <= 0:
         raise ClientTrainingBudgetError("budget_steps must be a positive integer")
-    if budget_steps > max_steps_per_retrain:
-        raise ClientTrainingBudgetError(
-            f"budget_steps cannot exceed the client cap of {max_steps_per_retrain:,} transitions per retrain"
-        )
     budget_path = _path_for(path)
     output_key = str(Path(output_dir).resolve())
     with _exclusive_lock(budget_path):
         state = _read(budget_path) if budget_path.exists() else _new_state(max_retrains, max_steps_per_retrain)
         if _upgrade_step_limit(state, max_retrains, max_steps_per_retrain):
             _write_state_locked(budget_path, state)
-        for allocation in state["allocations"]:
-            if allocation["output_dir"] == output_key:
-                if allocation["budget_steps"] != budget_steps:
-                    raise ClientTrainingBudgetError(
-                        "this output directory already has a different client training allocation; choose a new budget or directory"
-                    )
-                return TrainingAllocation(
-                    allocation["slot"], state["max_retrains"], state["max_steps_per_retrain"],
-                    state["max_retrains"] - len(state["allocations"]), True,
+        matching = [row for row in state["allocations"] if row["output_dir"] == output_key]
+        if matching:
+            allocated_steps = sum(row["budget_steps"] for row in matching)
+            if allocated_steps != budget_steps:
+                raise ClientTrainingBudgetError(
+                    "this output directory already has a different client training allocation; use its explicit extension action or choose a new directory"
                 )
+            return TrainingAllocation(
+                matching[0]["slot"], state["max_retrains"], state["max_steps_per_retrain"],
+                state["max_retrains"] - len(state["allocations"]), True,
+            )
+        if budget_steps > max_steps_per_retrain:
+            raise ClientTrainingBudgetError(
+                f"new runs are limited to {max_steps_per_retrain:,} transitions per retrain; extensions must attach to an existing output directory"
+            )
         if len(state["allocations"]) >= state["max_retrains"]:
             raise ClientRetrainLimitExceeded(
                 f"client retrain limit reached: {state['max_retrains']} independent training allocations"
             )
         allocation = {"slot": len(state["allocations"]) + 1, "output_dir": output_key, "budget_steps": budget_steps}
+        state["allocations"].append(allocation)
+        _write_state_locked(budget_path, state)
+        return TrainingAllocation(
+            allocation["slot"], state["max_retrains"], state["max_steps_per_retrain"],
+            state["max_retrains"] - len(state["allocations"]), False,
+        )
+
+
+def extend_training_allocation(
+    path: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    additional_steps: int = DEFAULT_MAX_STEPS_PER_RETRAIN,
+    *,
+    max_retrains: int = DEFAULT_MAX_RETRAINS,
+    max_steps_per_retrain: int = DEFAULT_MAX_STEPS_PER_RETRAIN,
+) -> TrainingAllocation:
+    """Spend one retraining slot to extend an existing model's transition cap."""
+    _validate_limits(max_retrains, max_steps_per_retrain)
+    if additional_steps != max_steps_per_retrain:
+        raise ClientTrainingBudgetError("an extension must add exactly one full transition allocation")
+    budget_path = _path_for(path)
+    output_key = str(Path(output_dir).resolve())
+    with _exclusive_lock(budget_path):
+        if not budget_path.exists():
+            raise ClientTrainingBudgetError("there is no existing client allocation to extend")
+        state = _read(budget_path)
+        if _upgrade_step_limit(state, max_retrains, max_steps_per_retrain):
+            _write_state_locked(budget_path, state)
+        matching = [row for row in state["allocations"] if row["output_dir"] == output_key]
+        if not matching:
+            raise ClientTrainingBudgetError("the selected output directory has no client training allocation")
+        if len(state["allocations"]) >= state["max_retrains"]:
+            raise ClientRetrainLimitExceeded("no iteration remains to extend this model")
+        allocation = {"slot": len(state["allocations"]) + 1, "output_dir": output_key, "budget_steps": additional_steps}
         state["allocations"].append(allocation)
         _write_state_locked(budget_path, state)
         return TrainingAllocation(
@@ -271,6 +306,7 @@ __all__ = [
     "DEFAULT_MAX_STEPS_PER_RETRAIN",
     "TrainingAllocation",
     "client_budget_status",
+    "extend_training_allocation",
     "release_training_allocation",
     "reserve_training_allocation",
 ]

@@ -280,7 +280,7 @@ def _validate_payload(payload: Any) -> _State:
                 "config": config,
             }
         else:
-            if record.get("type") not in {"run_started", "steps_reserved"}:
+            if record.get("type") not in {"run_started", "steps_reserved", "budget_extended"}:
                 raise ValueError(f"record {index} has an unknown event type")
             run_id = _validate_run_id(record.get("run_id"))
             steps = record.get("steps")
@@ -293,6 +293,11 @@ def _validate_payload(payload: Any) -> _State:
                 if max_runs is None or len(used_steps) >= max_runs:
                     raise ValueError("state contains more runs than configured")
                 used_steps[run_id] = 0
+            elif record["type"] == "budget_extended":
+                steps = _require_positive_int("steps", steps)
+                if run_id not in used_steps:
+                    raise ValueError("budget_extended references an unknown run")
+                max_steps_per_run += steps
             else:
                 steps = _require_positive_int("steps", steps)
                 if run_id not in used_steps:
@@ -476,10 +481,10 @@ class RunBudget:
             state = _read_state(self.path)
             if (
                 state.max_runs != self.max_runs
-                or state.max_steps_per_run != self.max_steps_per_run
+                or state.max_steps_per_run < self.max_steps_per_run
             ):
                 raise BudgetConfigurationError(
-                    "budget configuration changed while this handle was open"
+                    "budget configuration changed incompatibly while this handle was open"
                 )
             yield state
 
@@ -508,6 +513,22 @@ class RunBudget:
             return run_id
 
         return self._mutate(operation)
+
+    def extend_run(self, run_id: str, additional_steps: int) -> int:
+        """Append an auditable increase to the active run's transition cap."""
+        run_id = _validate_run_id(run_id)
+        additional_steps = _require_positive_int("additional_steps", additional_steps)
+        with _exclusive_lock(self.path):
+            state = _read_state(self.path)
+            if state.max_runs != self.max_runs or state.max_steps_per_run < self.max_steps_per_run:
+                raise BudgetConfigurationError("budget configuration changed incompatibly")
+            if run_id not in state.used_steps:
+                raise UnknownRunError(run_id)
+            _append_event(state, "budget_extended", run_id, additional_steps)
+            state.max_steps_per_run += additional_steps
+            _write_state(self.path, state)
+            self.max_steps_per_run = state.max_steps_per_run
+            return state.max_steps_per_run
 
     def consume(self, run_id: str, steps: int) -> int:
         """Reserve ``steps`` environment transitions and return the remainder.

@@ -78,7 +78,7 @@ async function dashboard() {
 }
 
 function response(body, ok = true) { return { ok, json: async () => body }; }
-const runFields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", "reward-progress", "reward-steer_smoothness"];
+const runFields = ["trainer", "track-dir", "output-dir", "steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", "reward-progress", "reward-steer_smoothness"];
 const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
 function assertFrozen(h, expected) { for (const id of runFields) assert.equal(h.el(id).disabled, expected, id); }
 function assertRaceFrozen(h, expected) { for (const id of raceFields) assert.equal(h.el(id).disabled, expected, id); }

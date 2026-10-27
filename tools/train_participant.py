@@ -170,10 +170,8 @@ def build_training_command(args: argparse.Namespace) -> list[str]:
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
     steps = _positive_value(args.steps, "--steps")
     budget_steps = _positive_value(args.budget_steps, "--budget-steps")
-    if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
-        raise ValueError(
-            f"--budget-steps cannot exceed the client cap of {DEFAULT_MAX_STEPS_PER_RETRAIN:,} transitions per retrain"
-        )
+    if budget_steps > DEFAULT_MAX_RETRAINS * DEFAULT_MAX_STEPS_PER_RETRAIN:
+        raise ValueError("--budget-steps cannot exceed the combined 12-iteration transition cap")
     n_envs = _positive_value(args.n_envs, "--n-envs")
     rollout_length = _positive_value(args.rollout_length, "--rollout-length")
     seed = _positive_value(args.seed, "--seed")

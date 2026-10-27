@@ -9,6 +9,7 @@ from racing_event.client_budget import (
     ClientTrainingBudgetError,
     DEFAULT_MAX_STEPS_PER_RETRAIN,
     client_budget_status,
+    extend_training_allocation,
     reserve_training_allocation,
 )
 
@@ -55,6 +56,18 @@ class ClientTrainingBudgetTests(unittest.TestCase):
             budget.write_text(budget.read_text(encoding="utf-8").replace('"budget_steps": 10', '"budget_steps": 9'), encoding="utf-8")
             with self.assertRaisesRegex(ClientTrainingBudgetError, "hash"):
                 client_budget_status(budget, max_retrains=2, max_steps_per_retrain=10)
+
+    def test_extension_spends_an_iteration_on_the_existing_output_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            budget = root / "client.json"
+            output = root / "same-model"
+            reserve_training_allocation(budget, output, 1_000_000, max_retrains=3)
+            extended = extend_training_allocation(budget, output, max_retrains=3)
+            self.assertEqual((extended.slot, extended.remaining_retrains), (2, 1))
+            resumed = reserve_training_allocation(budget, output, 2_000_000, max_retrains=3)
+            self.assertTrue(resumed.reused)
+            self.assertEqual(resumed.remaining_retrains, 1)
 
 
 if __name__ == "__main__":
