@@ -39,6 +39,12 @@ class ClientRetrainLimitExceeded(ClientTrainingBudgetError):
     """No new independent training allocation remains."""
 
 
+def _write_state_locked(path: Path, state: dict[str, Any]) -> None:
+    payload = {key: state[key] for key in _TOP_LEVEL_KEYS if key != "head_hash"}
+    state["head_hash"] = _digest(payload)
+    _atomic_write(path, state)
+
+
 @dataclass(frozen=True)
 class TrainingAllocation:
     slot: int
@@ -184,13 +190,44 @@ def reserve_training_allocation(
             )
         allocation = {"slot": len(state["allocations"]) + 1, "output_dir": output_key, "budget_steps": budget_steps}
         state["allocations"].append(allocation)
-        payload = {key: state[key] for key in _TOP_LEVEL_KEYS if key != "head_hash"}
-        state["head_hash"] = _digest(payload)
-        _atomic_write(budget_path, state)
+        _write_state_locked(budget_path, state)
         return TrainingAllocation(
             allocation["slot"], state["max_retrains"], state["max_steps_per_retrain"],
             state["max_retrains"] - len(state["allocations"]), False,
         )
+
+
+def release_training_allocation(
+    path: str | os.PathLike[str],
+    output_dir: str | os.PathLike[str],
+    *,
+    max_retrains: int = DEFAULT_MAX_RETRAINS,
+    max_steps_per_retrain: int = DEFAULT_MAX_STEPS_PER_RETRAIN,
+) -> bool:
+    """Release an allocation that failed before producing a checkpoint.
+
+    This is deliberately narrow: callers must decide that no checkpoint was
+    written.  A completed or partially published run remains allocated so a
+    failed resume cannot silently create a free retrain.
+    """
+
+    _validate_limits(max_retrains, max_steps_per_retrain)
+    budget_path = _path_for(path)
+    output_key = str(Path(output_dir).resolve())
+    with _exclusive_lock(budget_path):
+        if not budget_path.exists():
+            return False
+        state = _read(budget_path)
+        if state["max_retrains"] != max_retrains or state["max_steps_per_retrain"] != max_steps_per_retrain:
+            raise ClientTrainingBudgetError("client training budget configuration changed")
+        before = len(state["allocations"])
+        state["allocations"] = [item for item in state["allocations"] if item["output_dir"] != output_key]
+        if len(state["allocations"]) == before:
+            return False
+        for slot, allocation in enumerate(state["allocations"], start=1):
+            allocation["slot"] = slot
+        _write_state_locked(budget_path, state)
+        return True
 
 
 def client_budget_status(
@@ -223,5 +260,6 @@ __all__ = [
     "DEFAULT_MAX_STEPS_PER_RETRAIN",
     "TrainingAllocation",
     "client_budget_status",
+    "release_training_allocation",
     "reserve_training_allocation",
 ]

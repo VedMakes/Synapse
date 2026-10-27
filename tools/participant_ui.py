@@ -22,7 +22,7 @@ import tempfile
 from threading import Event, Lock, Thread
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 from uuid import uuid4
 
 if __package__ in (None, ""):
@@ -50,6 +50,7 @@ UPDATE_PATTERN = re.compile(
     r"crash=(?P<crash>\S+)\s+off_track=(?P<off_track>\S+)"
 )
 LIVE_TELEMETRY_PREFIX = "LIVE_TELEMETRY "
+SYNAPSE_METRIC_PREFIX = "SYNAPSE_METRIC "
 
 
 def _workspace_path(value: str, *, label: str) -> Path:
@@ -65,6 +66,20 @@ def _workspace_path(value: str, *, label: str) -> Path:
     except ValueError as exc:
         raise ValueError(f"{label} must stay inside the project workspace") from exc
     return resolved
+
+
+def _reject_symlinked_workspace_entry(path: Path, *, label: str) -> None:
+    """Reject a workspace path or existing child that could redirect writes."""
+    candidate = Path(path)
+    try:
+        relative = candidate.resolve(strict=False).relative_to(ROOT)
+    except ValueError as exc:
+        raise ValueError(f"{label} must stay inside the project workspace") from exc
+    current = ROOT
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"{label} must not use symlinked workspace entries")
 
 
 def _renderer_headless() -> bool:
@@ -151,6 +166,22 @@ def parse_live_telemetry_line(line: str) -> dict[str, object] | None:
     return value
 
 
+def parse_metric_line(line: str) -> dict[str, object] | None:
+    """Parse the participant metrics protocol without trusting arbitrary output."""
+    if not line.startswith(SYNAPSE_METRIC_PREFIX):
+        return None
+    try:
+        value = json.loads(
+            line[len(SYNAPSE_METRIC_PREFIX):],
+            parse_constant=lambda raw: (_ for _ in ()).throw(ValueError(raw)),
+        )
+    except (UnicodeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, dict) or any(not isinstance(key, str) for key in value):
+        return None
+    return value
+
+
 def _process_resource_snapshot(pid: int) -> dict[str, object]:
     """Return Linux process-tree resource telemetry without a new dependency."""
     if not sys.platform.startswith("linux"):
@@ -213,7 +244,11 @@ def _atomic_json(path: Path, payload: object) -> None:
             os.fsync(stream.fileno())
         os.replace(temporary, path)
     finally:
-        temporary.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
+
+
+def _json_bytes(payload: object) -> bytes:
+    return (json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n").encode("utf-8")
 
 
 def _sha256_file(path: Path) -> str:
@@ -222,6 +257,33 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _model_identity(model: Path, python: Path, observation_size: int) -> dict[str, object]:
+    code = (
+        "import json, sys; "
+        "from pathlib import Path; "
+        "from racing_event.participant_model import build_policy_from_model; "
+        "_, info = build_policy_from_model(Path(sys.argv[1]), int(sys.argv[2])); "
+        "print(json.dumps({k: info[k] for k in ('model_sha256', 'actor_parameters', 'parameters')}))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python), "-c", code, str(model), str(observation_size)],
+            cwd=ROOT, capture_output=True, text=True, timeout=30, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"could not inspect model architecture: {exc}") from exc
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise ValueError(f"model architecture check failed: {detail[-1] if detail else 'unknown error'}")
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError("model architecture check returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise ValueError("model architecture check returned an invalid identity")
+    return value
 
 
 def _reject_incompatible_existing_run(output_dir: Path, identity: dict[str, object]) -> None:
@@ -241,7 +303,7 @@ def _reject_incompatible_existing_run(output_dir: Path, identity: dict[str, obje
             raise ValueError("existing run_identity.json is invalid; choose a new output directory") from exc
         if not isinstance(existing, dict):
             raise ValueError("existing run_identity.json must be an object; choose a new output directory")
-        for name in ("config_hash", "reward_config_hash", "reward_sha256", "ray_angles_deg", "ray_count", "observation_size"):
+        for name in ("config_hash", "reward_config_hash", "reward_sha256", "ray_angles_deg", "ray_count", "observation_size", "model", "hparams_sha256"):
             if existing.get(name) != identity.get(name):
                 raise ValueError(f"output directory is already bound to a different {name}; choose a new output directory")
         return
@@ -294,6 +356,7 @@ def _parse_reward_weights(form: dict[str, object], reward_path: Path | None) -> 
 
 def _prepare_run_inputs(
     form: dict[str, object], *, config: Path, output_dir: Path, reward_path: Path | None,
+    model: Path | None = None, python: Path | None = None, hparams: Path | None = None,
 ) -> tuple[Path, Path | None, SimulationConfig, RewardConfig | None]:
     base_data = json.loads(config.read_text(encoding="utf-8"))
     if not isinstance(base_data, dict):
@@ -315,21 +378,24 @@ def _prepare_run_inputs(
     sensors = dict(base_data.get("sensors", {}))
     sensors["ray_angles_deg"] = angles
     base_data["sensors"] = sensors
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for name in ("run_config.json", "reward_config.json", "run_identity.json"):
-        _workspace_path(str(output_dir / name), label=name)
-    effective_config_path = output_dir / "run_config.json"
-    candidate_config_path = output_dir / f".run_config.{os.getpid()}.candidate"
-    candidate_reward_path = output_dir / f".reward_config.{os.getpid()}.candidate"
-    try:
+    if output_dir.exists() and not output_dir.is_dir():
+        raise ValueError(f"output_dir must be a directory path: {output_dir}")
+    if output_dir.parent.exists() and not output_dir.parent.is_dir():
+        raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
+    # Validate the effective inputs in a temporary sibling before creating a
+    # participant run. A rejected contract must not leave an empty directory
+    # behind or consume an allocation merely because a user typed a bad path.
+    scratch_parent = output_dir.parent if output_dir.parent.exists() else ROOT
+    with tempfile.TemporaryDirectory(prefix=f".{output_dir.name}.", dir=scratch_parent) as temporary_name:
+        temporary = Path(temporary_name)
+        candidate_config_path = temporary / "run_config.json"
+        candidate_reward_path = temporary / "reward_config.json"
         _atomic_json(candidate_config_path, base_data)
         effective_config = SimulationConfig.from_file(candidate_config_path)
         reward = _parse_reward_weights(form, reward_path)
-        effective_reward_path: Path | None = None
         reward_sha256: str | None = None
         if reward is not None:
             _atomic_json(candidate_reward_path, reward.to_dict())
-            effective_reward_path = output_dir / "reward_config.json"
             reward_sha256 = _sha256_file(candidate_reward_path)
         identity = {
             "identity_version": 1,
@@ -340,16 +406,21 @@ def _prepare_run_inputs(
             "ray_count": effective_config.sensors.ray_count,
             "observation_size": 10 + effective_config.sensors.ray_count + len(effective_config.sensors.lookahead_distances_m),
         }
+        if model is not None and python is not None:
+            identity["model"] = _model_identity(model, python, identity["observation_size"])
+        if hparams is not None:
+            identity["hparams_sha256"] = _sha256_file(hparams)
         _reject_incompatible_existing_run(output_dir, identity)
-        os.replace(candidate_config_path, effective_config_path)
-        if reward is not None and effective_reward_path is not None:
-            os.replace(candidate_reward_path, effective_reward_path)
-        elif (output_dir / "reward_config.json").exists() and not identity["reward_config_hash"]:
-            raise ValueError("existing reward_config.json conflicts with a reward-free run")
-        _atomic_json(output_dir / "run_identity.json", identity)
-    finally:
-        candidate_config_path.unlink(missing_ok=True)
-        candidate_reward_path.unlink(missing_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    effective_config_path = output_dir / "run_config.json"
+    _atomic_json(effective_config_path, base_data)
+    effective_reward_path: Path | None = None
+    if reward is not None:
+        effective_reward_path = output_dir / "reward_config.json"
+        _atomic_json(effective_reward_path, reward.to_dict())
+    elif (output_dir / "reward_config.json").exists() and not identity["reward_config_hash"]:
+        raise ValueError("existing reward_config.json conflicts with a reward-free run")
+    _atomic_json(output_dir / "run_identity.json", identity)
     return effective_config_path, effective_reward_path, effective_config, reward
 
 
@@ -385,7 +456,11 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         reward = _workspace_path(text("reward", "examples/baseline_reward.json"), label="reward")
     config = _workspace_path(text("config", "config/simulation.json"), label="config")
     track_dir = _workspace_path(text("track_dir", "tracks/train"), label="track_dir")
-    output_dir = _workspace_path(text("output_dir", "participant_run"), label="output_dir")
+    output_dir = _workspace_path(text("output_dir", "artifacts/runs/run-001"), label="output_dir")
+    _reject_symlinked_workspace_entry(output_dir, label="output_dir")
+    for marker in ("run_config.json", "reward_config.json", "run_identity.json"):
+        if (output_dir / marker).is_symlink():
+            raise ValueError(f"output_dir must stay inside the workspace and must not contain symlinked {marker}")
     if not trainer.is_file():
         raise ValueError(f"trainer does not exist: {trainer}")
     if not config.is_file():
@@ -399,19 +474,27 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         raise ValueError(f"output_dir must be a directory path: {output_dir}")
     if output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
-    steps = positive_int("steps", 2048)
+    steps = positive_int("steps", 256)
     budget_steps = positive_int("budget_steps", 10000)
     if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
         raise ValueError(
             f"budget_steps cannot exceed the client cap of {DEFAULT_MAX_STEPS_PER_RETRAIN:,} transitions per retrain"
         )
-    n_envs = positive_int("n_envs", 4)
-    rollout_length = positive_int("rollout_length", 64)
+    n_envs = positive_int("n_envs", 2)
+    rollout_length = positive_int("rollout_length", 32)
     seed = positive_int("seed", 17)
+    model_value = form.get("model")
+    model = None if model_value is None or (isinstance(model_value, str) and not model_value.strip()) else _workspace_path(text("model", ""), label="model")
+    if model is not None and not model.is_file():
+        raise ValueError(f"model does not exist: {model}")
+    hparams_value = form.get("hparams")
+    hparams = None if hparams_value is None or (isinstance(hparams_value, str) and not hparams_value.strip()) else _workspace_path(text("hparams", ""), label="hparams")
+    if hparams is not None and not hparams.is_file():
+        raise ValueError(f"hparams does not exist: {hparams}")
     reference_trainer = trainer == (ROOT / "examples" / "participant_train.py").resolve()
     python = _ready_python(require_torch=reference_trainer)
     effective_config, effective_reward, _, _ = _prepare_run_inputs(
-        form, config=config, output_dir=output_dir, reward_path=reward,
+        form, config=config, output_dir=output_dir, reward_path=reward, model=model, python=python, hparams=hparams,
     )
     command = [
         str(python),
@@ -428,7 +511,41 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     ]
     if effective_reward is not None:
         command[2:2] = ["--reward", str(effective_reward)]
+    if model is not None:
+        command.extend(["--model", str(model)])
+    if hparams is not None:
+        command.extend(["--hparams", str(hparams)])
     return command
+
+
+def check_participant_model(form: dict[str, object]) -> dict[str, object]:
+    model_value = form.get("model")
+    if not isinstance(model_value, str) or not model_value.strip():
+        raise ValueError("model is required for a checker run")
+    model = _workspace_path(model_value, label="model")
+    config = _workspace_path(str(form.get("config", "config/simulation.json")), label="config")
+    if not model.is_file():
+        raise ValueError(f"model does not exist: {model}")
+    if not config.is_file():
+        raise ValueError(f"config does not exist: {config}")
+    python = _ready_python(require_torch=True)
+    try:
+        result = subprocess.run(
+            [str(python), str(ROOT / "tools" / "check_model.py"), str(model), "--config", str(config)],
+            cwd=ROOT, capture_output=True, text=True, timeout=90, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"model checker could not start: {exc}") from exc
+    if result.returncode:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise ValueError(detail[-1] if detail else "model checker failed")
+    try:
+        value = json.loads(result.stdout)
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise RuntimeError("model checker returned invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("model checker returned an invalid result")
+    return value
 
 
 def build_live_race_command(form: dict[str, object]) -> list[str]:
@@ -459,8 +576,8 @@ def build_live_race_command(form: dict[str, object]) -> list[str]:
             raise ValueError(f"{name} must be a positive integer") from exc
         if str(value).strip() not in (str(parsed),) and not isinstance(value, int):
             raise ValueError(f"{name} must be a positive integer")
-        if parsed <= 0:
-            raise ValueError(f"{name} must be a positive integer")
+        if parsed < 0 or (parsed == 0 and name != "race_port"):
+            raise ValueError(f"{name} must be a positive integer or zero for auto-selection" if name == "race_port" else f"{name} must be a positive integer")
         return parsed
 
     participant_a = text("participant_a", "Racer Alpha")
@@ -473,7 +590,7 @@ def build_live_race_command(form: dict[str, object]) -> list[str]:
         raise ValueError("both model artifacts must be existing directories")
     track = _workspace_path(text("race_track", "tracks/train/monaco.json"), label="race track")
     config = _workspace_path(text("race_config", "config/simulation.json"), label="race config")
-    output_dir = _workspace_path(text("race_output", "artifacts/live/ui-heat"), label="race output")
+    output_dir = _workspace_path(text("race_output", "artifacts/live/heat-001"), label="race output")
     if not track.is_file():
         raise ValueError(f"race track does not exist: {track}")
     if not config.is_file():
@@ -483,7 +600,9 @@ def build_live_race_command(form: dict[str, object]) -> list[str]:
     python = _ready_python(require_live=True)
     budget_ms = positive_number("race_budget_ms", 20.0)
     max_steps = positive_int("race_max_steps", 2400)
-    port = positive_int("race_port", 8767)
+    port = positive_int("race_port", 0)
+    if form.get("race_port") in (0, "0"):
+        port = 0
     late_policy = form.get("race_late_policy", "strict_scored")
     if late_policy not in ("strict_scored", "trusted_live"):
         raise ValueError("race_late_policy must be strict_scored or trusted_live")
@@ -509,7 +628,7 @@ def build_live_package(form: dict[str, object]) -> dict[str, object]:
             raise ValueError(f"{name} must be a non-empty string")
         return value.strip()
 
-    source = _workspace_path(text("package_source", "participant_run"), label="package source")
+    source = _workspace_path(text("package_source", "artifacts/runs/run-001"), label="package source")
     output = _workspace_path(text("package_output", "artifacts/live-packages/participant-run"), label="package output")
     track = _workspace_path(text("package_track", "tracks/train/monaco.json"), label="package track")
     participant_id = text("package_participant", "participant-model")
@@ -542,7 +661,7 @@ def build_onnx_package(form: dict[str, object]) -> dict[str, object]:
             raise ValueError(f"{name} must be a non-empty string")
         return value.strip()
 
-    source = _workspace_path(text("package_source", "participant_run"), label="package source")
+    source = _workspace_path(text("package_source", "artifacts/runs/run-001"), label="package source")
     output = _workspace_path(text("package_output", "artifacts/onnx-packages/participant-run"), label="package output")
     participant_id = text("package_participant", "participant-model")
     if not source.is_dir():
@@ -676,6 +795,9 @@ class TrainingProcess:
                     parsed = parse_update_line(line)
                     if parsed is not None:
                         self._status["metrics"] = parsed
+                    structured = parse_metric_line(line)
+                    if structured is not None:
+                        self._status["metrics"].update(structured)
                     live = parse_live_telemetry_line(line)
                     if live is not None:
                         self._status["telemetry"] = live
@@ -686,6 +808,32 @@ class TrainingProcess:
                 if self._process is not process:
                     return
                 self._status["returncode"] = return_code
+                if self._status.get("kind") == "live-race":
+                    command = self._status.get("command", [])
+                    try:
+                        output_index = command.index("--output-dir") + 1
+                        report_path = Path(command[output_index]) / "live-race.json"
+                        report = json.loads(report_path.read_text(encoding="utf-8"))
+                        results = report.get("results", []) if isinstance(report, dict) else []
+                        if isinstance(results, list):
+                            self._status["telemetry"] = {
+                                "kind": "live_end",
+                                "entrants": [
+                                    {
+                                        "participant_id": item.get("participant_id"),
+                                        "label": item.get("label"),
+                                        "status": item.get("status"),
+                                        "latency_ms": (item.get("latency_ms") or {}).get("p95_ms") if isinstance(item.get("latency_ms"), dict) else None,
+                                        "deadline_misses": item.get("deadline_misses", 0),
+                                        "inference_failures": item.get("inference_failures", 0),
+                                        "model_mb": None,
+                                        "dnf_reason": item.get("dnf_reason"),
+                                    }
+                                    for item in results if isinstance(item, dict)
+                                ],
+                            }
+                    except (OSError, ValueError, TypeError, IndexError):
+                        pass
                 if self._status["state"] == "stopping":
                     self._status["state"] = "stopped"
                 elif return_code == 0:
@@ -707,7 +855,7 @@ class TrainingProcess:
                     self._process = None
 
     def _sample_resources(self, process: subprocess.Popen[str]) -> None:
-        while not self._resource_stop.wait(0.25):
+        while not self._resource_stop.wait(1.0):
             snapshot = _process_resource_snapshot(process.pid)
             with self._lock:
                 if self._process is not process:
@@ -742,11 +890,65 @@ def public_maps() -> list[dict[str, str]]:
     return maps
 
 
+def _next_free_directory(relative_parent: str, prefix: str) -> str:
+    parent = ROOT / relative_parent
+    parent.mkdir(parents=True, exist_ok=True)
+    for number in range(1, 10_000):
+        candidate = parent / f"{prefix}-{number:03d}"
+        if not candidate.exists() and not candidate.is_symlink():
+            return str(candidate.relative_to(ROOT))
+    raise ValueError(f"could not find a free {prefix} directory")
+
+
+def default_paths() -> dict[str, str]:
+    return {
+        "output_dir": _next_free_directory("artifacts/runs", "run"),
+        "package_output": _next_free_directory("artifacts/onnx-packages", "submission"),
+        "race_output": _next_free_directory("artifacts/live", "heat"),
+    }
+
+
+def participant_runs() -> list[dict[str, object]]:
+    root = ROOT / "artifacts" / "runs"
+    if not root.is_dir():
+        return []
+    result: list[dict[str, object]] = []
+    for directory in sorted(root.iterdir()):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        row: dict[str, object] = {"name": directory.name, "path": str(directory.relative_to(ROOT))}
+        for filename, key in (("run_identity.json", "identity"), ("training_state.json", "state"), ("reward_config.json", "reward")):
+            path = directory / filename
+            if path.is_file() and not path.is_symlink():
+                try:
+                    row[key] = json.loads(path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    row[key] = None
+        metrics = directory / "training_metrics.jsonl"
+        if metrics.is_file() and not metrics.is_symlink():
+            try:
+                lines = metrics.read_text(encoding="utf-8").splitlines()
+                row["metrics"] = json.loads(lines[-1]) if lines else None
+            except (OSError, UnicodeError, json.JSONDecodeError):
+                row["metrics"] = None
+        result.append(row)
+    return result
+
+
+def evaluate_run_both(form: dict[str, object]) -> dict[str, object]:
+    source = _workspace_path(form.get("source"), label="source")
+    if not source.is_dir():
+        raise ValueError("source run does not exist")
+    from tools.evaluate_both import evaluate_both
+    report = evaluate_both(source, ROOT / "config" / "simulation.json", ROOT / "tracks" / "train", 2)
+    return report
+
+
 def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
     """Export the explicitly selected artifact; renderers only read the result."""
     source, renderer = form.get("source"), form.get("renderer")
-    if source not in ("reference", "artifact"):
-        raise ValueError("source must explicitly be reference or artifact")
+    if source not in ("reference", "artifact", "onnx"):
+        raise ValueError("source must explicitly be reference, artifact, or onnx")
     if renderer not in ("pygame", "browser"):
         raise ValueError("renderer must explicitly be pygame or browser")
     map_id = form.get("map_id")
@@ -755,15 +957,15 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
     selected = next((item for item in public_maps() if item["id"] == map_id), None)
     if selected is None:
         raise ValueError("unknown public SYNAPSE map")
-    output_dir = _workspace_path(form.get("output_dir", "participant_run"), label="output_dir")
+    output_dir = _workspace_path(form.get("output_dir", "artifacts/runs/run-001"), label="output_dir")
     config_path = _workspace_path(str(output_dir / "run_config.json"), label="saved run config")
     if not config_path.is_file():
         raise ValueError("saved run_config.json is required; choose the run directory matching this artifact's rays/config")
     artifact_dir = None
-    if source == "artifact":
+    if source in ("artifact", "onnx"):
         artifact_dir = _workspace_path(form.get("artifact_dir"), label="artifact_dir")
         if not artifact_dir.is_dir():
-            raise ValueError("artifact_dir must be an existing safe NumPy artifact directory")
+            raise ValueError("artifact_dir must be an existing participant artifact directory")
     reference_files = [
         _workspace_path(str(output_dir / name), label=name)
         for name in ("policy.pt", "policy.json", "training_contract.json")
@@ -788,7 +990,9 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
             "--track", selected["path"], "--config", str(config_path),
             "--participant-id", f"SYNAPSE-{source}-{map_id}", "--output", str(replay_path),
         ]
-        if artifact_dir is not None:
+        if source == "onnx":
+            export_command += ["--artifact-dir", str(artifact_dir)]
+        elif artifact_dir is not None:
             # The generic evaluator validates the original, hashed training contract.
             export_command += ["--artifact-dir", str(artifact_dir)]
         else:
@@ -809,7 +1013,7 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
     result = {
         "map_id": map_id,
         "source": source,
-        "source_label": "Latest saved reference artifact" if source == "reference" else "Safe NumPy participant artifact",
+        "source_label": "Latest saved reference artifact" if source == "reference" else ("Imported ONNX artifact" if source == "onnx" else "Safe NumPy participant artifact"),
         "display_name": selected["display_name"],
         "status": replay["result"]["status"],
         "lap_time_s": replay["result"]["lap_time_s"],
@@ -987,8 +1191,11 @@ PAGE = r'''<!doctype html>
         <div class="panel-head"><h2>01 · Run setup</h2><span class="status-chip">participant code</span></div>
         <div class="section">
           <div class="form-grid">
-            <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
-            <div class="subpanel"><h3>Reward function · signal weights</h3><p class="subcopy">Tune the nine published transition signals. Positive rewards attract behavior; negative weights penalize it. Zero disables a signal. Limits: -100 to +100.</p><div class="weight-grid">
+             <label class="full">Your trainer script<input id="trainer" value="examples/participant_train.py" spellcheck="false"></label>
+             <label>Optional actor model.py<input id="model" value="" placeholder="participant_code/model.py" spellcheck="false" aria-describedby="run-error"></label>
+             <label>Optional PPO hparams JSON<input id="hparams" value="examples/ppo_hparams.json" spellcheck="false" aria-describedby="run-error"></label>
+             <div class="actions"><button id="check-model" type="button">Check actor / ONNX parity</button><span id="model-check-result" class="watch-result" role="status" aria-live="polite">No actor checked yet.</span></div>
+             <div class="subpanel"><h3>Reward function · signal weights</h3><p class="subcopy">Tune the nine published transition signals. Positive rewards attract behavior; negative weights penalize it. Zero disables a signal. Limits: -100 to +100.</p><p id="reward-warnings" class="validation" data-kind="warn" role="status" aria-live="polite"></p><div class="weight-grid">
               <label><span class="signal-label">Progress <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>progress</code> Signed forward track advance.</span><input id="reward-progress" type="number" step="0.01" value="12" aria-label="Progress weight"></label>
               <label><span class="signal-label">Speed <span class="signal-tag">DENSE +</span></span><span class="signal-help"><code>speed</code> Encourages useful speed above the floor.</span><input id="reward-speed" type="number" step="0.01" value="0.5" aria-label="Speed weight"></label>
               <label><span class="signal-label">Curvature speed <span class="signal-tag">MATCH</span></span><span class="signal-help"><code>curvature_matched_speed</code> Is zero when speed matches the curve target.</span><input id="reward-curvature_matched_speed" type="number" step="0.01" value="0.25" aria-label="Curvature matched speed weight"></label>
@@ -1033,14 +1240,14 @@ PAGE = r'''<!doctype html>
                  <text class="car-caption" x="320" y="426" text-anchor="middle">CAR HEADING ↑ · 0° = FORWARD</text>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
              <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
-            <label>Output directory<input id="output-dir" value="participant_run" spellcheck="false"></label>
-            <label>Steps this run<input id="steps" type="number" min="1" step="1" value="2048"></label>
+              <label>Output directory<input id="output-dir" value="artifacts/runs/run-001" spellcheck="false"></label>
+           <label>Steps this run<input id="steps" type="number" min="1" step="1" value="256"></label>
              <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="10000" step="1" value="10000"></label>
-            <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="4"></label>
-            <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="64"></label>
+             <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
+             <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
           </div>
-          <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="stop" disabled>Stop after current process boundary</button><button id="setup">Set up / repair Python</button></div>
+           <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="stop" disabled>Stop now (force after 2s)</button><button id="setup">Set up / repair Python</button></div>
           <p id="run-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
           <p class="hint">The trainer script is yours to replace. If NumPy is missing, use the setup button first. The first run is intentionally small. Repeat with the same output directory to continue the local counter.</p>
         </div>
@@ -1054,8 +1261,8 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 2</strong><span>Monaco and Spa development layouts. Final event maps are not here.</span></div>
           <div class="watch">
-            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option></select>
-            <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="participant_run/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
+            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Reference · latest saved artifact</option><option value="artifact">Participant · safe NumPy artifact</option><option value="onnx">Imported ONNX artifact</option></select>
+             <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="artifacts/runs/run-001/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
              <label for="watch-map">Watch artifact for map (replay only):</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
             <label for="watch-renderer">Read-only renderer</label><select id="watch-renderer"><option value="pygame">Pygame · local display / headless check</option><option value="browser">Browser · explicit headless / remote fallback</option></select>
             <p id="watch-hint" class="hint">Uses the selected run's saved run_config.json, including ordered rays. Reference means latest saved, not best. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
@@ -1072,8 +1279,8 @@ PAGE = r'''<!doctype html>
            <div class="section">
              <p class="subcopy">Build a model-only ONNX bundle. It contains the validated model, matching contract/config snapshot, hashes, and provenance. It contains no track and no replay: the live runner supplies the event or local-test map, and the model produces fresh inferences during the heat.</p>
              <div class="form-grid">
-               <label>Trained run / model source<input id="package-source" value="participant_run" spellcheck="false"></label>
-               <label>New package directory<input id="package-output" value="artifacts/onnx-packages/participant-run" spellcheck="false"></label>
+                <label>Trained run / model source<input id="package-source" value="artifacts/runs/run-001" spellcheck="false"></label>
+                <label>New package directory<input id="package-output" value="artifacts/onnx-packages/submission-001" spellcheck="false"></label>
                <label>Package participant ID<input id="package-participant" value="racer-alpha" spellcheck="false"></label>
              </div>
              <div class="actions"><button id="package" data-api-endpoint="/api/package" class="primary">Build ONNX submission package</button></div>
@@ -1088,12 +1295,13 @@ PAGE = r'''<!doctype html>
            <div class="form-grid">
              <label>Racer Alpha ID<input id="participant-a" value="racer-alpha" spellcheck="false"></label>
              <label>Racer Beta ID<input id="participant-b" value="racer-beta" spellcheck="false"></label>
-             <label>Model A artifact<input id="artifact-a" value="artifacts/onnx-imitation" spellcheck="false"></label>
-             <label>Model B artifact<input id="artifact-b" value="artifacts/onnx-imitation" spellcheck="false"></label>
+            <label>Model A artifact<input id="artifact-a" value="artifacts/onnx-imitation" spellcheck="false"></label>
+            <label>Model B artifact<input id="artifact-b" value="artifacts/onnx-imitation" spellcheck="false"></label>
              <label>Race circuit<input id="race-track" value="tracks/train/monaco.json" spellcheck="false"></label>
              <label>Race config<input id="race-config" value="config/simulation.json" spellcheck="false"></label>
-             <label>Output directory<input id="race-output" value="artifacts/live/ui-heat" spellcheck="false"></label>
-             <label>WebSocket port<input id="race-port" type="number" min="1" max="65535" step="1" value="8767"></label>
+            <label>Output directory<input id="race-output" value="artifacts/live/heat-001" spellcheck="false"></label>
+            <label>WebSocket port<input id="race-port" type="number" min="0" max="65535" step="1" value="0"><span class="hint">0 chooses a free port.</span></label>
+            <label>Renderer HTTP port<input id="renderer-port" type="number" min="1" max="65535" step="1" value="8765"></label>
              <label>Action budget (ms)<input id="race-budget-ms" type="number" min="1" step="0.1" value="20"></label>
              <label>Live ticks<input id="race-max-steps" type="number" min="1" step="1" value="2400"></label>
              <label>Late action policy<select id="race-late-policy"><option value="strict_scored">Strict scored / DNF late action</option><option value="trusted_live">Demo hold-last action</option></select></label>
@@ -1115,26 +1323,40 @@ PAGE = r'''<!doctype html>
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
           <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
-          <div id="log" class="log">Waiting for a local trainer process…</div>
-        </div>
-      </section>
+             <div id="log" class="log">Waiting for a local trainer process…</div>
+         </div>
+       </section>
+       <section class="panel race-panel">
+         <div class="panel-head"><h2>06 · Experiment runs</h2><span class="status-chip">compare both maps</span></div>
+         <div class="section"><p class="subcopy">Saved runs are local experiment evidence. Compare Monaco and Spa before keeping a reward or architecture change.</p><div id="runs-table" class="log" role="region" aria-label="Saved experiment runs">No saved runs yet.</div></div>
+       </section>
     </section>
     <footer>Local SYNAPSE UI only. Start with <code>python tools/participant_ui.py</code>. The server binds to loopback and launches the existing CLI; it never becomes a second environment authority.</footer>
   </main>
   <script>
      const $ = id => document.getElementById(id);
      const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "time", "steer_smoothness"];
-        const fields = ["trainer", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
        const packageFields = ["package-source", "package-output", "package-participant"];
-       const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
+        const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
      const stateText = { idle: "Ready to train", starting: "Starting trainer…", running: "Training in progress", stopping: "Stopping trainer…", stopped: "Training stopped", completed: "Training completed", failed: "Training failed" };
       const svgNamespace = "http://www.w3.org/2000/svg";
-       let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
-      function formData() { return { trainer: $("trainer").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
-      function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
+        let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
+       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
-     function rayPreview() {
+       function rewardWarnings() {
+         const values = Object.fromEntries(signalNames.map(name => [name, Number($("reward-" + name).value)]));
+         const warnings = [];
+         if (signalNames.every(name => values[name] === 0)) warnings.push("All reward weights are zero; the policy receives no learning signal.");
+         if (signalNames.every(name => values[name] >= 0)) warnings.push("No negative term is configured; crashes and off-track behavior are not discouraged.");
+         if (Math.abs(values.crash) < Math.abs(values.progress)) warnings.push("Crash penalty is smaller than one step of progress; repeated barrier contacts may be attractive.");
+         if (Math.abs(values.lap_complete) > Math.max(1, Math.abs(values.progress) * 10)) warnings.push("Lap bonus is very large relative to progress; inspect for sparse-reward instability.");
+         return warnings;
+       }
+       function renderRewardWarnings() { $("reward-warnings").textContent = rewardWarnings().join(" "); }
+       function rayPreview() {
        const raw = $("ray-angles").value.trim();
        const tokens = (raw === "" ? defaultRayAngles.map(String) : raw.split(",")).map(token => token.trim()).filter(token => token !== "");
        const entries = tokens.map((token, index) => { const value = Number(token); return { index, token, value, valid: token !== "" && Number.isFinite(value) }; });
@@ -1208,20 +1430,21 @@ PAGE = r'''<!doctype html>
         [0, 1].forEach(index => {
           const entrant = entrants[index] || {}, suffix = index === 0 ? "a" : "b";
           $(`race-name-${suffix}`).textContent = String(entrant.label || (index === 0 ? $("participant-a").value : $("participant-b").value) || "RACER").toUpperCase();
-          $(`race-status-${suffix}`).textContent = String(entrant.status || "READY").toUpperCase();
+           $(`race-status-${suffix}`).textContent = `${String(entrant.status || "READY").toUpperCase()}${entrant.dnf_reason ? ` · ${String(entrant.dnf_reason).toUpperCase()}` : ""}`;
           $(`race-latency-${suffix}`).textContent = entrant.latency_ms == null ? "—" : `${Number(entrant.latency_ms).toFixed(2)} ms`;
           $(`race-model-${suffix}`).textContent = entrant.model_mb == null ? "—" : `${Number(entrant.model_mb).toFixed(3)} MB`;
           $(`race-deadlines-${suffix}`).textContent = entrant.deadline_misses ?? 0;
           $(`race-failures-${suffix}`).textContent = entrant.inference_failures ?? 0;
         });
         const endpointLine = (latestRace.lines || []).find(line => line.startsWith("Live WebSocket endpoint:"));
-         if (endpointLine) { const endpoint = endpointLine.split(": ").slice(1).join(": "); const link = $("race-open"); link.href = `http://127.0.0.1:8765/?live=${encodeURIComponent(endpoint)}`; link.hidden = false; }
+          if (endpointLine) { const endpoint = endpointLine.split(": ").slice(1).join(": "); const link = $("race-open"); const rendererPort = Number($("renderer-port").value) || 8765; const host = typeof window !== "undefined" && window.location ? window.location.hostname : "127.0.0.1"; link.href = `http://${host}:${rendererPort}/?live=${encodeURIComponent(endpoint)}`; link.hidden = false; }
        }
        function renderPackage(result) {
          const target = $("package-result");
           target.textContent = `ONNX submission package ready · ${result.source_kind} · package: ${result.package_dir} · submission: ${result.submission_dir} · manifest: ${result.manifest_path}. No track or replay was included; choose the live-test/event track in section 04 or the organizer runner.`;
           $("package-state-chip").textContent = "ready";
        }
+       function renderRuns(runs) { const target = $("runs-table"); target.replaceChildren(); if (!runs.length) { target.textContent = "No saved runs yet."; return; } runs.forEach(run => { const row = document.createElement("div"); row.className = "run-row"; const identity = run.identity || {}, metrics = run.metrics || {}; row.textContent = `${run.name} · model ${identity.model ? identity.model.model_sha256.slice(0, 10) : "reference"} · steps ${metrics.budget_used ?? "—"} · `; const clone = document.createElement("button"); clone.textContent = "Clone"; clone.dataset.run = run.path; clone.addEventListener("click", () => { $("output-dir").value = `${run.path}-clone`; if (run.reward && run.reward.weights) Object.entries(run.reward.weights).forEach(([name, value]) => { if ($(`reward-${name}`)) $(`reward-${name}`).value = value; }); renderRewardWarnings(); syncControls(); }); row.appendChild(clone); const compare = document.createElement("button"); compare.textContent = "Evaluate both maps"; compare.addEventListener("click", () => action("evaluate-both", { source: run.path })); row.appendChild(compare); target.appendChild(row); }); }
        function render(data) {
         latestStatus = data;
        const state = data.state || "idle", metrics = data.metrics || {}, used = Number(metrics.budget_used || 0), budget = Number(metrics.budget_steps || $("budget-steps").value || 1), remaining = Math.max(0, budget - used), clientBudget = data.client_budget || {};
@@ -1234,7 +1457,8 @@ PAGE = r'''<!doctype html>
         if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
          $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
         }
-        renderRace(data.race || {});
+         renderRace(data.race || {});
+         if (data.runs) renderRuns(data.runs);
         syncControls();
      }
      function trainingError() {
@@ -1250,7 +1474,7 @@ PAGE = r'''<!doctype html>
        }
        return rayPreview().error;
      }
-      function syncControls() {
+       function syncControls() {
         const active = Boolean(latestStatus.running) || latestStatus.state === "stopping";
         const raceActive = Boolean(latestRace.running) || latestRace.state === "stopping";
         const busy = Boolean(pending) || active || Boolean(latestStatus.action_busy);
@@ -1258,14 +1482,15 @@ PAGE = r'''<!doctype html>
          fields.forEach(id => { $(id).disabled = busy; });
          packageFields.forEach(id => { $(id).disabled = busy || raceActive || active; });
          raceFields.forEach(id => { $(id).disabled = raceBusy; });
-       $("start").disabled = busy || Boolean(trainingError());
+        $("start").disabled = busy || Boolean(trainingError());
+        $("check-model").disabled = busy || !$("model").value.trim();
        $("setup").disabled = busy;
        $("stop").disabled = Boolean(pending) || !active || latestStatus.state === "stopping";
        const watchBusy = busy || Boolean(latestStatus.renderer && latestStatus.renderer.running);
        ["watch-source", "watch-map", "watch-renderer"].forEach(id => { $(id).disabled = watchBusy; });
-       $("artifact-label").hidden = $("watch-source").value !== "artifact";
-       $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
-        $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value === "artifact" && !$("artifact-dir").value.trim());
+        $("artifact-label").hidden = $("watch-source").value === "reference";
+        $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
+         $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value !== "reference" && !$("artifact-dir").value.trim());
          $("race-start").disabled = raceBusy || Boolean(raceValidation());
          $("race-stop").disabled = Boolean(pending) || !raceActive || latestRace.state === "stopping";
          $("package").disabled = busy || raceActive || active || Boolean(packageValidation());
@@ -1282,12 +1507,13 @@ PAGE = r'''<!doctype html>
         const ids = [$("participant-a").value.trim(), $("participant-b").value.trim()];
         if (!ids[0] || !ids[1] || ids[0] === ids[1]) return "Use two different racer IDs.";
         for (const id of ["artifact-a", "artifact-b", "race-track", "race-config", "race-output"]) if (!$(id).value.trim()) return `${id} is required.`;
-        for (const id of ["race-port", "race-max-steps"]) if (!/^\d+$/.test($(id).value.trim()) || Number($(id).value) <= 0) return `${id} must be a positive integer.`;
+         for (const id of ["race-port", "race-max-steps", "renderer-port"]) if (!/^\d+$/.test($(id).value.trim()) || Number($(id).value) < (id === "race-port" ? 0 : 1) || Number($(id).value) > 65535) return `${id} must be a valid port/positive integer.`;
         if (!Number.isFinite(Number($("race-budget-ms").value)) || Number($("race-budget-ms").value) <= 0) return "Action budget must be positive.";
         return "";
       }
      async function request(path, options) { const response = await fetch(path, options); const body = await response.json(); if (!response.ok) throw new Error(body.error || "Request failed"); return body; }
-     async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
+       async function refresh() { const version = actionVersion; if (pending) return; try { const data = await request("/api/status"); if (!pending && version === actionVersion) render(data); } catch (error) { if (!pending && version === actionVersion) $("state-label").textContent = error.message; } }
+       async function refreshRuns() { try { renderRuns(await request("/api/runs")); } catch (_) {} }
        async function refreshMaps() { try { const maps = await request("/api/maps"); const select = $("watch-map"); select.replaceChildren(); maps.forEach(map => { const option = document.createElement("option"); option.value = map.id; option.textContent = map.display_name; select.appendChild(option); }); syncControls(); } catch (error) { $("watch-error").textContent = error.message; } }
      function renderWatch(result) {
        lastWatch = result;
@@ -1301,21 +1527,22 @@ PAGE = r'''<!doctype html>
        $("renderer-status").textContent = result.renderer === "browser" ? "Browser fallback ready · open the link above on this device." : `${result.headless ? "Headless Pygame · one-frame check only; use the browser link for playback" : "Pygame on the server's local display"} · ${result.renderer_state}`;
        if (result.renderer_error) $("watch-error").textContent = result.renderer_error;
      }
-       async function action(name, payload = {}) {
-         const actionButton = name === "race/start" ? $("race-start") : name === "race/stop" ? $("race-stop") : $(name);
+        async function action(name, payload = {}) {
+          const actionButton = name === "race/start" ? $("race-start") : name === "race/stop" ? $("race-stop") : $(name) || { disabled: false };
          if (pending || actionButton.disabled) return;
         if (name === "start" && trainingError()) return;
         if (name === "package" && packageValidation()) return;
         pending = name; actionVersion++;
-         const errorTarget = $(name === "watch" ? "watch-error" : name === "package" ? "package-error" : name.startsWith("race/") ? "race-error" : "run-error"); errorTarget.textContent = "";
+          const errorTarget = $(name === "watch" ? "watch-error" : name === "package" ? "package-error" : name === "check-model" ? "run-error" : name.startsWith("race/") ? "race-error" : "run-error"); errorTarget.textContent = "";
        syncControls();
        try {
          const result = await request(`/api/${name}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
-           if (name === "watch") renderWatch(result); else if (name === "package") renderPackage(result); else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
+            if (name === "watch") renderWatch(result); else if (name === "package") renderPackage(result); else if (name === "check-model") { $("model-check-result").textContent = `PASS · ${result.parameters} parameters · ${result.nodes} nodes · ${Number(result.latency_ms).toFixed(3)} ms · parity ${Number(result.parity_max_abs_diff).toExponential(2)}`; } else if (name === "evaluate-both") { $("runs-table").textContent = result.tracks.map(track => `${track.track_id}: ${track.repeats[0].status}`).join(" · "); } else if (name.startsWith("race/")) render({ ...latestStatus, race: result }); else render(result);
        } catch (error) { errorTarget.textContent = error.message; errorTarget.focus(); }
        finally { pending = null; actionVersion++; syncControls(); refresh(); }
      }
-      $("start").addEventListener("click", () => action("start", formData()));
+       $("start").addEventListener("click", () => action("start", formData()));
+        $("check-model").addEventListener("click", () => action("check-model", { model: $("model").value, config: $("config") ? $("config").value : "config/simulation.json" }));
        $("stop").addEventListener("click", () => action("stop"));
        $("setup").addEventListener("click", () => action("setup"));
         $("package").addEventListener("click", () => action("package", { package_source: $("package-source").value, package_output: $("package-output").value, package_participant: $("package-participant").value }));
@@ -1323,11 +1550,17 @@ PAGE = r'''<!doctype html>
       $("race-stop").addEventListener("click", () => action("race/stop"));
      $("watch").addEventListener("click", () => action("watch", { map_id: $("watch-map").value, output_dir: $("output-dir").value, source: $("watch-source").value, artifact_dir: $("artifact-dir").value, renderer: $("watch-renderer").value }));
       ["ray-count", "ray-angles"].forEach(id => $(id).addEventListener("input", renderRayDiagram));
-      fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; syncControls(); }); });
-        ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
+       fields.forEach(id => { $(id).setAttribute("aria-describedby", `${$(id).getAttribute("aria-describedby") || ""} run-error`.trim()); $(id).addEventListener("input", () => { $("run-error").textContent = trainingError() || ""; renderRewardWarnings(); syncControls(); }); });
+       ["watch-source", "watch-map", "watch-renderer", "artifact-dir"].forEach(id => $(id).addEventListener("input", syncControls));
         packageFields.forEach(id => $(id).addEventListener("input", syncControls));
        raceFields.forEach(id => $(id).addEventListener("input", () => { $("race-error").textContent = raceValidation(); syncControls(); }));
-      renderRayDiagram(); render({}); refreshMaps(); refresh(); setInterval(refresh, 700);
+       let restoredForm = false;
+       function restoreForm() { if (typeof localStorage === "undefined") return; try { const saved = JSON.parse(localStorage.getItem("synapse-participant-form") || "{}"); restoredForm = Object.keys(saved).length > 0; Object.entries(saved).forEach(([id, value]) => { if ($(id) && !["output-dir", "package-output", "race-output"].includes(id)) $(id).value = value; }); } catch (_) {} }
+       async function refreshDefaults() { if (restoredForm) return; try { const defaults = await request("/api/defaults"); ["output_dir", "package_output", "race_output"].forEach(key => { const id = key.replaceAll("_", "-"); if ($(id) && defaults[key]) $(id).value = defaults[key]; }); if (defaults.output_dir) { $("package-source").value = defaults.output_dir; $("artifact-dir").value = `${defaults.output_dir}/artifact`; } syncControls(); } catch (_) {} }
+       function persistForm() { if (typeof localStorage === "undefined") return; try { const saved = {}; [...fields, ...packageFields, ...raceFields].forEach(id => { if ($(id)) saved[id] = $(id).value; }); localStorage.setItem("synapse-participant-form", JSON.stringify(saved)); } catch (_) {} }
+       restoreForm();
+       [...fields, ...packageFields, ...raceFields].forEach(id => { if ($(id)) $(id).addEventListener("input", persistForm); });
+       renderRayDiagram(); renderRewardWarnings(); render({}); refreshDefaults(); refreshMaps(); refreshRuns(); refresh(); setInterval(refresh, 700); setInterval(refreshRuns, 3000);
   </script>
 </body>
 </html>'''
@@ -1388,8 +1621,18 @@ class Handler(BaseHTTPRequestHandler):
             })
         elif path == "/api/maps":
             self._json(200, public_maps())
+        elif path == "/api/runs":
+            self._json(200, participant_runs())
+        elif path == "/api/defaults":
+            self._json(200, default_paths())
         elif path == "/api/report":
-            report = ROOT / "participant_run" / "training_report.md"
+            requested = parse_qs(urlparse(self.path).query).get("output_dir", [None])[0]
+            try:
+                report_root = _workspace_path(requested, label="output_dir") if requested else ROOT / "artifacts" / "runs" / "run-001"
+            except ValueError as exc:
+                self._json(400, {"error": str(exc)})
+                return
+            report = report_root / "training_report.md"
             if not report.exists():
                 self._json(404, {"error": "no participant report exists yet"})
             else:
@@ -1452,7 +1695,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/race/stop":
                 self._json(200, RACE_PROCESS.stop())
                 return
-            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/package", "/api/race/start"):
+            if path not in ("/api/start", "/api/setup", "/api/watch", "/api/package", "/api/check-model", "/api/evaluate-both", "/api/race/start"):
                 self._json(404, {"error": "not found"})
                 return
             acquired = ACTION_LOCK.acquire(blocking=False)
@@ -1472,6 +1715,10 @@ class Handler(BaseHTTPRequestHandler):
                 if RACE_PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop the live heat before building a live package")
                 result = build_onnx_package(form)
+            elif path == "/api/check-model":
+                result = check_participant_model(form)
+            elif path == "/api/evaluate-both":
+                result = evaluate_run_both(form)
             elif path == "/api/race/start":
                 if PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop training before starting a live heat")
@@ -1481,7 +1728,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 result = PROCESS.start(form)
             self._json(200, result)
-        except (ValueError, RuntimeError, OSError, OverflowError, UnicodeError, RecursionError, subprocess.SubprocessError) as exc:
+        except (ValueError, RuntimeError, OSError, OverflowError, UnicodeError, RecursionError, ImportError, subprocess.SubprocessError) as exc:
             self._json(400, {"error": str(exc)})
         finally:
             if acquired:

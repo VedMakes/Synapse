@@ -8,6 +8,8 @@ budget-state*.json
 budget-state*.json.lock
 /artifacts/
 /.synapse/
+# Participant-owned runs are local experiment state, not release fixtures.
+/participant_run/
 # Local dashboard snapshots and participant-only scratch output.
 /ui-run/
 # Local test/coverage/log output.
@@ -15,3 +17,5 @@ budget-state*.json.lock
 .coverage
 coverage.xml
 htmlcov/
+research_notes/
+RACING_EVENT_Agent_Handoff.md

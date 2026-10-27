@@ -24,6 +24,7 @@ from racing_event.client_budget import (
     DEFAULT_MAX_RETRAINS,
     DEFAULT_MAX_STEPS_PER_RETRAIN,
     reserve_training_allocation,
+    release_training_allocation,
 )
 
 
@@ -101,11 +102,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--reward", type=Path, default=None, help="optional participant reward input")
     parser.add_argument("--track-dir", type=Path, default=Path("tracks/train"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
-    parser.add_argument("--output-dir", type=Path, default=Path("participant_run"))
-    parser.add_argument("--steps", type=lambda value: _positive(value, "--steps"), default=2048)
+    parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runs/run-001"))
+    parser.add_argument("--model", type=Path, default=None, help="optional participant model.py exposing build_actor(obs_size)")
+    parser.add_argument("--hparams", type=Path, default=None, help="optional JSON PPO hyperparameter snapshot")
+    parser.add_argument("--init-from", type=Path, default=None, help="optional run/artifact to warm-start in a new output directory")
+    parser.add_argument("--steps", type=lambda value: _positive(value, "--steps"), default=256)
     parser.add_argument("--budget-steps", type=lambda value: _positive(value, "--budget-steps"), default=10000)
-    parser.add_argument("--n-envs", type=lambda value: _positive(value, "--n-envs"), default=4)
-    parser.add_argument("--rollout-length", type=lambda value: _positive(value, "--rollout-length"), default=64)
+    parser.add_argument("--n-envs", type=lambda value: _positive(value, "--n-envs"), default=2)
+    parser.add_argument("--rollout-length", type=lambda value: _positive(value, "--rollout-length"), default=32)
     parser.add_argument("--seed", type=lambda value: _positive(value, "--seed"), default=17)
     return parser.parse_args()
 
@@ -155,6 +159,9 @@ def build_training_command(args: argparse.Namespace) -> list[str]:
     ]
     if reward is not None:
         command[2:2] = ["--reward", str(reward)]
+    for flag, value in (("--model", getattr(args, "model", None)), ("--hparams", getattr(args, "hparams", None)), ("--init-from", getattr(args, "init_from", None))):
+        if value is not None:
+            command.extend([flag, str(_workspace_path(str(value), label=flag))])
     return command
 
 
@@ -177,7 +184,20 @@ def main() -> None:
         + ("; resuming existing allocation" if allocation.reused else ""),
         flush=True,
     )
-    raise SystemExit(subprocess.run(command, cwd=ROOT, check=False).returncode)
+    completed = subprocess.run(command, cwd=ROOT, check=False)
+    if completed.returncode != 0:
+        output_dir = _workspace_path(str(args.output_dir), label="output_dir")
+        checkpoint_markers = (
+            output_dir / "policy.pt", output_dir / "reference_checkpoint.json",
+            output_dir / "artifact" / "manifest.json", output_dir / "submission" / "manifest.json",
+        )
+        if not any(path.exists() for path in checkpoint_markers):
+            try:
+                release_training_allocation(CLIENT_BUDGET_PATH, output_dir)
+                print("released client training allocation after failure before checkpoint", flush=True)
+            except ClientTrainingBudgetError as exc:
+                print(f"could not release failed client training allocation: {exc}", file=sys.stderr, flush=True)
+    raise SystemExit(completed.returncode)
 
 
 if __name__ == "__main__":

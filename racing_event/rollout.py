@@ -158,7 +158,7 @@ class RolloutCollector:
         training: bool = True,
         seed: int | None = None,
     ) -> None:
-        if not isinstance(env, VectorizedRacingEnv):
+        if not isinstance(env, VectorizedRacingEnv) and not getattr(env, "budget_managed", False):
             raise TypeError("env must be a VectorizedRacingEnv")
         if not callable(policy):
             raise TypeError("policy must be callable")
@@ -184,6 +184,7 @@ class RolloutCollector:
         self.max_batch_steps = int(max_batch_steps)
         self.training = bool(training)
         self.seed = seed
+        self._budget_managed = bool(getattr(env, "budget_managed", False))
         self._raw_observation: np.ndarray | None = None
         self._invalid_reason: str | None = None
 
@@ -294,7 +295,8 @@ class RolloutCollector:
             raw_observation = self._raw_observation.copy() if self._raw_observation is not None else observation.copy()
             raw_action = self._validate_policy_action(self.policy(observation.copy()))
             applied_action = np.clip(raw_action, -1.0, 1.0)
-            self.budget.consume(self.run_id, count)
+            if not self._budget_managed:
+                self.budget.consume(self.run_id, count)
             if self.reward_function is None:
                 next_raw, reward, term, trunc, info = self.env.step(raw_action, active_mask=active_mask)
             else:

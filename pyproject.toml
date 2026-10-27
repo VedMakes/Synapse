@@ -18,7 +18,7 @@ submission = ["onnx==1.17.0", "onnxruntime==1.20.1"]
 live = ["onnx==1.17.0", "onnxruntime==1.20.1", "websockets==15.0.1"]
 
 [tool.setuptools.packages.find]
-include = ["racing_event*"]
+include = ["racing_event*", "synapse*"]
 
 [tool.setuptools.package-data]
 racing_event = ["assets/*.html", "assets/*.css", "assets/*.js"]

@@ -18,7 +18,7 @@ starter model with your own training program.
 You will complete this sequence:
 
 1. Open a terminal in this repository.
-2. Install the local Python environment.
+2. Install the local Python environment and optional evaluator/live dependencies.
 3. Choose a trainer script. The starter is already included.
 4. Run a **tiny** training experiment so failures are cheap.
 5. Open a replay and look at what the car actually did.
@@ -200,10 +200,12 @@ program.
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
 | `--reward` | Optional reward JSON selected by the participant UI. | `examples/baseline_reward.json` |
+| `--model` | Optional workspace-local `model.py` exposing `build_actor(obs_size)`. | `participant_code/model.py` |
+| `--hparams` | Optional JSON snapshot of PPO hyperparameters. | `examples/ppo_hparams.json` |
 
-Your parser should accept `--reward` with a default of `None`, because the
-launcher does not send it when you choose a custom reward implementation. The
-other arguments should be required or have sensible defaults. A small parser
+Your parser should accept `--reward`, `--model`, and `--hparams` with defaults
+of `None`, because the launcher may omit each optional input. The other
+arguments should be required or have sensible defaults. A small parser
 blueprint looks like this:
 
 ```python
@@ -214,6 +216,8 @@ from pathlib import Path
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--reward", type=Path, default=None)
+    parser.add_argument("--model", type=Path, default=None)
+    parser.add_argument("--hparams", type=Path, default=None)
     parser.add_argument("--track-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
@@ -228,7 +232,8 @@ def parse_args():
 if __name__ == "__main__":
     args = parse_args()
     # 1. Load args.config and the JSON maps in args.track_dir.
-    # 2. Build your model and optimizer.
+  # 2. Build your model and optimizer. If args.model is supplied, it exposes
+  #    build_actor(obs_size); the reference PPO path supplies the critic.
     # 3. Collect at most args.steps transitions.
     # 4. Update your model using your own algorithm and reward.
     # 5. Save a recognized artifact below args.output_dir.
@@ -396,6 +401,12 @@ operational guard, not organizer-grade proof: someone who controls the client
 can delete or edit local files. Organizer-side evaluation must enforce the
 actual competition budget separately.
 
+Teacher demonstrations used by the optional scripted/imitation helpers are
+local diagnostic data and are not event submissions. Participant environment
+transitions collected through `tools/train_participant.py` or the `synapse`
+SDK are the budgeted unit; the SDK reserves them before each active-lane step.
+Deleting `.synapse/` or re-cloning resets the local guard.
+
 ## 5. Use the dashboard instead of typing commands
 
 The dashboard is optional. It is a local form around the same launcher; it is
@@ -548,7 +559,8 @@ Plain-English meanings:
 Use this loop instead of changing five values and guessing which one helped:
 
 1. **Baseline:** run 256 transitions with the starter reward, seed 17, default
-   rays, and one map.
+   rays, and the complete public training set (`tracks/train`). Replay or
+   evaluate one map at a time after training.
 2. **Inspect:** build a replay. Look for a crash, a stuck start, excessive
    steering oscillation, or a car that is safe but motionless.
 3. **Change one input:** for example, change only `off_track` from `-1.5` to
@@ -1078,7 +1090,15 @@ isolation boundaries are documented in
 [`docs/submission_runtime.md`](docs/submission_runtime.md); read that document
 before treating a local preview as an event submission.
 
-## 17. Useful reference documents
+## 17. Platform and security notes
+
+The local participant tooling targets POSIX/Linux (native Windows is
+unsupported; use WSL or Linux) and Python 3.11. `model.py`, trainer scripts,
+and reward callbacks are participant code and execute locally. The evaluator
+does not import them; it accepts only the validated ONNX submission and should
+run it in the model-only isolated worker.
+
+## 18. Useful reference documents
 
 - [`docs/participant_guide.md`](docs/participant_guide.md) — exact reference
   resume, warm-start, selection, replay, and dashboard details.

@@ -13,6 +13,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import random
+import shutil
 import sys
 from typing import Any
 
@@ -27,6 +28,7 @@ from racing_event.config import SimulationConfig
 from racing_event.evaluation import evaluate_policy, validate_evaluation_contract
 from racing_event.observation import RunningObservationNormalizer, TrainingContract
 from racing_event.ppo import FixedMLPActorCritic, PPOTrainer
+from racing_event.participant_model import build_policy_from_model, load_policy_state, sha256_file
 from racing_event import reference_checkpoint as checkpoint
 from racing_event.reward import RewardConfig
 from racing_event.rollout import PPOHyperparameters, RolloutCollector
@@ -67,6 +69,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--rollout-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=17)
     parser.add_argument("--warm-start", type=Path, help="imitation/reference artifact directory; new optimizer, NOT exact source resume")
+    parser.add_argument("--init-from", type=Path, help="fork a run/artifact with a fresh optimizer and current reward")
+    parser.add_argument("--model", type=Path, help="participant model.py exposing build_actor(obs_size) and optional build_critic")
+    parser.add_argument("--hparams", type=Path, help="JSON object overriding PPO hyperparameters")
     parser.add_argument("--fine-tune", action="store_true", help="bounded optional reference fine-tuning with public-track best selection")
     parser.add_argument("--max-updates", type=int, help="updates per invocation; fine-tuning default 4, maximum 32")
     parser.add_argument("--learning-rate", type=float, default=1.0e-4)
@@ -75,6 +80,22 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--eval-max-steps", type=int, default=2400, help="fine-tuning: per-public-track evaluation cap, at most 20000")
     parser.add_argument("--eval-track-dir", type=Path, default=DEFAULT_TRACK_DIR, help="public development tracks only (no private evaluator)")
     return parser.parse_args(argv)
+
+
+def _load_hparams(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read hparams JSON: {path}") from exc
+    if not isinstance(value, dict):
+        raise ValueError("hparams must contain a JSON object")
+    allowed = {"rollout_length", "gamma", "gae_lambda", "clip_range", "update_epochs", "learning_rate", "entropy_coefficient", "value_loss_coefficient", "hidden_sizes", "max_grad_norm"}
+    unknown = set(value) - allowed
+    if unknown:
+        raise ValueError(f"hparams contains unknown fields: {sorted(unknown)}")
+    return value
 
 
 def _open_budget(path: Path, budget_steps: int) -> tuple[RunBudget, str]:
@@ -196,7 +217,13 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     current = checkpoint.load_current(output)
     saved_manifest = None if current is None else current[1]
     saved_identity = None if current is None else saved_manifest["identity"]
-    fine_tune = bool(getattr(args, "fine_tune", False) or getattr(args, "warm_start", None))
+    requested_warm_start = getattr(args, "warm_start", None) or getattr(args, "init_from", None)
+    model_path = getattr(args, "model", None)
+    if model_path is None and saved_identity is not None and saved_identity.get("model", {}).get("model_sha256"):
+        candidate = output / "model_source.py"
+        if candidate.is_file():
+            model_path = candidate
+    fine_tune = bool(getattr(args, "fine_tune", False) or requested_warm_start)
     if saved_identity is not None:
         fine_tune = fine_tune or saved_identity["selection"] is not None
     max_updates = getattr(args, "max_updates", None)
@@ -204,11 +231,11 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         max_updates = 4 if fine_tune else args.steps
     if max_updates <= 0 or (fine_tune and (max_updates > 32 or args.steps > 65_536)):
         raise ValueError("fine-tuning requires 1..32 updates and at most 65536 transitions per invocation")
-    hp = PPOHyperparameters(
-        rollout_length=args.rollout_length,
-        learning_rate=getattr(args, "learning_rate", 1.0e-4),
-        update_epochs=getattr(args, "update_epochs", 4),
-    )
+    hparams = _load_hparams(getattr(args, "hparams", None))
+    hparams.setdefault("rollout_length", args.rollout_length)
+    hparams.setdefault("learning_rate", getattr(args, "learning_rate", 1.0e-4))
+    hparams.setdefault("update_epochs", getattr(args, "update_epochs", 4))
+    hp = PPOHyperparameters(**hparams)
     if hp.update_epochs > 16 or hp.learning_rate > 0.01:
         raise ValueError("reference updates require at most 16 epochs and learning-rate <= 0.01")
     config = SimulationConfig.from_file(args.config)
@@ -249,18 +276,51 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
-    warm_start = getattr(args, "warm_start", None)
+    warm_start = requested_warm_start
     origin = None if saved_identity is None else saved_identity["warm_start"]
     if warm_start is not None:
-        policy, normalizer, requested_origin = load_warm_start(warm_start, env)
+        if model_path is not None and (warm_start / "model_source.py").is_file() and getattr(args, "model", None) is None:
+            model_path = warm_start / "model_source.py"
+        if model_path is None:
+            policy, normalizer, requested_origin = load_warm_start(warm_start, env)
+        else:
+            source = warm_start / "reference_generations" if (warm_start / "reference_checkpoint.json").exists() else warm_start
+            source_current = checkpoint.load_current(warm_start)[0] if (warm_start / "reference_checkpoint.json").exists() else source
+            policy, model_info = build_policy_from_model(model_path, env.observation_size)
+            load_policy_state(policy, source_current / "policy.pt")
+            normalizer = None
+            source_contract_path = source_current / "training_contract.json"
+            if source_contract_path.exists():
+                _, normalizer = TrainingContract.load(source_contract_path)
+                if normalizer is not None:
+                    normalizer.freeze()
+            requested_origin = {
+                "kind": "participant model fork; optimizer and collector newly initialized",
+                "files": {name: checkpoint.sha256(source_current / name) for name in ("policy.pt", "policy.json", "training_contract.json")},
+                "preprocessing": "environment_only" if normalizer is None else "frozen_source_normalizer",
+                "model_sha256": model_info["model_sha256"],
+            }
         if current is not None and requested_origin != origin:
             raise ValueError("warm-start origin does not match this run")
         origin = requested_origin
     elif current is None:
         if fine_tune:
             raise ValueError("new fine-tuning runs require --warm-start and a new output directory")
-        policy = FixedMLPActorCritic(env.observation_size)
+        if model_path is None:
+            policy = FixedMLPActorCritic(env.observation_size)
+            model_info = None
+        else:
+            policy, model_info = build_policy_from_model(model_path, env.observation_size)
         normalizer = RunningObservationNormalizer(env.observation_size)
+    model_identity = None
+    if model_path is not None:
+        _, inspected_model = build_policy_from_model(model_path, env.observation_size)
+        model_identity = {
+            "model_sha256": sha256_file(model_path),
+            "actor_parameters": inspected_model["actor_parameters"],
+            "parameters": inspected_model["parameters"],
+        }
+    hparams_path = getattr(args, "hparams", None)
     identity = {
         "runtime": checkpoint.runtime_identity(), "contract": contract.to_dict(),
         "ppo": hp.to_dict(), "n_envs": args.n_envs, "seed": args.seed,
@@ -268,13 +328,22 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         "preprocessing": "running_reference_normalizer" if origin is None else origin["preprocessing"],
         "selection": selection_settings,
     }
+    if hparams_path is not None:
+        identity["hparams"] = hp.to_dict()
+    if model_identity is not None:
+        identity["model"] = model_identity
     if current is not None:
         if identity != saved_identity:
             raise ValueError("saved reference checkpoint identity does not match this invocation (config, tracks, seed, PPO, budget, preprocessing, selection or runtime)")
         directory, manifest = current
         if not (output / "budget.json").exists():
             raise ValueError("external budget missing; exact recovery refused")
-        policy, metadata = FixedMLPActorCritic.load_artifact(directory / "policy.pt", directory / "policy.json", expected_observation_size=env.observation_size)
+        if model_path is None:
+            policy, metadata = FixedMLPActorCritic.load_artifact(directory / "policy.pt", directory / "policy.json", expected_observation_size=env.observation_size)
+        else:
+            policy, model_info = build_policy_from_model(model_path, env.observation_size)
+            load_policy_state(policy, directory / "policy.pt")
+            metadata = checkpoint.read_json(directory / "policy.json")
         saved_contract, normalizer = TrainingContract.load(directory / "training_contract.json")
         if saved_contract.to_dict() != contract.to_dict() or metadata.get("ppo") != hp.to_dict():
             raise ValueError("checkpoint policy/contract mismatch")
@@ -340,6 +409,16 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         }
         metrics, selection = [], None
 
+    if model_path is not None:
+        model_source = output / "model_source.py"
+        if not model_source.exists():
+            model_source.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(Path(model_path).resolve(), model_source)
+    if hparams_path is not None:
+        destination = output / "hparams.json"
+        if not destination.exists():
+            shutil.copyfile(Path(hparams_path).resolve(), destination)
+
     def save(*, evaluate: bool) -> None:
         nonlocal selection
         generation = checkpoint.new_generation()
@@ -369,6 +448,8 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "update": state["updates"], "budget_used": status["used_steps"],
             "budget_remaining": status["remaining_steps"],
             **{name: rollout.metrics[name] for name in ("mean_episode_return", "lap_completion_rate", "mean_speed_mps", "crash_rate", "off_track_rate")},
+            "signal_contributions": rollout.metrics.get("signal_contributions", {}),
+            "weighted_signal_sums": rollout.metrics.get("weighted_signal_sums", {}),
             **ppo_metrics.to_dict(),
         })
         invocation_updates += 1

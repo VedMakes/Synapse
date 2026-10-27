@@ -358,6 +358,12 @@ class RolloutMetrics:
     def _summary_dict(self, summary: _Summary) -> dict[str, Any]:
         steps = summary.env_steps
         episodes = summary.episodes
+        weighted = {
+            name: float(summary.signal_sums[name] * self.weights[name])
+            for name in SIGNAL_NAMES
+        }
+        weighted_total = float(sum(weighted.values()))
+        contribution_denominator = sum(abs(value) for value in weighted.values())
         return {
             "env_steps": int(steps),
             "episodes": int(episodes),
@@ -404,10 +410,12 @@ class RolloutMetrics:
                 name: (float(summary.signal_sums[name] / steps) if steps else None)
                 for name in SIGNAL_NAMES
             },
-            "weighted_signal_sums": {
-                name: float(summary.signal_sums[name] * self.weights[name])
-                for name in SIGNAL_NAMES
+            "weighted_signal_sums": weighted,
+            "signal_contributions": {
+                name: (float(value / contribution_denominator) if contribution_denominator else 0.0)
+                for name, value in weighted.items()
             },
+            "weighted_signal_total": weighted_total,
         }
 
     def snapshot(self, *, wall_time_s: float) -> dict[str, Any]:

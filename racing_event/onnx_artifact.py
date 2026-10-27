@@ -152,8 +152,11 @@ def load_onnx_artifact(path: str | Path) -> OnnxPolicyArtifact:
         contents[name] = raw
     manifest = _load_json(root / "manifest.json")
     keys = {"format", "format_version", "profile", "environment_code_hash", "model_sha256", "training_contract_sha256"}
-    if set(manifest) != keys or manifest["format"] != FORMAT or type(manifest["format_version"]) is not int or manifest["format_version"] != 1:
+    optional = {"source_kind", "provenance"}
+    if not keys.issubset(manifest) or set(manifest) - keys - optional or manifest["format"] != FORMAT or type(manifest["format_version"]) is not int or manifest["format_version"] != 1:
         raise ValueError("unsupported ONNX artifact manifest")
+    if "source_kind" in manifest and manifest["source_kind"] not in {"synapse", "imported"}:
+        raise ValueError("unsupported ONNX source kind")
     if manifest["profile"] != "static_vector_cpu_opset17_v1":
         raise ValueError("unsupported ONNX runtime profile")
     _require_hash(manifest["environment_code_hash"], "environment code hash")
