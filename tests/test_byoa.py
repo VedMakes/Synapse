@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
@@ -18,6 +19,9 @@ from racing_event.reward import RewardConfig, SIGNAL_NAMES
 from racing_event.vector_env import VectorizedRacingEnv
 from tests.test_model_artifact import CONFIG, TRACK
 from tools.run_reference_baseline import run
+from tools.evaluate_both import evaluate_both
+from tools.export_replay import export as export_replay
+import synapse
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -41,7 +45,7 @@ class BringYourOwnArchitectureTests(unittest.TestCase):
             self.assertGreater(info["parameters"], info["actor_parameters"])
             self.assertEqual(policy.act(np.zeros((2, 23), dtype=np.float32)).shape, (2, 2))
 
-    def test_custom_actor_still_uses_the_nine_reference_reward_weights(self) -> None:
+    def test_custom_actor_uses_reference_reward_weights_and_can_be_evaluated(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             weights = dict(RewardConfig().weights)
@@ -75,6 +79,16 @@ class BringYourOwnArchitectureTests(unittest.TestCase):
             ))
             contract, _ = TrainingContract.load(output / "training_contract.json")
             self.assertEqual(contract.reward_config_hash, reward.content_hash)
+            report = evaluate_both(output, ROOT / "config/simulation.json", ROOT / "tracks/train", 1)
+            self.assertEqual(len(report["tracks"]), 2)
+            replay_path = root / "custom-actor-replay.json"
+            export_replay(Namespace(
+                config=ROOT / "config/simulation.json", track=ROOT / "tracks/train/monaco.json",
+                weights=output / "policy.pt", metadata=output / "policy.json",
+                contract=output / "training_contract.json", artifact_dir=None,
+                output=replay_path, participant_id="custom-actor", steps=2,
+            ))
+            self.assertTrue(replay_path.is_file())
             row = json.loads((output / "training_metrics.jsonl").read_text().splitlines()[0])
             self.assertEqual(set(row["weighted_signal_sums"]), set(SIGNAL_NAMES))
 
@@ -90,6 +104,28 @@ class BringYourOwnArchitectureTests(unittest.TestCase):
             result = collector.collect(3)
             self.assertEqual(result.batch.transitions, 3)
             self.assertEqual(budget.status(run_id)["used_steps"], 3)
+
+    def test_sdk_save_accepts_the_output_directory_created_by_make_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "run"
+            args = Namespace(
+                config=ROOT / "config/simulation.json", track_dir=ROOT / "tracks/train",
+                output_dir=output, steps=2, budget_steps=2, n_envs=1,
+                rollout_length=2, seed=17, reward=None, hparams=None,
+            )
+            synapse.make_env(args)
+            policy, _ = build_policy_from_model(self.write_model(root), 23)
+
+            def fake_export(_policy, _contract, _normalizer, destination, **_kwargs):
+                destination.mkdir(parents=True)
+                return destination
+
+            with patch("tools.export_onnx.export_torch_policy", side_effect=fake_export):
+                submission = synapse.save(policy, args.output_dir, args)
+            self.assertEqual(submission, output / "submission")
+            self.assertTrue((output / "budget.json").is_file())
+            self.assertTrue((output / "training_report.md").is_file())
 
     def test_failed_allocation_can_be_released_before_checkpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

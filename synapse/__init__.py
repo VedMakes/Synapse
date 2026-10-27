@@ -65,9 +65,22 @@ def make_env(args: argparse.Namespace) -> BudgetedEnv:
 
 def save(actor: ActorCritic | nn.Module, output_dir: str | Path, args: argparse.Namespace | None = None) -> Path:
     """Export a trained actor into the same validated ONNX flow as the UI."""
-    output = Path(output_dir).resolve()
-    if output.exists() and any(output.iterdir()):
-        raise ValueError("SDK output directory must be new or empty")
+    requested_output = Path(output_dir).expanduser()
+    if requested_output.is_symlink():
+        raise ValueError("SDK output path must not be a symlink")
+    output = requested_output.resolve()
+    if output.exists() and not output.is_dir():
+        raise ValueError("SDK output path must be a regular directory")
+    if output.exists():
+        # make_env owns this file in the run directory. It is expected to be
+        # present when save(actor, args.output_dir) is called after training.
+        sdk_files = {"budget.json", "budget.json.lock"}
+        unexpected = [entry.name for entry in output.iterdir() if entry.name not in sdk_files]
+        if unexpected:
+            raise ValueError(
+                "SDK output directory may contain only make_env's budget files; "
+                "choose a new output directory"
+            )
     output.mkdir(parents=True, exist_ok=True)
     env = getattr(args, "_synapse_env", None) if args is not None else None
     if env is None:
