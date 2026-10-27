@@ -21,7 +21,7 @@ You will complete this sequence:
 2. Install the local Python environment and optional evaluator/live dependencies.
 3. Choose an actor architecture. The reference PPO trainer is already included.
 4. Run a **tiny** training experiment so failures are cheap.
-5. Open a replay and look at what the car actually did.
+5. Follow the live rollout position in the dashboard, then replay what the car actually did.
 6. Change one parameter at a time and repeat.
 7. Export the best saved model to the validated ONNX format.
 8. Build a model-only ONNX submission package.
@@ -402,6 +402,10 @@ panel plots the latest rollout position for each parallel environment. It also d
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
 
+While training, use the **Latest training rollout** map to follow each parallel
+environment. Select a lane to inspect its car on Monaco or Spa; the marker and
+lap-distance/zone readout update after each PPO rollout.
+
 ## 6. Sensors and actions: what the model sees and does
 
 With the default configuration, every observation is a vector of 23 `float32`
@@ -601,7 +605,8 @@ it never runs the environment itself.
 After a dashboard training run:
 
 1. Keep **Output directory** set to the exact run directory.
-2. Choose **Reference · latest saved artifact** for a reference run.
+2. Choose **Training run · latest saved actor** for either the bundled actor
+   or a custom `model.py` actor.
 3. Choose `Monaco` or `Spa`.
 4. Choose **Pygame** for a local window or **Browser** for a browser replay.
 5. Click **Build / watch replay**.
@@ -610,7 +615,8 @@ After a dashboard training run:
 
 The selected run must contain `run_config.json`. This file records the actual
 ray order and other settings. The dashboard refuses to guess a default when it
-is missing.
+is missing. You can watch or evaluate a custom actor directly from its training
+run; ONNX packaging is not required for local iteration.
 
 ### 8.2 Command-line replay for a reference run
 
@@ -984,6 +990,9 @@ as `--config`:
 mkdir -p artifacts/runs/cli-run
 cp config/simulation.json artifacts/runs/cli-run/run_config.json
 ```
+
+Use the same config file that trained the model, especially if you changed ray
+count or order. A mismatch changes the model's observation contract.
 
 Then use `--config artifacts/runs/cli-run/run_config.json` during training.
 Keep the file in the run directory for replay and packaging.
