@@ -167,7 +167,7 @@ bypassed.
 | `--config` | The simulation and sensor configuration file. | `config/simulation.json` |
 | `--output-dir` | Where your script must save the run. | `artifacts/runs/team-a` |
 | `--steps` | Maximum transitions requested in this invocation. | `256` |
-| `--budget-steps` | Persistent maximum allowed by this local run ledger (up to 100,000). | `100000` |
+| `--budget-steps` | Persistent maximum allowed by this local run ledger (up to 1,000,000). | `1000000` |
 | `--n-envs` | Number of parallel environment lanes requested. | `2` |
 | `--rollout-length` | Number of transitions collected per lane before an update. | `32` |
 | `--seed` | Reproducibility seed. | `17` |
@@ -250,7 +250,7 @@ This command runs the reference PPO baseline with its default actor:
   --config config/simulation.json \
   --output-dir artifacts/runs/first-check \
   --steps 256 \
-  --budget-steps 100000 \
+  --budget-steps 1000000 \
   --n-envs 2 \
   --rollout-length 32 \
   --seed 17
@@ -265,7 +265,7 @@ Read the command from left to right:
 5. `--config ...` selects the sensor/physics configuration.
 6. `--output-dir ...` selects a new folder for this experiment.
 7. `--steps 256` makes this invocation short.
-8. `--budget-steps 100000` creates the local transition ceiling.
+8. `--budget-steps 1000000` creates the local transition ceiling.
 9. `--n-envs 2` asks for two parallel lanes.
 10. `--rollout-length 32` asks for 32 transitions per lane per update.
 11. `--seed 17` makes this attempt reproducible.
@@ -312,8 +312,8 @@ These two numbers are different:
 - `--steps` is the amount requested **this time you start the command**.
 - `--budget-steps` is the persistent local ceiling for the run directory.
 
-For example, `--steps 256 --budget-steps 100000` requests 256 transitions and
-allows future reference-starter resumes to spend up to 100,000 accepted
+For example, `--steps 256 --budget-steps 1000000` requests 256 transitions and
+allows future reference-starter resumes to spend up to 1,000,000 accepted
 transitions in that run ledger. `n_envs` lanes are charged individually. A
 vector call with two active lanes costs two transitions.
 
@@ -325,8 +325,8 @@ every actor architecture.
 ### 4.4 Client retrain cap
 
 The participant launcher now allows **12 independent training allocations** on
-one client. Each allocation can request at most **100,000 transitions**. This
-gives a practical maximum of 1,200,000 requested training transitions while still
+one client. Each allocation can request at most **1,000,000 transitions**. This
+gives a practical maximum of 12,000,000 requested training transitions while still
 leaving room for a baseline, multiple reward/model experiments, two seed
 checks, and final confirmation runs.
 
@@ -343,10 +343,10 @@ operational guard, not organizer-grade proof: someone who controls the client
 can delete or edit local files. Organizer-side evaluation must enforce the
 actual competition budget separately.
 
-When upgrading from the previous 10,000-step client cap, SYNAPSE raises the
-ledger cap while preserving its allocation history. Existing output folders
-keep the budget assigned when they were first allocated; choose a new output
-folder to start a run with the 100,000-step limit.
+When upgrading from a lower client cap, SYNAPSE raises the ledger cap while
+preserving its allocation history. Existing output folders keep the budget
+assigned when they were first allocated; choose a new output folder to start a
+run with the 1,000,000-step limit.
 
 Teacher demonstrations used by the optional scripted/imitation helpers are
 local diagnostic data and are not event submissions. Participant environment
@@ -388,7 +388,7 @@ In the training panel:
 4. **Output directory:** type a new folder such as
    `artifacts/runs/dashboard-first`.
 5. **Steps:** enter `256` for the first smoke run.
-6. **Budget steps:** the default ceiling is `100000`; the first run can stop
+6. **Budget steps:** the default ceiling is `1000000`; the first run can stop
    much earlier when early stopping detects that validation has plateaued.
 7. **Early stopping:** enabled by default. It checks public-map driving results
    every few PPO updates and stops after five checks without a new best result.
@@ -561,7 +561,7 @@ cp examples/baseline_reward.json participant_code/reward_off_track.json
   --track-dir tracks/train \
   --config config/simulation.json \
   --output-dir artifacts/runs/off-track-stronger \
-  --steps 2048 --budget-steps 100000 \
+  --steps 2048 --budget-steps 1000000 \
   --n-envs 2 --rollout-length 32 --seed 17
 ```
 
@@ -577,13 +577,13 @@ Keep the reward and maps fixed and change only the seed and output folder:
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-17 \
-  --steps 2048 --budget-steps 100000 --n-envs 2 --rollout-length 32 --seed 17
+  --steps 2048 --budget-steps 1000000 --n-envs 2 --rollout-length 32 --seed 17
 
 .venv/bin/python tools/train_participant.py \
   --reward examples/baseline_reward.json \
   --track-dir tracks/train --config config/simulation.json \
   --output-dir artifacts/runs/seed-23 \
-  --steps 2048 --budget-steps 100000 --n-envs 2 --rollout-length 32 --seed 23
+  --steps 2048 --budget-steps 1000000 --n-envs 2 --rollout-length 32 --seed 23
 ```
 
 Two seeds are two separate experiments. They are not two models inside one
@@ -596,7 +596,7 @@ For the reference trainer, begin here:
 | Parameter | First smoke | Small experiment | Why |
 |---|---:|---:|---|
 | `steps` | 256 | 2,048 or more | Invocation work, not the lifetime ledger. |
-| `budget-steps` | 100,000 | 100,000 | Local per-run ceiling; early stopping can finish first. |
+| `budget-steps` | 1,000,000 | 1,000,000 | Local per-run ceiling; early stopping can finish first. |
 | `n-envs` | 1 | 2 or 4 | More lanes collect more data per update. |
 | `rollout-length` | 16 or 32 | 32 or 64 | Must multiply with `n-envs` to at most 8,192. |
 | `seed` | 17 | 17, then 23 | Repeatability and variability checks. |
@@ -929,7 +929,7 @@ limit when you understand the checkpoint rules:
   --track-dir tracks/train \
   --config config/simulation.json \
   --output-dir artifacts/runs/first-check \
-  --steps 256 --budget-steps 100000 \
+  --steps 256 --budget-steps 1000000 \
   --n-envs 2 --rollout-length 32 --seed 17
 ```
 

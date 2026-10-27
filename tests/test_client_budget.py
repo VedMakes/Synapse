@@ -15,21 +15,21 @@ from racing_event.client_budget import (
 
 class ClientTrainingBudgetTests(unittest.TestCase):
     def test_default_cap_increases_and_existing_ledger_upgrades_in_place(self) -> None:
-        self.assertEqual(DEFAULT_MAX_STEPS_PER_RETRAIN, 100_000)
+        self.assertEqual(DEFAULT_MAX_STEPS_PER_RETRAIN, 1_000_000)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             budget = root / "client.json"
             output = root / "old-run"
             reserve_training_allocation(budget, output, 10_000, max_retrains=2, max_steps_per_retrain=10_000)
 
-            status = client_budget_status(budget, max_retrains=2, max_steps_per_retrain=100_000)
-            self.assertEqual(status["max_steps_per_retrain"], 100_000)
+            status = client_budget_status(budget, max_retrains=2, max_steps_per_retrain=1_000_000)
+            self.assertEqual(status["max_steps_per_retrain"], 1_000_000)
             self.assertEqual(status["retraining_started"], 1)
             self.assertEqual(
-                reserve_training_allocation(budget, output, 10_000, max_retrains=2, max_steps_per_retrain=100_000).reused,
+                reserve_training_allocation(budget, output, 10_000, max_retrains=2, max_steps_per_retrain=1_000_000).reused,
                 True,
             )
-            reserve_training_allocation(budget, root / "new-run", 100_000, max_retrains=2, max_steps_per_retrain=100_000)
+            reserve_training_allocation(budget, root / "new-run", 1_000_000, max_retrains=2, max_steps_per_retrain=1_000_000)
 
     def test_new_output_directories_consume_slots_and_resume_reuses_one(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

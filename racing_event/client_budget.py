@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - exercised only on non-POSIX hosts.
 
 SCHEMA_VERSION = 1
 DEFAULT_MAX_RETRAINS = 12
-DEFAULT_MAX_STEPS_PER_RETRAIN = 100_000
+DEFAULT_MAX_STEPS_PER_RETRAIN = 1_000_000
 _TOP_LEVEL_KEYS = {"schema_version", "max_retrains", "max_steps_per_retrain", "allocations", "head_hash"}
 _ALLOCATION_KEYS = {"slot", "output_dir", "budget_steps"}
 
