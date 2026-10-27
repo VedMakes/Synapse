@@ -140,6 +140,52 @@ def _ready_python(*, require_torch: bool = False, require_pygame: bool = False, 
     )
 
 
+def _require_cuda_python(python: Path) -> dict[str, object]:
+    """Require the selected training interpreter to see a working CUDA device."""
+    probe = (
+        "import json, torch; print(json.dumps({"
+        "'torch': str(torch.__version__), 'cuda_build': torch.version.cuda, "
+        "'available': bool(torch.cuda.is_available()), 'count': int(torch.cuda.device_count()), "
+        "'devices': [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]}))"
+    )
+    try:
+        result = subprocess.run(
+            [str(python), "-c", probe], cwd=ROOT, text=True,
+            capture_output=True, timeout=20, check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ValueError(f"GPU selected, but CUDA readiness check failed: {exc}") from exc
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip().splitlines()
+        raise ValueError("GPU selected, but the training Python could not probe PyTorch CUDA: " + (detail[-1] if detail else "probe failed"))
+    try:
+        info = json.loads(result.stdout.strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError) as exc:
+        raise ValueError("GPU selected, but the training Python returned an invalid CUDA readiness result") from exc
+    if info.get("cuda_build") is None:
+        try:
+            driver = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True, capture_output=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            driver = None
+        driver_note = "nvidia-smi is not installed or not on PATH" if driver is None or driver.returncode != 0 else f"visible NVIDIA device(s): {driver.stdout.strip()}"
+        raise ValueError(
+            f"GPU selected, but PyTorch {info.get('torch')} is a CPU-only build (CUDA build: none); "
+            f"{driver_note}. A CUDA-enabled PyTorch build and a working NVIDIA driver/device are missing."
+        )
+    if not info.get("available"):
+        try:
+            driver = subprocess.run(["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"], text=True, capture_output=True, timeout=5, check=False)
+        except (OSError, subprocess.SubprocessError):
+            driver = None
+        driver_note = "nvidia-smi is not installed or not on PATH" if driver is None or driver.returncode != 0 else f"nvidia-smi sees: {driver.stdout.strip()}"
+        raise ValueError(
+            f"GPU selected, but PyTorch {info.get('torch')} CUDA build {info.get('cuda_build')} "
+            f"cannot access a CUDA device (device count: {info.get('count', 0)}); {driver_note}. "
+            "The CUDA driver/device is unavailable to this process."
+        )
+    return info
+
+
 def parse_update_line(line: str) -> dict[str, object] | None:
     match = UPDATE_PATTERN.search(line)
     if match is None:
@@ -488,6 +534,9 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     if output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
     steps = positive_int("steps", 1000000)
+    processor = str(form.get("processor", "cpu")).strip().lower()
+    if processor not in ("cpu", "gpu"):
+        raise ValueError("processor must be CPU or GPU")
     budget_steps = positive_int("budget_steps", DEFAULT_MAX_STEPS_PER_RETRAIN)
     if budget_steps > DEFAULT_MAX_RETRAINS * DEFAULT_MAX_STEPS_PER_RETRAIN:
         raise ValueError("budget_steps exceeds the total 12-iteration client cap")
@@ -503,7 +552,14 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     hparams = None if hparams_value is None or (isinstance(hparams_value, str) and not hparams_value.strip()) else _workspace_path(text("hparams", ""), label="hparams")
     if hparams is not None and not hparams.is_file():
         raise ValueError(f"hparams does not exist: {hparams}")
-    python = _ready_python(require_torch=True)
+    try:
+        python = _ready_python(require_torch=True)
+    except ValueError as exc:
+        if processor == "gpu":
+            raise ValueError(f"GPU selected, but no ready Python environment with PyTorch was found: {exc}") from exc
+        raise
+    if processor == "gpu":
+        _require_cuda_python(python)
     effective_config, effective_reward, _, _ = _prepare_run_inputs(
         form, config=config, output_dir=output_dir, reward_path=reward, model=model, python=python, hparams=hparams,
     )
@@ -516,6 +572,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         "--output-dir", str(output_dir),
         "--steps", str(steps),
         "--budget-steps", str(budget_steps),
+        "--device", "cuda" if processor == "gpu" else "cpu",
         "--n-envs", str(n_envs),
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
@@ -1302,6 +1359,7 @@ PAGE = r'''<!doctype html>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
              <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
               <label>Output directory<input id="output-dir" value="artifacts/runs/run-001" spellcheck="false"></label>
+             <label>Processor<select id="processor"><option value="cpu" selected>CPU</option><option value="gpu">GPU · CUDA</option></select></label>
              <label>Steps this run<input id="steps" type="number" min="1" max="1000000" step="1" value="1000000"></label>
              <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
              <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
@@ -1413,7 +1471,7 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
         const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "checkpoint", "time", "steer_smoothness"];
-        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "processor", "steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
         const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
@@ -1423,7 +1481,7 @@ PAGE = r'''<!doctype html>
       let latestTrainingPosition = null;
       let trainingEventFlash = "", trainingEventFlashUntil = 0;
         let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
-       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: latestStatus.metrics && latestStatus.metrics.budget_steps || "1000000", n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, processor: $("processor").value || "cpu", steps: $("steps").value, budget_steps: latestStatus.metrics && latestStatus.metrics.budget_steps || "1000000", n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
        function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
        function rewardWarnings() {
