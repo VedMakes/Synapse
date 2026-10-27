@@ -21,7 +21,9 @@ class Element {
   }
   set textContent(value) { this._text = String(value); this.children = []; }
   get textContent() { return this._text + this.children.map(child => child.textContent).join(""); }
+  get options() { return this.tagName === "select" ? this.children : undefined; }
   setAttribute(key, value) { this.attrs[key] = String(value); }
+  removeAttribute(key) { delete this.attrs[key]; }
   getAttribute(key) { return this.attrs[key] ?? null; }
   appendChild(child) {
     this.children.push(child);
@@ -54,7 +56,7 @@ async function dashboard() {
     },
     fetch: (url, options) => {
       calls.push({ url, options });
-       if (url === "/api/maps") return Promise.resolve(response([{ id: "monaco", display_name: "Monaco", path: "tracks/train/monaco.json" }]));
+       if (url === "/api/maps") return Promise.resolve(response([{ id: "monaco", display_name: "Monaco", path: "tracks/train/monaco.json", centerline: [[0, 0], [10, 0], [10, 10]] }]));
       if (url === "/api/status" && !delayStatus) return Promise.resolve(response(status));
       return new Promise(resolve => deferred.push({ url, resolve }));
     },
@@ -65,6 +67,7 @@ async function dashboard() {
   await flush();
   return {
     el: id => elements[id], calls,
+    renderStatus() { context.render(status); },
     async input(id, value) { elements[id].value = value; await elements[id].emit("input"); },
     click: id => elements[id].emit("click"),
     setStatus: data => { status = { ...status, ...data }; },
@@ -94,6 +97,29 @@ test("initial budget, explicit renderer/source controls and ordered live ray pre
   assert.deepEqual(rays.map(ray => [ray.attrs.x2, ray.attrs.y2]), [["126.00", "270.00"], ["514.00", "270.00"], ["320.00", "76.00"]]);
   assert.match(h.el("ray-summary").children[0].textContent, /ray_0 · \+90°/);
   assert.equal(h.el("start").disabled, false);
+});
+
+test("training status compares public-map lap times and shows live speed and episode time", async () => {
+  const h = await dashboard();
+  h.setStatus({ metrics: { training_position: { kind: "training_position", update: 12, cars: [
+    { lane: 0, track_id: "monaco", x: 2, y: 3, heading: 0.2, progress_fraction: 0.4,
+      zones_reached: 6, speed_mps: 42.3, episode_time_s: 12, off_track: false, end_reason: null },
+  ] }, public_validation: {
+    latest_update: 12, latest_improved: false,
+    latest: { finish_count: 0, track_count: 2, off_track_seconds: 4.2, tracks: [
+      { track_id: "monaco", status: "dnf_crash", lap_time_s: null, mean_speed_mps: 18.25, off_track_seconds: 2.1 },
+      { track_id: "spa", status: "dnf_timeout", lap_time_s: null, mean_speed_mps: 16, off_track_seconds: 2.1 },
+    ] },
+    best_update: 8,
+    best: { finish_count: 1, track_count: 2, off_track_seconds: 1.2, tracks: [
+      { track_id: "monaco", status: "finished", lap_time_s: 95.432, mean_speed_mps: 35.5, off_track_seconds: 0.4 },
+      { track_id: "spa", status: "dnf_crash", lap_time_s: null, mean_speed_mps: 16, off_track_seconds: 0.8 },
+    ] },
+  } } });
+  h.renderStatus();
+  assert.match(h.el("validation-summary").textContent, /Best checkpoint · update 8: 1\/2 laps finished/);
+  assert.match(h.el("validation-summary").textContent, /monaco: latest dnf_crash · no finish.*best finished · 95\.43 s lap/);
+  assert.match(h.el("training-map-status").textContent, /42\.3 m\/s · 12\.0 s in episode/);
 });
 
 test("invalid rays, numeric input and static weights disable submission with accessible inline errors", async () => {

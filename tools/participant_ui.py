@@ -1140,6 +1140,9 @@ PAGE = r'''<!doctype html>
     #training-track-center { fill: none; stroke: #45f3ff88; stroke-width: 2; stroke-dasharray: 5 6; vector-effect: non-scaling-stroke; }
     #training-car { fill: var(--pink); stroke: white; stroke-width: 2; filter: drop-shadow(0 0 7px #ff3fa4); }
     .training-map-status { margin: 6px 0 0; color: var(--muted); font: 11px ui-monospace, monospace; }
+    .validation-panel { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #08121e; }
+    .validation-panel strong { color: var(--cyan); font: 700 11px ui-monospace, monospace; text-transform: uppercase; }
+    .validation-panel .log { min-height: 3.5em; max-height: 10em; margin-top: 8px; }
     .log { min-height: 166px; max-height: 245px; margin-top: 17px; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #081019; color: #b9d2dc; font: 11px/1.6 ui-monospace, monospace; white-space: pre-wrap; }
     .contract { display: grid; gap: 12px; }
      .contract-item { padding: 12px; border-left: 2px solid var(--pink); background: #0b1521; }
@@ -1372,6 +1375,7 @@ PAGE = r'''<!doctype html>
             </svg>
             <p id="training-map-status" class="training-map-status" role="status" aria-live="polite">The map updates after each PPO rollout and holds the final driven position if an episode reset follows.</p>
           </div>
+          <div class="validation-panel"><strong>Public-map validation · fixed start, deterministic driving</strong><div id="validation-summary" class="log" role="status" aria-live="polite">Waiting for the first public-map validation check.</div></div>
           <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean zones reached</small><strong id="metric-zones">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
              <div id="log" class="log">Waiting for a local trainer process…</div>
          </div>
@@ -1504,7 +1508,24 @@ PAGE = r'''<!doctype html>
         $("training-car").removeAttribute("hidden");
         const progress = Number(car.progress_fraction) * 100;
         const end = car.end_reason ? ` · episode ended: ${car.end_reason}` : " · latest driven position";
-        $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited${car.off_track ? " · off track" : ""}${end}`;
+        const speed = Number.isFinite(Number(car.speed_mps)) ? ` · ${Number(car.speed_mps).toFixed(1)} m/s` : "";
+        const elapsed = Number.isFinite(Number(car.episode_time_s)) ? ` · ${Number(car.episode_time_s).toFixed(1)} s in episode` : "";
+        $("training-map-status").textContent = `Update ${payload.update} · ${map.display_name} · environment ${car.lane} · ${progress.toFixed(1)}% lap distance · ${Number(car.zones_reached) || 0}/16 zones visited${speed}${elapsed}${car.off_track ? " · off track" : ""}${end}`;
+      }
+      function renderPublicValidation(validation) {
+        const target = $("validation-summary");
+        if (!validation || !validation.latest || !validation.best) {
+          target.textContent = "Waiting for the first public-map validation check.";
+          return;
+        }
+        const aggregate = value => `${value.finish_count}/${value.track_count} laps finished · ${Number(value.off_track_seconds).toFixed(1)} s off track`;
+        const lap = row => row.lap_time_s == null ? "no finish" : `${Number(row.lap_time_s).toFixed(2)} s lap`;
+        const speed = row => `${Number(row.mean_speed_mps).toFixed(1)} m/s avg`;
+        const perTrack = validation.latest.tracks.map(row => {
+          const best = validation.best.tracks.find(item => item.track_id === row.track_id);
+          return `${row.track_id}: latest ${row.status} · ${lap(row)} · ${speed(row)} · ${Number(row.off_track_seconds).toFixed(1)} s off track; best ${best ? `${best.status} · ${lap(best)} · ${speed(best)}` : "—"}`;
+        });
+        target.textContent = `Latest check · update ${validation.latest_update}${validation.latest_improved ? " · new best" : ""}: ${aggregate(validation.latest)}\nBest checkpoint · update ${validation.best_update ?? "—"}: ${aggregate(validation.best)}\n${perTrack.join("\n")}`;
       }
        function renderRace(data) {
         latestRace = data || {};
@@ -1541,6 +1562,7 @@ PAGE = r'''<!doctype html>
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-zones").textContent = format(metrics.zones, " / 16"); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
       renderTrainingPosition(metrics.training_position);
+      renderPublicValidation(metrics.public_validation);
       const earlyStop = metrics.early_stopping;
       $("early-stop-status").textContent = earlyStop && earlyStop.enabled
         ? (earlyStop.stopped ? `Early stopping triggered · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.` : `Early stopping active · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.`)

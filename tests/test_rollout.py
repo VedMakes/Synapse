@@ -230,6 +230,8 @@ class RolloutCollectorTests(unittest.TestCase):
         self.assertFalse(np.any(result.batch.truncated))
         self.assertTrue(result.training_position[0]["off_track"])
         self.assertIsNone(result.training_position[0]["end_reason"])
+        self.assertAlmostEqual(result.training_position[0]["episode_time_s"], 2 * CONFIG.dt)
+        self.assertEqual(result.training_position[0]["speed_mps"], 0.0)
 
     def test_hyperparameters_are_explicit_and_serializable(self) -> None:
         hyperparameters = PPOHyperparameters()

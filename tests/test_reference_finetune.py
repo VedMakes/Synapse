@@ -159,6 +159,24 @@ class ReferenceFineTuneTests(unittest.TestCase):
         self.assertEqual(tied["best_generation"], previous["best_generation"])
         self.assertFalse(tied["history"][-1]["selected"])
 
+    def test_public_validation_dashboard_separates_latest_and_best(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            report = {
+                "finish_count": 1, "off_track_seconds": 0.5, "finished_lap_seconds": 8.5,
+                "tracks": [{"track_id": "monaco", "status": "finished", "lap_time_s": 8.5,
+                            "mean_speed_mps": 21.0, "off_track_steps": 15}],
+            }
+            selection = runner.select_candidate(None, report, "g-" + "a" * 32, 3)
+            worse = {**report, "finish_count": 0, "finished_lap_seconds": 0.0,
+                     "tracks": [{**report["tracks"][0], "status": "dnf_crash", "lap_time_s": None}]}
+            selection = runner.select_candidate(selection, worse, "g-" + "b" * 32, 5)
+            view = runner._public_validation_payload(selection, 1 / 30)
+            self.assertEqual(view["latest_update"], 5)
+            self.assertEqual(view["latest"]["finish_count"], 0)
+            self.assertEqual(view["best_update"], 3)
+            self.assertEqual(view["best"]["tracks"][0]["lap_time_s"], 8.5)
+            self.assertAlmostEqual(view["best"]["tracks"][0]["off_track_seconds"], 0.5)
+
     def test_early_stopping_tracks_validation_plateau_and_persists_on_resume(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -170,7 +188,11 @@ class ReferenceFineTuneTests(unittest.TestCase):
                 steps=20, budget_steps=40, early_stop_patience=2,
                 eval_every=1, eval_max_steps=2, eval_track_dir=evaluation,
             )
-            report = {"finish_count": 0, "off_track_seconds": 1.0, "finished_lap_seconds": 0.0}
+            report = {
+                "finish_count": 0, "off_track_seconds": 1.0, "finished_lap_seconds": 0.0,
+                "tracks": [{"track_id": "monaco", "status": "dnf_crash", "lap_time_s": None,
+                            "mean_speed_mps": 5.0, "off_track_steps": 30}],
+            }
             with patch.object(runner, "evaluate_candidate", return_value=report):
                 state = runner.run(args)
                 self.assertTrue(state["early_stopped"])

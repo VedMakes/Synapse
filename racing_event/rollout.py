@@ -352,6 +352,8 @@ class RolloutCollector:
                     "heading": float(state["heading"][lane]),
                     "progress_fraction": float(info["distance_since_spawn"][lane] / track.length),
                     "zones_reached": int(info["sector_coverage_count"][lane]),
+                    "speed_mps": float(state["speed"][lane]),
+                    "episode_time_s": float(info["step"][lane]) * self.env.config.dt,
                     "off_track": bool(info["off_track"][lane]),
                     "end_reason": reason,
                 }

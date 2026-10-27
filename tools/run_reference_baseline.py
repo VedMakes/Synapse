@@ -212,6 +212,34 @@ def _training_position_payload(cars: list[dict[str, Any]], update: int) -> dict[
     return {"kind": "training_position", "update": update, "cars": cars}
 
 
+def _public_validation_payload(selection: dict[str, Any] | None, dt: float) -> dict[str, Any] | None:
+    """Summarize only the latest and retained-best public-track diagnostics."""
+    if selection is None or not selection["history"]:
+        return None
+
+    def summarize(report: dict[str, Any]) -> dict[str, Any]:
+        tracks = [{
+            "track_id": row["track_id"], "status": row["status"],
+            "lap_time_s": row["lap_time_s"], "mean_speed_mps": row["mean_speed_mps"],
+            "off_track_seconds": row["off_track_steps"] * dt,
+        } for row in report["tracks"]]
+        return {
+            "finish_count": report["finish_count"], "track_count": len(tracks),
+            "off_track_seconds": report["off_track_seconds"],
+            "finished_lap_seconds": report["finished_lap_seconds"],
+            "tracks": tracks,
+        }
+
+    latest = selection["history"][-1]
+    best = next((row for row in selection["history"] if row["generation"] == selection["best_generation"]), None)
+    return {
+        "latest_update": latest["update"], "latest_improved": latest["selected"],
+        "latest": summarize(latest["report"]),
+        "best_update": None if best is None else best["update"],
+        "best": summarize(selection["best_report"]),
+    }
+
+
 def run(args: argparse.Namespace) -> dict[str, Any]:
     if args.steps <= 0 or args.n_envs <= 0 or args.rollout_length <= 0:
         raise ValueError("--steps, --n-envs, and --rollout-length must be positive")
@@ -523,6 +551,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         print("SYNAPSE_METRIC " + json.dumps({
             "kind": "training_progress",
             "training_position": _training_position_payload(rollout.training_position or [], state["updates"]),
+            "public_validation": _public_validation_payload(selection, config.dt),
             "early_stopping": {
                 "enabled": early_stopping,
                 "patience": early_stop_patience,
