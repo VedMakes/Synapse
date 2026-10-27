@@ -390,15 +390,21 @@ In the training panel:
 5. **Steps:** enter `256` for the first smoke run.
 6. **Budget steps:** the default ceiling is `100000`; the first run can stop
    much earlier when early stopping detects that validation has plateaued.
-7. **Parallel environments:** enter `1` or `2` while learning the workflow.
-8. **Rollout length:** enter `32` for a small test.
-9. **Seed:** enter `17`. Use a different seed only for a deliberately new
+7. **Early stopping:** enabled by default. It checks public-map driving results
+   every few PPO updates and stops after five checks without a new best result.
+   Raise or lower the patience field to change that window, or disable early
+   stopping to use the requested steps. The trainer shows the current validation
+   streak beside the live car position. Validation checks use a separate
+   bounded diagnostic budget and do not spend training transitions.
+8. **Parallel environments:** enter `1` or `2` while learning the workflow.
+9. **Rollout length:** enter `32` for a small test.
+10. **Seed:** enter `17`. Use a different seed only for a deliberately new
    experiment.
-10. **Reward function:** tune the ten weights; the reference baseline applies
+11. **Reward function:** tune the ten weights; the reference baseline applies
     them directly to each training transition.
-11. **Ray sensors:** leave the default nine angles in place until the baseline
+12. **Ray sensors:** leave the default nine angles in place until the baseline
     works.
-12. Press **Start / resume participant training** once.
+13. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
 and `run_identity.json` beside the run. The reward file records the selected

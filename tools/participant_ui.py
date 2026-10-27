@@ -485,7 +485,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         raise ValueError(f"output_dir must be a directory path: {output_dir}")
     if output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
-    steps = positive_int("steps", 256)
+    steps = positive_int("steps", 100000)
     budget_steps = positive_int("budget_steps", 100000)
     if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
         raise ValueError(
@@ -494,6 +494,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     n_envs = positive_int("n_envs", 2)
     rollout_length = positive_int("rollout_length", 32)
     seed = positive_int("seed", 17)
+    early_stop_patience = positive_int("early_stop_patience", 5) if form.get("early_stopping", "enabled") == "enabled" else 0
     model_value = form.get("model")
     model = None if model_value is None or (isinstance(model_value, str) and not model_value.strip()) else _workspace_path(text("model", ""), label="model")
     if model is not None and not model.is_file():
@@ -518,6 +519,9 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         "--n-envs", str(n_envs),
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
+        "--early-stop-patience", str(early_stop_patience),
+        "--eval-every", "0",
+        "--eval-max-steps", "500",
     ]
     if effective_reward is not None:
         command[2:2] = ["--reward", str(effective_reward)]
@@ -1272,11 +1276,14 @@ PAGE = r'''<!doctype html>
               </svg><div id="ray-summary" class="ray-summary" aria-label="Ordered ray summary"></div><p id="ray-validation" class="validation" role="status" aria-live="polite">Layout ready. Edit the fields to preview the next pass.</p></div></div>
              <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
               <label>Output directory<input id="output-dir" value="artifacts/runs/run-001" spellcheck="false"></label>
-           <label>Steps this run<input id="steps" type="number" min="1" step="1" value="256"></label>
+             <label>Steps this run<input id="steps" type="number" min="1" step="1" value="100000"></label>
              <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="100000" step="1" value="100000"></label>
              <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
              <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
+             <label>Early stopping<select id="early-stopping"><option value="enabled" selected>Enabled · public-map validation</option><option value="disabled">Disabled</option></select></label>
+             <label>Validation checks without improvement<input id="early-stop-patience" type="number" min="1" max="20" step="1" value="5" aria-describedby="early-stop-hint run-error"></label>
+             <p id="early-stop-hint" class="hint full">Training stops after this many validation checks in a row fail to improve the best public-map result. Validation work is capped separately from training transitions.</p>
           </div>
            <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="stop" disabled>Stop now (force after 2s)</button><button id="setup">Set up / repair Python</button></div>
           <p id="run-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
@@ -1354,6 +1361,7 @@ PAGE = r'''<!doctype html>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 100,000 transitions</span><span id="remaining-label">100,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
+          <p id="early-stop-status" class="hint" role="status" aria-live="polite">Early stopping enabled · waiting for public-map validation.</p>
           <div class="training-map">
             <div class="training-map-head"><strong>Latest training rollout · live car position</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
             <svg id="training-track" viewBox="0 0 720 420" role="img" aria-labelledby="training-track-title training-track-description">
@@ -1378,7 +1386,7 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
         const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "checkpoint", "time", "steer_smoothness"];
-        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "steps", "budget-steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
         const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
@@ -1387,7 +1395,7 @@ PAGE = r'''<!doctype html>
       const trainingMaps = new Map();
       let latestTrainingPosition = null;
         let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
-       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, steps: $("steps").value, budget_steps: $("budget-steps").value, n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
        function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
        function rewardWarnings() {
@@ -1532,6 +1540,10 @@ PAGE = r'''<!doctype html>
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-zones").textContent = format(metrics.zones, " / 16"); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
       renderTrainingPosition(metrics.training_position);
+      const earlyStop = metrics.early_stopping;
+      $("early-stop-status").textContent = earlyStop && earlyStop.enabled
+        ? (earlyStop.stopped ? `Early stopping triggered · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.` : `Early stopping active · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.`)
+        : "Early stopping disabled.";
        $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
         if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
          $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
@@ -1550,6 +1562,10 @@ PAGE = r'''<!doctype html>
        for (const name of signalNames) {
          const raw = $("reward-" + name).value, value = Number(raw);
          if (!raw.trim() || !Number.isFinite(value) || value < -100 || value > 100) return `${name} weight must be finite and within [-100, 100].`;
+       }
+       if ($("early-stopping").value === "enabled") {
+         const patience = Number($("early-stop-patience").value);
+         if (!/^\d+$/.test($("early-stop-patience").value.trim()) || !Number.isInteger(patience) || patience < 1 || patience > 20) return "Early-stop patience must be an integer from 1 to 20.";
        }
        return rayPreview().error;
      }

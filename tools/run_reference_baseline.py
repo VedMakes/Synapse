@@ -68,7 +68,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=Path("participant_run"))
     parser.add_argument("--budget-steps", type=int, default=100_000)
-    parser.add_argument("--steps", type=int, default=2_048, help="maximum training transitions in this invocation")
+    parser.add_argument("--steps", type=int, default=100_000, help="maximum training transitions in this invocation")
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--rollout-length", type=int, default=64)
     parser.add_argument("--seed", type=int, default=17)
@@ -80,8 +80,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--max-updates", type=int, help="updates per invocation; fine-tuning default 4, maximum 32")
     parser.add_argument("--learning-rate", type=float, default=1.0e-4)
     parser.add_argument("--update-epochs", type=int, default=4)
-    parser.add_argument("--eval-every", type=int, default=1, help="fine-tuning: evaluate update zero and every N global updates (restart-independent)")
-    parser.add_argument("--eval-max-steps", type=int, default=2400, help="fine-tuning: per-public-track evaluation cap, at most 20000")
+    parser.add_argument("--early-stop-patience", type=int, default=None, help="stop after N public-map evaluations without improving; 0 disables")
+    parser.add_argument("--eval-every", type=int, default=None, help="evaluate every N global updates; 0 selects an interval under the diagnostic cap")
+    parser.add_argument("--eval-max-steps", type=int, default=None, help="per-public-track validation cap; defaults to 500 for early stopping, 2400 for fine-tuning")
     parser.add_argument("--eval-track-dir", type=Path, default=DEFAULT_TRACK_DIR, help="public development tracks only (no private evaluator)")
     return parser.parse_args(argv)
 
@@ -201,6 +202,8 @@ def _write_report(output: Path, state: dict[str, Any]) -> None:
     )
     if state["fine_tune"]:
         text += f"- Selection: {SELECTION_RULE}\n- Best artifact: `best/`; report: `selection_report.json`\n"
+    if state.get("early_stopped"):
+        text += f"- Early stopping: stopped after {state.get('early_stopping_stale_evaluations')} consecutive validation checks without improvement.\n"
     checkpoint.atomic_bytes(output / "training_report.md", text.encode())
 
 
@@ -244,9 +247,19 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         candidate = output / "model_source.py"
         if candidate.is_file():
             model_path = candidate
+    saved_early_stopping = None if saved_identity is None else saved_identity.get("early_stopping")
+    early_stop_patience = getattr(args, "early_stop_patience", None)
+    if early_stop_patience is None and saved_early_stopping is not None:
+        early_stop_patience = saved_early_stopping["patience"]
+    if early_stop_patience is not None and (
+        isinstance(early_stop_patience, bool) or not isinstance(early_stop_patience, int) or early_stop_patience < 0
+    ):
+        raise ValueError("--early-stop-patience must be a non-negative integer")
+    early_stopping = early_stop_patience is not None and early_stop_patience > 0
     fine_tune = bool(getattr(args, "fine_tune", False) or requested_warm_start)
-    if saved_identity is not None:
-        fine_tune = fine_tune or saved_identity["selection"] is not None
+    if saved_identity is not None and saved_identity["selection"] is not None and saved_early_stopping is None:
+        fine_tune = True  # Preserve legacy fine-tune checkpoint behavior.
+    selection_enabled = fine_tune or early_stopping
     max_updates = getattr(args, "max_updates", None)
     if max_updates is None:
         max_updates = 4 if fine_tune else args.steps
@@ -270,14 +283,16 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     )
     evaluation_tracks: tuple[Any, ...] = ()
     selection_settings = None
-    if fine_tune:
-        eval_every = getattr(args, "eval_every", 1)
-        eval_max_steps = getattr(args, "eval_max_steps", 2400)
+    if selection_enabled:
+        requested_eval_every = getattr(args, "eval_every", None)
+        eval_max_steps = getattr(args, "eval_max_steps", None)
+        if eval_max_steps is None:
+            eval_max_steps = 500 if early_stopping else 2400
         evaluation_tracks = tuple(TrackGeometry.from_file(path) for path in _resolve_tracks(
             getattr(args, "eval_track_dir", DEFAULT_TRACK_DIR), None,
         ))
-        if not 1 <= eval_every <= 32 or not 1 <= eval_max_steps <= 20_000 or not 1 <= len(evaluation_tracks) <= 16 or len(evaluation_tracks) * eval_max_steps > 100_000:
-            raise ValueError("evaluation cap: every 1..32 updates, 1..20000 steps/track, <=16 tracks and <=100000 total steps/evaluation")
+        if not isinstance(eval_max_steps, int) or isinstance(eval_max_steps, bool) or not 1 <= eval_max_steps <= 20_000 or not 1 <= len(evaluation_tracks) <= 16 or len(evaluation_tracks) * eval_max_steps > 100_000:
+            raise ValueError("evaluation cap: 1..20000 steps/track, <=16 tracks and <=100000 total steps/evaluation")
         public = {track.content_hash for track in (
             TrackGeometry.from_file(path) for path in _resolve_tracks(DEFAULT_TRACK_DIR, None)
         )}
@@ -287,6 +302,20 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             raise ValueError("selection tracks must be unique")
         rollout_size = args.n_envs * args.rollout_length
         possible_updates = min(max_updates, (args.steps + rollout_size - 1) // rollout_size)
+        auto_eval_every = requested_eval_every in (None, 0)
+        if auto_eval_every and early_stopping:
+            updates_per_budget = (args.budget_steps + rollout_size - 1) // rollout_size
+            total_eval_capacity = 100_000 // (len(evaluation_tracks) * eval_max_steps)
+            # Keep the interval stable across exact resumes and reserve one
+            # evaluation slot for the initial baseline on a fresh run.
+            periodic_capacity = total_eval_capacity - 1
+            if periodic_capacity < 1:
+                raise ValueError("early-stopping validation cap leaves no room for a post-training evaluation; lower eval-max-steps")
+            eval_every = max(1, (updates_per_budget + periodic_capacity - 1) // periodic_capacity)
+        else:
+            eval_every = 1 if auto_eval_every else requested_eval_every
+        if isinstance(eval_every, bool) or not isinstance(eval_every, int) or eval_every <= 0 or (not auto_eval_every and eval_every > 32):
+            raise ValueError("--eval-every must be 1..32 (or 0 for an automatic early-stopping interval)")
         evaluations_bound = int(current is None) + (possible_updates + eval_every - 1) // eval_every
         if evaluations_bound * len(evaluation_tracks) * eval_max_steps > 100_000:
             raise ValueError("evaluation cap: at most 100000 diagnostic steps per invocation; reduce eval-max-steps or increase eval-every")
@@ -294,6 +323,10 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "rule": SELECTION_RULE, "every": eval_every, "max_steps": eval_max_steps,
             "tracks": [[track.track_id, track.content_hash] for track in evaluation_tracks],
         }
+    early_stopping_settings = (
+        {"patience": early_stop_patience, "monitor": SELECTION_RULE}
+        if early_stopping else None
+    )
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -349,6 +382,8 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         "preprocessing": "running_reference_normalizer" if origin is None else origin["preprocessing"],
         "selection": selection_settings,
     }
+    if early_stopping_settings is not None:
+        identity["early_stopping"] = early_stopping_settings
     if hparams_path is not None:
         identity["hparams"] = hp.to_dict()
     if model_identity is not None:
@@ -410,7 +445,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         if bool(values) != bool(optimizer_steps) or any(float(item["step"]) != optimizer_steps for item in values.values()):
             raise ValueError("optimizer step count does not match completed updates")
         checkpoint.restore_collector(collector, checkpoint.read_json(directory / "collector.json"))
-        if fine_tune != (selection is not None):
+        if selection_enabled != (selection is not None):
             raise ValueError("checkpoint selection state mismatch")
         checkpoint.repair_mirrors(output, directory, selection)
         selection = _selection_with_best_hash(output, selection)
@@ -425,6 +460,8 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "observation_size": env.observation_size, "hidden_sizes": [64, 64],
             "n_envs": args.n_envs, "rollout_length": args.rollout_length, "seed": args.seed,
             "fine_tune": fine_tune, "preprocessing": identity["preprocessing"],
+            "early_stopping_stale_evaluations": 0,
+            "early_stopped": False,
             "resume_note": "exact completed-rollout CPU state via atomic generation pointer; external budget never rolled back",
             "warm_start": origin,
         }
@@ -446,6 +483,13 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         if evaluate:
             candidate = evaluate_candidate(policy, normalizer, evaluation_tracks, config, selection_settings["max_steps"])
             selection = select_candidate(selection, candidate, generation, state["updates"])
+            if early_stopping:
+                improved = selection["best_generation"] == generation
+                state["early_stopping_stale_evaluations"] = (
+                    0 if improved else int(state.get("early_stopping_stale_evaluations", 0)) + 1
+                )
+                if state["early_stopping_stale_evaluations"] >= early_stop_patience:
+                    state["early_stopped"] = True
         checkpoint.publish(
             output, generation, policy=policy, contract=contract, normalizer=normalizer,
             trainer=trainer, collector=collector, state=state, metrics=metrics,
@@ -455,10 +499,10 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         _write_report(output, state)
 
     if current is None:
-        save(evaluate=fine_tune)
-    target = min(args.steps, status["remaining_steps"])
+        save(evaluate=selection_enabled)
+    target = 0 if state.get("early_stopped", False) else min(args.steps, status["remaining_steps"])
     invocation_updates = 0
-    while target > 0 and invocation_updates < max_updates:
+    while target > 0 and invocation_updates < max_updates and not state.get("early_stopped", False):
         batch_steps = min(args.n_envs * args.rollout_length, target)
         rollout = collector.collect(batch_steps)
         ppo_metrics = trainer.update(rollout.batch)
@@ -476,7 +520,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         })
         invocation_updates += 1
         target -= batch_steps
-        evaluate = fine_tune and state["updates"] % selection_settings["every"] == 0
+        evaluate = selection_enabled and state["updates"] % selection_settings["every"] == 0
         save(evaluate=evaluate)
         row = metrics[-1]
         def display(name: str) -> str:
@@ -491,6 +535,12 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         print("SYNAPSE_METRIC " + json.dumps({
             "kind": "training_progress",
             "training_position": _training_position_payload(env, state["updates"]),
+            "early_stopping": {
+                "enabled": early_stopping,
+                "patience": early_stop_patience,
+                "stale_evaluations": state.get("early_stopping_stale_evaluations", 0),
+                "stopped": bool(state.get("early_stopped", False)),
+            },
         },
             sort_keys=True, separators=(",", ":"), allow_nan=False,
         ), flush=True)

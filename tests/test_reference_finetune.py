@@ -159,6 +159,27 @@ class ReferenceFineTuneTests(unittest.TestCase):
         self.assertEqual(tied["best_generation"], previous["best_generation"])
         self.assertFalse(tied["history"][-1]["selected"])
 
+    def test_early_stopping_tracks_validation_plateau_and_persists_on_resume(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            evaluation = root / "public-evaluation"
+            evaluation.mkdir()
+            (evaluation / OVAL.name).symlink_to(OVAL)
+            args = arguments(
+                root / "early-stop", tracks=None, n_envs=1, rollout_length=2,
+                steps=20, budget_steps=40, early_stop_patience=2,
+                eval_every=1, eval_max_steps=2, eval_track_dir=evaluation,
+            )
+            report = {"finish_count": 0, "off_track_seconds": 1.0, "finished_lap_seconds": 0.0}
+            with patch.object(runner, "evaluate_candidate", return_value=report):
+                state = runner.run(args)
+                self.assertTrue(state["early_stopped"])
+                self.assertEqual(state["early_stopping_stale_evaluations"], 2)
+                self.assertEqual(state["budget_used"], 4)
+                resumed = runner.run(args)
+            self.assertEqual(resumed["budget_used"], 4)
+            self.assertEqual(resumed["updates"], 2)
+
     def test_finetune_work_caps_and_fresh_directory_requirement(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

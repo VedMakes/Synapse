@@ -108,6 +108,16 @@ def _positive(value: str, name: str) -> int:
     return parsed
 
 
+def _nonnegative(value: str, name: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"{name} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError(f"{name} must be a non-negative integer")
+    return parsed
+
+
 def _positive_value(value: object, name: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{name} must be a positive integer")
@@ -129,11 +139,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model", type=Path, default=None, help="optional participant model.py exposing build_actor(obs_size)")
     parser.add_argument("--hparams", type=Path, default=None, help="optional JSON PPO hyperparameter snapshot")
     parser.add_argument("--init-from", type=Path, default=None, help="optional run/artifact to warm-start in a new output directory")
-    parser.add_argument("--steps", type=lambda value: _positive(value, "--steps"), default=256)
+    parser.add_argument("--steps", type=lambda value: _positive(value, "--steps"), default=100000)
     parser.add_argument("--budget-steps", type=lambda value: _positive(value, "--budget-steps"), default=100000)
     parser.add_argument("--n-envs", type=lambda value: _positive(value, "--n-envs"), default=2)
     parser.add_argument("--rollout-length", type=lambda value: _positive(value, "--rollout-length"), default=32)
     parser.add_argument("--seed", type=lambda value: _positive(value, "--seed"), default=17)
+    parser.add_argument("--early-stop-patience", type=lambda value: _nonnegative(value, "--early-stop-patience"), default=5, help="stop after this many evaluation checks without improvement; 0 disables")
+    parser.add_argument("--eval-every", type=lambda value: _nonnegative(value, "--eval-every"), default=0, help="evaluate every N updates; 0 chooses an interval within the diagnostic cap")
+    parser.add_argument("--eval-max-steps", type=lambda value: _positive(value, "--eval-max-steps"), default=500, help="validation transitions per public map")
     return parser.parse_args()
 
 
@@ -164,6 +177,11 @@ def build_training_command(args: argparse.Namespace) -> list[str]:
     n_envs = _positive_value(args.n_envs, "--n-envs")
     rollout_length = _positive_value(args.rollout_length, "--rollout-length")
     seed = _positive_value(args.seed, "--seed")
+    patience_value = getattr(args, "early_stop_patience", 5)
+    every_value = getattr(args, "eval_every", 0)
+    early_stop_patience = _positive_value(patience_value, "--early-stop-patience") if patience_value else 0
+    eval_every = _positive_value(every_value, "--eval-every") if every_value else 0
+    eval_max_steps = _positive_value(getattr(args, "eval_max_steps", 500), "--eval-max-steps")
     command = [
         sys.executable,
         str(trainer),
@@ -175,6 +193,9 @@ def build_training_command(args: argparse.Namespace) -> list[str]:
         "--n-envs", str(n_envs),
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
+        "--early-stop-patience", str(early_stop_patience),
+        "--eval-every", str(eval_every),
+        "--eval-max-steps", str(eval_max_steps),
     ]
     if reward is not None:
         command[2:2] = ["--reward", str(reward)]
