@@ -67,7 +67,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--tracks", type=Path, nargs="+", default=None)
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
     parser.add_argument("--output-dir", type=Path, default=Path("participant_run"))
-    parser.add_argument("--budget-steps", type=int, default=10_000)
+    parser.add_argument("--budget-steps", type=int, default=100_000)
     parser.add_argument("--steps", type=int, default=2_048, help="maximum training transitions in this invocation")
     parser.add_argument("--n-envs", type=int, default=4)
     parser.add_argument("--rollout-length", type=int, default=64)

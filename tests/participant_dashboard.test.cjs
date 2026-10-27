@@ -82,7 +82,7 @@ function assertRaceFrozen(h, expected) { for (const id of raceFields) assert.equ
 
 test("initial budget, explicit renderer/source controls and ordered live ray preview", async () => {
   const h = await dashboard();
-  assert.equal(h.el("remaining-label").textContent, "10,000 remaining");
+  assert.equal(h.el("remaining-label").textContent, "100,000 remaining");
   assert.equal(h.el("start").disabled, false);
   assert.equal(h.el("watch").disabled, false);
   assert.equal(h.el("artifact-label").hidden, true);

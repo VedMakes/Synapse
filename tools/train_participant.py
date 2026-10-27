@@ -1,7 +1,7 @@
 """Launch the canonical SYNAPSE reference PPO training path.
 
 The actor architecture is participant-selectable through ``--model``. The
-training algorithm and nine-signal reward application stay in
+    training algorithm and published-signal reward application stay in
 ``tools/run_reference_baseline.py`` so the dashboard cannot accidentally run a
 trainer that ignores its weights.
 """
@@ -122,7 +122,7 @@ def parse_args() -> argparse.Namespace:
         default=Path("tools/run_reference_baseline.py"),
         help="compatibility alias; training always runs tools/run_reference_baseline.py",
     )
-    parser.add_argument("--reward", type=Path, default=Path("examples/baseline_reward.json"), help="nine-signal reward weights")
+    parser.add_argument("--reward", type=Path, default=Path("examples/baseline_reward.json"), help="participant reward signal weights")
     parser.add_argument("--track-dir", type=Path, default=Path("tracks/train"))
     parser.add_argument("--config", type=Path, default=Path("config/simulation.json"))
     parser.add_argument("--output-dir", type=Path, default=Path("artifacts/runs/run-001"))
@@ -130,7 +130,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hparams", type=Path, default=None, help="optional JSON PPO hyperparameter snapshot")
     parser.add_argument("--init-from", type=Path, default=None, help="optional run/artifact to warm-start in a new output directory")
     parser.add_argument("--steps", type=lambda value: _positive(value, "--steps"), default=256)
-    parser.add_argument("--budget-steps", type=lambda value: _positive(value, "--budget-steps"), default=10000)
+    parser.add_argument("--budget-steps", type=lambda value: _positive(value, "--budget-steps"), default=100000)
     parser.add_argument("--n-envs", type=lambda value: _positive(value, "--n-envs"), default=2)
     parser.add_argument("--rollout-length", type=lambda value: _positive(value, "--rollout-length"), default=32)
     parser.add_argument("--seed", type=lambda value: _positive(value, "--seed"), default=17)

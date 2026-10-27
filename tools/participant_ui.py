@@ -486,7 +486,7 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     if output_dir.parent.exists() and not output_dir.parent.is_dir():
         raise ValueError(f"output_dir parent must be a directory: {output_dir.parent}")
     steps = positive_int("steps", 256)
-    budget_steps = positive_int("budget_steps", 10000)
+    budget_steps = positive_int("budget_steps", 100000)
     if budget_steps > DEFAULT_MAX_STEPS_PER_RETRAIN:
         raise ValueError(
             f"budget_steps cannot exceed the client cap of {DEFAULT_MAX_STEPS_PER_RETRAIN:,} transitions per retrain"
@@ -1273,7 +1273,7 @@ PAGE = r'''<!doctype html>
              <label>Training maps (all public)<input id="track-dir" value="tracks/train" readonly spellcheck="false"></label>
               <label>Output directory<input id="output-dir" value="artifacts/runs/run-001" spellcheck="false"></label>
            <label>Steps this run<input id="steps" type="number" min="1" step="1" value="256"></label>
-             <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="10000" step="1" value="10000"></label>
+             <label>Cumulative budget<input id="budget-steps" type="number" min="1" max="100000" step="1" value="100000"></label>
              <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
              <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
@@ -1302,7 +1302,7 @@ PAGE = r'''<!doctype html>
             <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
             <p id="renderer-status" class="watch-result" role="status" aria-live="polite"></p>
           </div>
-           <div id="client-budget-callout" class="callout">12 new training allocations are available; each allocation allows at most 10,000 transitions. Resuming the same output directory does not use another allocation.</div>
+           <div id="client-budget-callout" class="callout">12 new training allocations are available; each allocation allows at most 100,000 transitions. Resuming the same output directory does not use another allocation.</div>
         </div>
       </aside>
          <section class="panel race-panel">
@@ -1353,7 +1353,7 @@ PAGE = r'''<!doctype html>
          <div class="panel-head"><h2>05 · Training status</h2><div id="state-chip" class="status-chip">idle</div></div>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
-          <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 10,000 transitions</span><span id="remaining-label">10,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
+          <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 100,000 transitions</span><span id="remaining-label">100,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
           <div class="training-map">
             <div class="training-map-head"><strong>Latest training rollout · live car position</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
             <svg id="training-track" viewBox="0 0 720 420" role="img" aria-labelledby="training-track-title training-track-description">
@@ -1545,7 +1545,7 @@ PAGE = r'''<!doctype html>
        for (const id of ["steps", "budget-steps", "n-envs", "rollout-length", "seed"]) {
          const value = Number($(id).value);
           if (!/^\d+$/.test($(id).value.trim()) || !Number.isSafeInteger(value) || value <= 0) return `${id} must be a positive integer.`;
-          if (id === "budget-steps" && value > 10000) return "budget-steps cannot exceed 10,000 transitions per retrain.";
+          if (id === "budget-steps" && value > 100000) return "budget-steps cannot exceed 100,000 transitions per retrain.";
        }
        for (const name of signalNames) {
          const raw = $("reward-" + name).value, value = Number(raw);
