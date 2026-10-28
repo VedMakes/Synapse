@@ -1,8 +1,9 @@
 {
-  "learning_rate": 0.0001,
-  "update_epochs": 4,
+  "learning_rate": 0.0003,
+  "update_epochs": 10,
+  "minibatch_size": 64,
   "clip_range": 0.2,
-  "entropy_coefficient": 0.005,
+  "entropy_coefficient": 0.01,
   "gamma": 0.99,
   "gae_lambda": 0.95,
   "max_grad_norm": 0.5,

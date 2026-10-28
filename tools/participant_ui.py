@@ -543,7 +543,6 @@ def build_training_command(form: dict[str, object]) -> list[str]:
     n_envs = positive_int("n_envs", 2)
     rollout_length = positive_int("rollout_length", 32)
     seed = positive_int("seed", 17)
-    early_stop_patience = positive_int("early_stop_patience", 5) if form.get("early_stopping", "enabled") == "enabled" else 0
     model_value = form.get("model")
     model = None if model_value is None or (isinstance(model_value, str) and not model_value.strip()) else _workspace_path(text("model", ""), label="model")
     if model is not None and not model.is_file():
@@ -576,9 +575,6 @@ def build_training_command(form: dict[str, object]) -> list[str]:
         "--n-envs", str(n_envs),
         "--rollout-length", str(rollout_length),
         "--seed", str(seed),
-        "--early-stop-patience", str(early_stop_patience),
-        "--eval-every", "0",
-        "--eval-max-steps", "500",
     ]
     if effective_reward is not None:
         command[2:2] = ["--reward", str(effective_reward)]
@@ -1048,10 +1044,10 @@ def evaluate_run_both(form: dict[str, object]) -> dict[str, object]:
 
 
 def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
-    """Export the explicitly selected artifact; renderers only read the result."""
+    """Play a retained training replay or export another selected source."""
     source, renderer = form.get("source"), form.get("renderer")
-    if source not in ("reference", "artifact", "onnx"):
-        raise ValueError("source must explicitly be reference, artifact, or onnx")
+    if source not in ("best", "reference", "artifact", "onnx"):
+        raise ValueError("source must explicitly be best, reference, artifact, or onnx")
     if renderer not in ("pygame", "browser"):
         raise ValueError("renderer must explicitly be pygame or browser")
     map_id = form.get("map_id")
@@ -1062,8 +1058,27 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
         raise ValueError("unknown public SYNAPSE map")
     output_dir = _workspace_path(form.get("output_dir", "artifacts/runs/run-001"), label="output_dir")
     config_path = _workspace_path(str(output_dir / "run_config.json"), label="saved run config")
-    if not config_path.is_file():
+    if source != "best" and not config_path.is_file():
         raise ValueError("saved run_config.json is required; choose the run directory matching this artifact's rays/config")
+    if source == "best":
+        replay_path = _workspace_path(str(output_dir / "best_replay.json"), label="best training replay")
+        if not replay_path.is_file():
+            status_path = replay_path.with_name("best_replay_summary.json")
+            if status_path.is_file():
+                try:
+                    status = json.loads(status_path.read_text(encoding="utf-8"))
+                except (OSError, UnicodeError, json.JSONDecodeError):
+                    status = {}
+                if status.get("state") == "error":
+                    raise ValueError(f"background replay capture failed: {status.get('error', 'unknown error')}")
+            raise ValueError("the background evaluator has not produced a best replay yet; wait for its first completed evaluation")
+        replay = load_replay(replay_path)
+        actual_id = replay["track"]["meta"]["id"]
+        selected = next((item for item in public_maps() if item["id"] == actual_id), None)
+        if selected is None:
+            raise ValueError("best replay contains an unknown public map")
+    else:
+        replay_path = None
     artifact_dir = None
     if source in ("artifact", "onnx"):
         artifact_dir = _workspace_path(form.get("artifact_dir"), label="artifact_dir")
@@ -1078,45 +1093,43 @@ def build_watch_replay(form: dict[str, object]) -> dict[str, object]:
             "the bundled reference starter must produce policy.pt, policy.json, and "
             "training_contract.json before its replay can be built"
         )
-    python = _ready_python(require_torch=source == "reference")
-    replay_dir = _workspace_path(str(output_dir / "replays"), label="replay directory")
-    if artifact_dir is not None and (replay_dir == artifact_dir or artifact_dir in replay_dir.parents):
-        raise ValueError("replay directory must stay outside the participant artifact directory")
-    replay_dir.mkdir(parents=True, exist_ok=True)
+    python = _ready_python(require_torch=source == "reference") if source != "best" else None
+    if source != "best":
+        replay_dir = _workspace_path(str(output_dir / "replays"), label="replay directory")
+        replay_dir.mkdir(parents=True, exist_ok=True)
+        if artifact_dir is not None and (replay_dir == artifact_dir or artifact_dir in replay_dir.parents):
+            raise ValueError("replay directory must stay outside the participant artifact directory")
     # Opaque per-build URLs prevent one source/run from replacing another tab's replay.
     replay_id = uuid4().hex
-    replay_path = replay_dir / f"{replay_id}.json"
+    if replay_path is None:
+        replay_path = replay_dir / f"{replay_id}.json"
     html_path = replay_path.with_suffix(".html")
-    try:
-        export_command = [
-            str(python), str(ROOT / "tools" / "export_replay.py"),
-            "--track", selected["path"], "--config", str(config_path),
-            "--participant-id", f"SYNAPSE-{source}-{map_id}", "--output", str(replay_path),
-        ]
-        if source == "onnx":
-            export_command += ["--artifact-dir", str(artifact_dir)]
-        elif artifact_dir is not None:
-            # The generic evaluator validates the original, hashed training contract.
-            export_command += ["--artifact-dir", str(artifact_dir)]
-        else:
-            weights, metadata, contract = reference_files
-            # The exporter supports multi-track training provenance directly;
-            # preserve it and freeze only its in-memory evaluation normalizer.
-            export_command += ["--weights", str(weights), "--metadata", str(metadata), "--contract", str(contract)]
-        subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
-    except subprocess.CalledProcessError as exc:
-        detail = (exc.stderr or exc.stdout or "replay command failed").strip()
-        raise RuntimeError(f"could not build SYNAPSE replay: {detail}") from exc
-    replay = load_replay(replay_path)
+    if source != "best":
+        try:
+            export_command = [
+                str(python), str(ROOT / "tools" / "export_replay.py"),
+                "--track", selected["path"], "--config", str(config_path),
+                "--participant-id", f"SYNAPSE-{source}-{map_id}", "--output", str(replay_path),
+            ]
+            if source == "onnx" or artifact_dir is not None:
+                export_command += ["--artifact-dir", str(artifact_dir)]
+            else:
+                weights, metadata, contract = reference_files
+                export_command += ["--weights", str(weights), "--metadata", str(metadata), "--contract", str(contract)]
+            subprocess.run(export_command, cwd=ROOT, check=True, capture_output=True, text=True, timeout=180)
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "replay command failed").strip()
+            raise RuntimeError(f"could not build SYNAPSE replay: {detail}") from exc
+        replay = load_replay(replay_path)
     build_browser_replay(replay_path, html_path)
     with REPLAY_LOCK:
         REPLAY_OUTPUTS[replay_id] = replay_path
         while len(REPLAY_OUTPUTS) > 32:
             del REPLAY_OUTPUTS[next(iter(REPLAY_OUTPUTS))]
     result = {
-        "map_id": map_id,
+        "map_id": selected["id"] if source == "best" else map_id,
         "source": source,
-        "source_label": "Latest saved reference artifact" if source == "reference" else ("Imported ONNX artifact" if source == "onnx" else "Safe NumPy participant artifact"),
+        "source_label": "Best deterministic training replay" if source == "best" else ("Latest saved reference artifact" if source == "reference" else ("Imported ONNX artifact" if source == "onnx" else "Safe NumPy participant artifact")),
         "display_name": selected["display_name"],
         "status": replay["result"]["status"],
         "lap_time_s": replay["result"]["lap_time_s"],
@@ -1220,9 +1233,6 @@ PAGE = r'''<!doctype html>
     #training-car { fill: var(--pink); stroke: white; stroke-width: 2; filter: drop-shadow(0 0 7px #ff3fa4); }
     .training-map-status { margin: 6px 0 0; color: var(--muted); font: 11px ui-monospace, monospace; }
     .training-map-status[data-event="true"] { color: #ffcb73; font-weight: 800; text-shadow: 0 0 10px #ffad4238; }
-    .validation-panel { margin-top: 14px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; background: #08121e; }
-    .validation-panel strong { color: var(--cyan); font: 700 11px ui-monospace, monospace; text-transform: uppercase; }
-    .validation-panel .log { min-height: 3.5em; max-height: 10em; margin-top: 8px; }
     .log { min-height: 166px; max-height: 245px; margin-top: 17px; padding: 12px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #081019; color: #b9d2dc; font: 11px/1.6 ui-monospace, monospace; white-space: pre-wrap; }
     .contract { display: grid; gap: 12px; }
      .contract-item { padding: 12px; border-left: 2px solid var(--pink); background: #0b1521; }
@@ -1320,7 +1330,7 @@ PAGE = r'''<!doctype html>
               <label><span class="signal-label">Crash <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>crash</code> One-shot impulse when barrier contact ends the run.</span><input id="reward-crash" type="number" step="0.01" value="-10" aria-label="Crash weight"></label>
               <label><span class="signal-label">Stuck <span class="signal-tag">EVENT -</span></span><span class="signal-help"><code>stuck</code> One-shot impulse when the vehicle stalls.</span><input id="reward-stuck" type="number" step="0.01" value="-8" aria-label="Stuck weight"></label>
               <label><span class="signal-label">Lap complete <span class="signal-tag">EVENT +</span></span><span class="signal-help"><code>lap_complete</code> One-shot impulse on a completed lap.</span><input id="reward-lap_complete" type="number" step="0.01" value="20" aria-label="Lap complete weight"></label>
-              <label><span class="signal-label">Checkpoint <span class="signal-tag">ZONE +</span></span><span class="signal-help"><code>checkpoint</code> Optional one-time bonus on first entry into each of 16 progress zones per episode. Zero by default.</span><input id="reward-checkpoint" type="number" step="0.01" value="0" aria-label="Checkpoint weight"></label>
+              <label><span class="signal-label">Checkpoint <span class="signal-tag">ZONE +</span></span><span class="signal-help"><code>checkpoint</code> One-time progress bonus on first entry into each of 16 zones per episode.</span><input id="reward-checkpoint" type="number" step="0.01" value="1" aria-label="Checkpoint weight"></label>
               <label><span class="signal-label">Time <span class="signal-tag">DENSE -</span></span><span class="signal-help"><code>time</code> Charges every transition to discourage stalling.</span><input id="reward-time" type="number" step="0.01" value="-0.15" aria-label="Time weight"></label>
               <label><span class="signal-label">Steer smoothness <span class="signal-tag">ROUGH -</span></span><span class="signal-help"><code>steer_smoothness</code> Measures abrupt steering changes; larger means rougher.</span><input id="reward-steer_smoothness" type="number" step="0.01" value="-0.05" aria-label="Steer smoothness weight"></label>
             </div></div>
@@ -1364,9 +1374,6 @@ PAGE = r'''<!doctype html>
              <label>Parallel envs<input id="n-envs" type="number" min="1" step="1" value="2"></label>
              <label>Rollout length<input id="rollout-length" type="number" min="1" step="1" value="32"></label>
             <label>Seed<input id="seed" type="number" min="1" step="1" value="17"></label>
-             <label>Early stopping<select id="early-stopping"><option value="enabled" selected>Enabled · public-map validation</option><option value="disabled">Disabled</option></select></label>
-             <label>Validation checks without improvement<input id="early-stop-patience" type="number" min="1" max="20" step="1" value="5" aria-describedby="early-stop-hint run-error"></label>
-             <p id="early-stop-hint" class="hint full">Training stops after this many validation checks in a row fail to improve the best public-map result. Validation work is capped separately from training transitions.</p>
           </div>
            <div class="actions"><button id="start" class="primary" aria-describedby="run-error">Start / resume participant training</button><button id="pause" disabled>Pause</button><button id="continue" disabled>Continue</button><button id="stop" disabled>Stop now (force after 2s)</button><button id="extend" disabled>Spend 1 iteration · add 1,000,000 steps to this model</button><button id="setup">Set up / repair Python</button></div>
           <p class="hint">Pause freezes the trainer process and Continue resumes it with its live optimizer and environment state intact. The step target stays locked after training begins. When a run reaches its cap, the explicit extension action spends one of the 12 iterations to add 1,000,000 transitions to this same checkpoint.</p>
@@ -1383,11 +1390,11 @@ PAGE = r'''<!doctype html>
           <div class="contract-item"><strong>UI sensor layout</strong><span>Ray count and angles are part of the observation/config identity; changing them requires a new compatible run.</span></div>
           <div class="contract-item"><strong>SYNAPSE public maps: 2</strong><span>Monaco and Spa development layouts. Final event maps are not here.</span></div>
           <div class="watch">
-            <label for="watch-source">Replay source</label><select id="watch-source"><option value="reference">Training run · latest saved actor</option><option value="artifact">Participant · safe NumPy artifact</option><option value="onnx">Imported ONNX artifact</option></select>
+            <label for="watch-source">Replay source</label><select id="watch-source"><option value="best">Training run · best captured replay</option><option value="reference">Training run · latest saved actor</option><option value="artifact">Participant · safe NumPy artifact</option><option value="onnx">Imported ONNX artifact</option></select>
              <label id="artifact-label" for="artifact-dir" hidden>Workspace-local artifact directory<input id="artifact-dir" value="artifacts/runs/run-001/artifact" spellcheck="false" aria-describedby="watch-hint watch-error"></label>
-             <label for="watch-map">Watch artifact for map (replay only):</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
+            <label for="watch-map">Replay map (used for fresh previews):</label><select id="watch-map"><option value="">Loading SYNAPSE maps…</option></select>
             <label for="watch-renderer">Read-only renderer</label><select id="watch-renderer"><option value="pygame">Pygame · local display / headless check</option><option value="browser">Browser · explicit headless / remote fallback</option></select>
-            <p id="watch-hint" class="hint">Training runs include both the bundled actor and custom model.py architectures. Uses the selected run's saved run_config.json, including ordered rays; the latest saved actor is used. Pygame opens on the server machine; headless mode only checks one frame. Browser and JSON download links are built for either choice.</p>
+            <p id="watch-hint" class="hint">The trainer evaluates policy snapshots in the background and keeps only the best deterministic replay as <code>best_replay.json</code> in the run folder. This works with bundled and custom model.py architectures and while training continues.</p>
             <button id="watch" disabled aria-describedby="watch-hint watch-error">Build / watch replay</button>
             <p id="watch-error" class="validation" data-kind="error" role="alert" tabindex="-1"></p>
             <div id="watch-result" class="watch-result" role="status" aria-live="polite">Select the artifact source and renderer, then build a deterministic replay.</div>
@@ -1445,7 +1452,6 @@ PAGE = r'''<!doctype html>
         <div class="section">
           <div class="status-main"><div class="status-label"><span id="state-dot" class="dot" data-state="idle"></span><span id="state-label">Ready to train</span></div><span id="runtime" class="hint" style="margin:0">No process running</span></div>
           <div class="progress-wrap"><div class="progress-meta"><span id="budget-label">0 / 1,000,000 transitions</span><span id="remaining-label">1,000,000 remaining</span></div><div class="progress"><span id="progress-fill"></span></div></div>
-          <p id="early-stop-status" class="hint" role="status" aria-live="polite">Early stopping enabled · waiting for public-map validation.</p>
           <div class="training-map">
             <div class="training-map-head"><strong>Latest driven position · training car</strong><select id="training-lane" aria-label="Select training environment lane"><option value="">Waiting for trainer</option></select></div>
             <svg id="training-track" viewBox="0 0 720 420" role="img" aria-labelledby="training-track-title training-track-description">
@@ -1456,7 +1462,6 @@ PAGE = r'''<!doctype html>
             </svg>
             <p id="training-map-status" class="training-map-status" role="status" aria-live="polite">The map updates after each PPO rollout and holds the final driven position if an episode reset follows.</p>
           </div>
-          <div class="validation-panel"><strong>Public-map validation · fixed start, deterministic driving</strong><div id="validation-summary" class="log" role="status" aria-live="polite">Waiting for the first public-map validation check.</div></div>
           <div class="metrics"><div class="metric"><small>Current update</small><strong id="metric-update">—</strong></div><div class="metric"><small>Mean return</small><strong id="metric-return">—</strong></div><div class="metric"><small>Lap completion</small><strong id="metric-lap">—</strong></div><div class="metric"><small>Mean zones reached</small><strong id="metric-zones">—</strong></div><div class="metric"><small>Mean speed</small><strong id="metric-speed">—</strong></div><div class="metric"><small>Crash rate</small><strong id="metric-crash">—</strong></div><div class="metric"><small>Off-track rate</small><strong id="metric-offtrack">—</strong></div></div>
              <div id="log" class="log">Waiting for a local trainer process…</div>
          </div>
@@ -1471,7 +1476,7 @@ PAGE = r'''<!doctype html>
   <script>
      const $ = id => document.getElementById(id);
         const signalNames = ["progress", "speed", "curvature_matched_speed", "off_track", "crash", "stuck", "lap_complete", "checkpoint", "time", "steer_smoothness"];
-        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "processor", "steps", "n-envs", "rollout-length", "seed", "early-stopping", "early-stop-patience", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
+        const fields = ["trainer", "model", "hparams", "track-dir", "output-dir", "processor", "steps", "n-envs", "rollout-length", "seed", "ray-count", "ray-angles", ...signalNames.map(name => `reward-${name}`)];
         const packageFields = ["package-source", "package-config", "package-output", "package-participant"];
         const raceFields = ["participant-a", "participant-b", "artifact-a", "artifact-b", "race-track", "race-config", "race-output", "race-port", "renderer-port", "race-budget-ms", "race-max-steps", "race-late-policy", "race-isolate"];
      const defaultRayAngles = [0, -15, 15, -30, 30, -60, 60, -90, 90];
@@ -1481,7 +1486,7 @@ PAGE = r'''<!doctype html>
       let latestTrainingPosition = null;
       let trainingEventFlash = "", trainingEventFlashUntil = 0;
         let pending = null, latestStatus = {}, latestRace = {}, actionVersion = 0, lastWatch = null;
-       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, processor: $("processor").value || "cpu", steps: $("steps").value, budget_steps: latestStatus.metrics && latestStatus.metrics.budget_steps || "1000000", n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, early_stopping: $("early-stopping").value, early_stop_patience: $("early-stop-patience").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
+       function formData() { return { trainer: $("trainer").value, model: $("model").value, hparams: $("hparams").value, track_dir: $("track-dir").value, output_dir: $("output-dir").value, processor: $("processor").value || "cpu", steps: $("steps").value, budget_steps: latestStatus.metrics && latestStatus.metrics.budget_steps || "1000000", n_envs: $("n-envs").value, rollout_length: $("rollout-length").value, seed: $("seed").value, ray_count: $("ray-count").value, ray_angles_deg: $("ray-angles").value, reward_weights: Object.fromEntries(signalNames.map(name => [name, $("reward-" + name).value])) }; }
        function raceFormData() { return { participant_a: $("participant-a").value, participant_b: $("participant-b").value, artifact_a: $("artifact-a").value, artifact_b: $("artifact-b").value, race_track: $("race-track").value, race_config: $("race-config").value, race_output: $("race-output").value, race_port: $("race-port").value, renderer_port: $("renderer-port").value, race_budget_ms: $("race-budget-ms").value, race_max_steps: $("race-max-steps").value, race_late_policy: $("race-late-policy").value, race_isolate: $("race-isolate").checked }; }
      function formatAngle(value) { const rounded = Number(Number(value).toFixed(2)); return `${rounded > 0 ? "+" : ""}${rounded}°`; }
        function rewardWarnings() {
@@ -1605,21 +1610,6 @@ PAGE = r'''<!doctype html>
           $("training-map-status").dataset.event = "false";
         }
       }
-      function renderPublicValidation(validation) {
-        const target = $("validation-summary");
-        if (!validation || !validation.latest || !validation.best) {
-          target.textContent = "Waiting for the first public-map validation check.";
-          return;
-        }
-        const aggregate = value => `${value.finish_count}/${value.track_count} laps finished · ${Number(value.off_track_seconds).toFixed(1)} s off track`;
-        const lap = row => row.lap_time_s == null ? "no finish" : `${Number(row.lap_time_s).toFixed(2)} s lap`;
-        const speed = row => `${Number(row.mean_speed_mps).toFixed(1)} m/s avg`;
-        const perTrack = validation.latest.tracks.map(row => {
-          const best = validation.best.tracks.find(item => item.track_id === row.track_id);
-          return `${row.track_id}: latest ${row.status} · ${lap(row)} · ${speed(row)} · ${Number(row.off_track_seconds).toFixed(1)} s off track; best ${best ? `${best.status} · ${lap(best)} · ${speed(best)}` : "—"}`;
-        });
-        target.textContent = `Latest check · update ${validation.latest_update}${validation.latest_improved ? " · new best" : ""}: ${aggregate(validation.latest)}\nBest checkpoint · update ${validation.best_update ?? "—"}: ${aggregate(validation.best)}\n${perTrack.join("\n")}`;
-      }
        function renderRace(data) {
         latestRace = data || {};
         const telemetry = latestRace.telemetry || {}, entrants = telemetry.entrants || [];
@@ -1655,11 +1645,6 @@ PAGE = r'''<!doctype html>
       $("metric-update").textContent = metrics.update ?? "—"; $("metric-return").textContent = format(metrics.return); $("metric-lap").textContent = format(metrics.lap); $("metric-zones").textContent = format(metrics.zones, " / 16"); $("metric-speed").textContent = format(metrics.speed, " m/s");
       $("metric-crash").textContent = format(metrics.crash); $("metric-offtrack").textContent = format(metrics.off_track);
       renderTrainingPosition(metrics.training_position);
-      renderPublicValidation(metrics.public_validation);
-      const earlyStop = metrics.early_stopping;
-      $("early-stop-status").textContent = earlyStop && earlyStop.enabled
-        ? (earlyStop.stopped ? `Early stopping triggered · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.` : `Early stopping active · ${earlyStop.stale_evaluations}/${earlyStop.patience} validation checks without improvement.`)
-        : "Early stopping disabled.";
        $("log").textContent = (data.lines || []).join("\n") || "Waiting for a local trainer process…"; $("log").scrollTop = $("log").scrollHeight;
         if (lastWatch && lastWatch.renderer === "pygame" && data.renderer && lastWatch.renderer_state !== "unavailable") {
          $("renderer-status").textContent = `${lastWatch.headless ? "Headless Pygame · one-frame check only" : "Local Pygame"}: ${data.renderer.state}${data.renderer.error ? ` · ${data.renderer.error}` : ""}`;
@@ -1679,10 +1664,6 @@ PAGE = r'''<!doctype html>
          const raw = $("reward-" + name).value, value = Number(raw);
          if (!raw.trim() || !Number.isFinite(value) || value < -100 || value > 100) return `${name} weight must be finite and within [-100, 100].`;
        }
-       if ($("early-stopping").value === "enabled") {
-         const patience = Number($("early-stop-patience").value);
-         if (!/^\d+$/.test($("early-stop-patience").value.trim()) || !Number.isInteger(patience) || patience < 1 || patience > 20) return "Early-stop patience must be an integer from 1 to 20.";
-       }
        return rayPreview().error;
      }
        function syncControls() {
@@ -1701,11 +1682,12 @@ PAGE = r'''<!doctype html>
        $("pause").disabled = Boolean(pending) || !active || latestStatus.state === "paused" || latestStatus.state === "stopping";
        $("continue").disabled = Boolean(pending) || !active || latestStatus.state !== "paused";
        $("extend").disabled = Boolean(pending) || (!latestStatus.paused && latestStatus.state !== "completed") || Number((latestStatus.metrics || {}).budget_used || 0) <= 0 || Number((latestStatus.client_budget || {}).retraining_remaining || 0) <= 0;
-       const watchBusy = busy || Boolean(latestStatus.renderer && latestStatus.renderer.running);
+       const watchBest = $("watch-source").value === "best";
+       const watchBusy = Boolean(pending) || Boolean(latestStatus.action_busy) || raceActive || Boolean(latestStatus.renderer && latestStatus.renderer.running) || (active && !watchBest);
        ["watch-source", "watch-map", "watch-renderer"].forEach(id => { $(id).disabled = watchBusy; });
-        $("artifact-label").hidden = $("watch-source").value === "reference";
+        $("artifact-label").hidden = !["artifact", "onnx"].includes($("watch-source").value);
         $("artifact-dir").disabled = watchBusy || $("artifact-label").hidden;
-         $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || ($("watch-source").value !== "reference" && !$("artifact-dir").value.trim());
+         $("watch").disabled = watchBusy || !$("watch-map").value || !$("output-dir").value.trim() || (["artifact", "onnx"].includes($("watch-source").value) && !$("artifact-dir").value.trim());
          $("race-start").disabled = raceBusy || Boolean(raceValidation());
          $("race-stop").disabled = Boolean(pending) || !raceActive || latestRace.state === "stopping";
          $("package").disabled = busy || raceActive || active || Boolean(packageValidation());
@@ -1927,7 +1909,7 @@ class Handler(BaseHTTPRequestHandler):
             if not acquired:
                 raise RuntimeError("a dashboard action is already in progress")
             if path == "/api/watch":
-                if PROCESS.snapshot()["running"]:
+                if PROCESS.snapshot()["running"] and form.get("source") != "best":
                     raise RuntimeError("stop training before building a replay")
                 if RACE_PROCESS.snapshot()["running"]:
                     raise RuntimeError("stop the live heat before building a replay")

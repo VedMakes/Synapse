@@ -37,9 +37,10 @@ class PPOHyperparameters:
     gamma: float = 0.99
     gae_lambda: float = 0.95
     clip_range: float = 0.2
-    update_epochs: int = 4
-    learning_rate: float = 1.0e-4
-    entropy_coefficient: float = 0.005
+    update_epochs: int = 10
+    minibatch_size: int = 64
+    learning_rate: float = 3.0e-4
+    entropy_coefficient: float = 0.01
     value_loss_coefficient: float = 0.5
     hidden_sizes: tuple[int, ...] = (64, 64)
     max_grad_norm: float = 0.5
@@ -49,6 +50,8 @@ class PPOHyperparameters:
             raise ValueError("rollout_length must be a positive integer")
         if isinstance(self.update_epochs, bool) or not isinstance(self.update_epochs, Integral) or self.update_epochs <= 0:
             raise ValueError("update_epochs must be a positive integer")
+        if isinstance(self.minibatch_size, bool) or not isinstance(self.minibatch_size, Integral) or self.minibatch_size <= 0:
+            raise ValueError("minibatch_size must be a positive integer")
         if not self.hidden_sizes or any(
             isinstance(size, bool) or not isinstance(size, Integral) or size <= 0
             for size in self.hidden_sizes
@@ -78,6 +81,7 @@ class PPOHyperparameters:
             "gae_lambda": float(self.gae_lambda),
             "clip_range": float(self.clip_range),
             "update_epochs": int(self.update_epochs),
+            "minibatch_size": int(self.minibatch_size),
             "learning_rate": float(self.learning_rate),
             "entropy_coefficient": float(self.entropy_coefficient),
             "value_loss_coefficient": float(self.value_loss_coefficient),

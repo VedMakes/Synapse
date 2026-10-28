@@ -336,8 +336,8 @@ random-number state. If training already completed, the same action resumes
 from the last saved checkpoint.
 The step target is normally frozen once training starts; this explicit extension
 is the only UI action that raises it, and it is recorded against one of the 12
-iterations. The extension preserves the saved validation cadence and resets an
-early-stop plateau counter so training can continue.
+iterations. The extension preserves the current PPO settings and continues
+training.
 
 Use **Pause** and **Continue** to suspend and resume the live trainer process.
 Pause freezes the process in place, including its optimizer and active rollout;
@@ -372,26 +372,38 @@ SYNAPSE provides a compact, low-dimensional state vector with car telemetry,
 ray distances, and track lookahead, plus two bounded continuous controls. Start
 with a feed-forward MLP rather than a vision CNN or recurrent network. Two
 64-unit hidden layers are a sensible baseline; compare two 128-unit layers if
-validation shows underfitting. Stable-Baselines3 uses two 64-unit layers as its
-PPO default for 1D observations, and an autonomous racing study tested compact
-two-layer policies (64 or 128 units) with LiDAR observations. These are starting
-points, not a proven optimum for SYNAPSE.
+validation shows underfitting. Stable-Baselines3 uses two 64-unit layers as a
+standard PPO MLP starting point for 1D observations. Racing studies use a range
+of policy and sensor designs; none establishes the best architecture for
+SYNAPSE.
 
 Use **1,000,000 environment transitions as an initial experiment ceiling**, not
 a promise of convergence. Continuous-control performance varies substantially
-by environment and reward design. The dashboard's current default of two
-parallel environments and 32 steps per environment yields only 64 transitions
-per PPO update. Benchmark longer rollouts, such as 256–2,048 steps per
-environment, with the same total transition count and several seeds. PPO's
-commonly documented 2,048-step rollout is a reference point; it has not been
-validated as best for these maps. Keep the checkpoint selected by fixed-start
-public-map validation, and compare lap completion, lap time, average speed,
-crashes, and off-track time rather than choosing by shaped training reward
-alone.
+by environment and reward design. The reference trainer now uses shuffled
+64-transition PPO minibatches, 10 update epochs, and a `3e-4` learning rate;
+these are stronger starting settings, not tuned winners. The dashboard's
+default two environments and 32 steps per environment still collect 64
+transitions per update. Compare completion, distance, lap time, speed, crashes,
+and off-track time across several seeds. Training does not stop early when
+progress plateaus: it uses the requested transition count unless you pause or
+stop it. Plan the cap and check progress through the live map and metrics.
+
+Each run evaluates policy snapshots in the background and retains the best
+deterministic replay it has evaluated at `best_replay.json` in the run folder.
+The replay panel's **Training run · best captured replay** source plays it
+directly, including for a custom actor, without packaging an artifact first.
+Replay capture can lag behind training when evaluation is slower than updates;
+the file represents the best evaluated snapshot, not necessarily the newest
+policy. It is for inspection and does not select or replace the trained policy.
+
+The PPO and reward settings are part of a run's identity. Keep them unchanged
+when resuming an exact checkpoint. If you deliberately change the PPO setup,
+reward weights, sensors, or actor architecture, start a new output directory so
+the experiment is recorded as a separate run.
 
 References: [Stable-Baselines3 policy network guidance](https://stable-baselines3.readthedocs.io/en/master/guide/custom_policy.html),
 [Stable-Baselines3 PPO parameters](https://stable-baselines3.readthedocs.io/en/v1.0/modules/ppo.html),
-[neural-network controllers for autonomous racing with LiDAR](https://arxiv.org/abs/1910.11309).
+[a LiDAR neural-controller verification case study](https://arxiv.org/abs/1910.11309).
 
 The training UI defaults to CPU and also offers **GPU · CUDA**. GPU selection
 places the policy, PPO update tensors, and optimizer on CUDA; the simulator and
@@ -440,28 +452,22 @@ In the training panel:
 4. **Output directory:** type a new folder such as
    `artifacts/runs/dashboard-first`.
 5. **Steps:** enter `256` for the first smoke run.
-6. **Budget steps:** the default ceiling is `1000000`; the first run can stop
-   much earlier when early stopping detects that validation has plateaued.
-7. **Early stopping:** enabled by default. It checks public-map driving results
-   every few PPO updates and stops after five checks without a new best result.
-   Raise or lower the patience field to change that window, or disable early
-   stopping to use the requested steps. The trainer shows the current validation
-   streak beside the live car position. Validation checks use a separate
-   bounded diagnostic budget and do not spend training transitions.
-8. **Parallel environments:** enter `1` or `2` while learning the workflow.
-9. **Rollout length:** enter `32` for a small test.
-10. **Seed:** enter `17`. Use a different seed only for a deliberately new
+6. **Budget steps:** the default ceiling is `1000000`; training uses the full
+   requested transition count unless stopped or extended.
+7. **Parallel environments:** enter `1` or `2` while learning the workflow.
+8. **Rollout length:** enter `32` for a small test.
+9. **Seed:** enter `17`. Use a different seed only for a deliberately new
    experiment.
-11. **Reward function:** tune the ten weights; the reference baseline applies
+10. **Reward function:** tune the ten weights; the reference baseline applies
     them directly to each training transition.
-12. **Ray sensors:** leave the default nine angles in place until the baseline
+11. **Ray sensors:** leave the default nine angles in place until the baseline
     works.
-13. Press **Start / resume participant training** once.
+12. Press **Start / resume participant training** once.
 
 Before launching, the dashboard writes `run_config.json`, `reward_config.json`,
 and `run_identity.json` beside the run. The reward file records the selected
 signal weights. Checkpoint weight gives a one-time bonus for each of 16 zones
-reached per episode; its weight defaults to zero. During training, the status
+reached per episode; its starter weight is one. During training, the status
 panel plots the latest rollout position for each parallel environment. It also displays the remaining client
 retrain allocations. This is why dashboard-created runs are convenient for
 later replay and packaging.
@@ -469,10 +475,11 @@ later replay and packaging.
 While training, use the **Latest driven position** map to follow each parallel
 environment. Select a lane to inspect its car on Monaco or Spa; the forward
 marker, lap-distance, speed, and time-in-episode readout update after each PPO
-rollout. The **Public-map validation** panel compares the most recent
-fixed-start checks with the best checkpoint, including lap finishes, lap time,
-average speed, and off-track time for each public map. Validation changes only
-after an evaluation check, so use its update number to see how recent it is.
+rollout. To watch a complete deterministic rollout from an evaluated policy,
+use **Training run · best captured replay** in the replay panel. This works
+with custom architectures and does not require packaging a participant
+artifact. The best replay is saved at the run folder's `best_replay.json` path;
+the adjacent `best_replay_summary.json` records the captured update and result.
 The map holds the lane's last driven position if an episode ends at the rollout
 boundary,
 so it does not jump to a randomized spawn before the trainer can inspect the
@@ -545,8 +552,10 @@ instead of silently feeding the model the wrong numbers.
 SYNAPSE publishes raw transition signals, and the reference baseline converts
 the ten dashboard weights into the PPO reward on every training transition.
 The checkpoint signal fires once the first time an episode reaches each of 16
-equal-distance zones. The dashboard reports average zones reached during each
-training update, alongside lap completion and return.
+equal-distance zones. Its default reward is +1 per newly reached zone, adding a
+progress milestone bonus on top of the dense percentage-of-lap progress signal.
+The dashboard reports average zones reached during each training update,
+alongside lap completion and return.
 This keeps reward tuning visible, reproducible, and shared by the default and
 custom-architecture paths. Participant training does not provide a second
 reward callback or a second trainer; change `tools/run_reference_baseline.py`
@@ -659,12 +668,12 @@ For the reference trainer, begin here:
 | Parameter | First smoke | Small experiment | Why |
 |---|---:|---:|---|
 | `steps` | 256 | 2,048 or more | Invocation work, not the lifetime ledger. |
-| `budget-steps` | 1,000,000 | 1,000,000 | Local per-run ceiling; early stopping can finish first. |
+| `budget-steps` | 1,000,000 | 1,000,000 | Local per-run transition ceiling. |
 | `n-envs` | 1 | 2 or 4 | More lanes collect more data per update. |
 | `rollout-length` | 16 or 32 | 32 or 64 | Must multiply with `n-envs` to at most 8,192. |
 | `seed` | 17 | 17, then 23 | Repeatability and variability checks. |
-| `learning-rate` | `0.0001` | `0.0001` | Reference fine-tuning only. |
-| `update-epochs` | `1` for a smoke | `4` default | More passes can improve learning and cost more CPU. |
+| `learning-rate` | `0.0003` | `0.0003` | PPO actor and critic optimizer rate. |
+| `update-epochs` | `2` for a smoke | `10` default | Each epoch shuffles into 64-sample minibatches. |
 
 Change one row at a time. A large `n-envs * rollout-length` product is not
 automatically better; it uses more memory and makes a short smoke run harder
