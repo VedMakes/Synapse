@@ -2,7 +2,7 @@
 
 The environment and rollout collector remain NumPy-first.  This module is the
 model/optimizer boundary only: it evaluates a fixed two-layer actor-critic,
-computes masked GAE, and performs full-batch clipped PPO updates.  The model
+computes masked GAE, and performs shuffled-minibatch clipped PPO updates. The model
 artifact contains a state dictionary and separate JSON metadata.  Loading uses
 ``weights_only=True`` so a submission cannot ask PyTorch to reconstruct an
 arbitrary Python object.
@@ -626,39 +626,43 @@ class PPOTrainer:
         last_value_loss = 0.0
         last_entropy = 0.0
         optimizer_steps = 0
+        minibatch_size = min(self.hyperparameters.minibatch_size, transitions)
         for _ in range(self.hyperparameters.update_epochs):
-            new_log_probability, entropy, value = self.policy.evaluate_actions(
-                observation_tensor, action_tensor
-            )
-            log_ratio = new_log_probability - old_log_probability_tensor
-            ratio = torch.exp(log_ratio)
-            clipped_ratio = torch.clamp(
-                ratio,
-                1.0 - self.hyperparameters.clip_range,
-                1.0 + self.hyperparameters.clip_range,
-            )
-            surrogate = torch.minimum(ratio * advantage_tensor, clipped_ratio * advantage_tensor)
-            policy_loss = -surrogate.mean()
-            unweighted_value_loss = torch.square(value - return_tensor).mean()
-            value_loss = self.hyperparameters.value_loss_coefficient * unweighted_value_loss
-            entropy_mean = entropy.mean()
-            loss = policy_loss + value_loss - self.hyperparameters.entropy_coefficient * entropy_mean
-            if not torch.isfinite(loss):
-                raise FloatingPointError("PPO loss became non-finite")
+            permutation = torch.randperm(transitions, device=device)
+            for start in range(0, transitions, minibatch_size):
+                indices = permutation[start : start + minibatch_size]
+                new_log_probability, entropy, value = self.policy.evaluate_actions(
+                    observation_tensor[indices], action_tensor[indices]
+                )
+                log_ratio = new_log_probability - old_log_probability_tensor[indices]
+                ratio = torch.exp(log_ratio)
+                clipped_ratio = torch.clamp(
+                    ratio,
+                    1.0 - self.hyperparameters.clip_range,
+                    1.0 + self.hyperparameters.clip_range,
+                )
+                surrogate = torch.minimum(ratio * advantage_tensor[indices], clipped_ratio * advantage_tensor[indices])
+                policy_loss = -surrogate.mean()
+                unweighted_value_loss = torch.square(value - return_tensor[indices]).mean()
+                value_loss = self.hyperparameters.value_loss_coefficient * unweighted_value_loss
+                entropy_mean = entropy.mean()
+                loss = policy_loss + value_loss - self.hyperparameters.entropy_coefficient * entropy_mean
+                if not torch.isfinite(loss):
+                    raise FloatingPointError("PPO loss became non-finite")
 
-            self.optimizer.zero_grad(set_to_none=True)
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.hyperparameters.max_grad_norm)
-            if any(
-                parameter.grad is not None and not torch.isfinite(parameter.grad).all()
-                for parameter in self.policy.parameters()
-            ):
-                raise FloatingPointError("PPO gradient became non-finite")
-            self.optimizer.step()
-            optimizer_steps += 1
-            last_policy_loss = float(policy_loss.detach().cpu())
-            last_value_loss = float(value_loss.detach().cpu())
-            last_entropy = float(entropy_mean.detach().cpu())
+                self.optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(self.policy.parameters(), self.hyperparameters.max_grad_norm)
+                if any(
+                    parameter.grad is not None and not torch.isfinite(parameter.grad).all()
+                    for parameter in self.policy.parameters()
+                ):
+                    raise FloatingPointError("PPO gradient became non-finite")
+                self.optimizer.step()
+                optimizer_steps += 1
+                last_policy_loss = float(policy_loss.detach().cpu())
+                last_value_loss = float(value_loss.detach().cpu())
+                last_entropy = float(entropy_mean.detach().cpu())
 
         with torch.no_grad():
             final_log_probability, _, final_value = self.policy.evaluate_actions(

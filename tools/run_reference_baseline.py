@@ -37,6 +37,7 @@ from racing_event import reference_checkpoint as checkpoint
 from racing_event.reward import RewardConfig
 from racing_event.rollout import PPOHyperparameters, RolloutCollector
 from racing_event.track import TrackGeometry
+from racing_event.training_replay import BestTrainingReplay
 from racing_event.vector_env import VectorizedRacingEnv
 
 
@@ -79,11 +80,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--hparams", type=Path, help="JSON object overriding PPO hyperparameters")
     parser.add_argument("--fine-tune", action="store_true", help="bounded optional reference fine-tuning with public-track best selection")
     parser.add_argument("--max-updates", type=int, help="updates per invocation; fine-tuning default 4, maximum 32")
-    parser.add_argument("--learning-rate", type=float, default=1.0e-4)
-    parser.add_argument("--update-epochs", type=int, default=4)
-    parser.add_argument("--early-stop-patience", type=int, default=None, help="stop after N public-map evaluations without improving; 0 disables")
-    parser.add_argument("--eval-every", type=int, default=None, help="evaluate every N global updates; 0 selects an interval under the diagnostic cap")
-    parser.add_argument("--eval-max-steps", type=int, default=None, help="per-public-track validation cap; defaults to 500 for early stopping, 2400 for fine-tuning")
+    parser.add_argument("--learning-rate", type=float, default=3.0e-4)
+    parser.add_argument("--update-epochs", type=int, default=10)
+    parser.add_argument("--eval-every", type=int, default=None, help="optional fine-tuning evaluation cadence; 0 chooses automatically")
+    parser.add_argument("--eval-max-steps", type=int, default=None, help="per-public-track validation cap for optional fine-tuning")
     parser.add_argument("--eval-track-dir", type=Path, default=DEFAULT_TRACK_DIR, help="public development tracks only (no private evaluator)")
     return parser.parse_args(argv)
 
@@ -97,7 +97,7 @@ def _load_hparams(path: Path | None) -> dict[str, Any]:
         raise ValueError(f"cannot read hparams JSON: {path}") from exc
     if not isinstance(value, dict):
         raise ValueError("hparams must contain a JSON object")
-    allowed = {"rollout_length", "gamma", "gae_lambda", "clip_range", "update_epochs", "learning_rate", "entropy_coefficient", "value_loss_coefficient", "hidden_sizes", "max_grad_norm"}
+    allowed = {"rollout_length", "gamma", "gae_lambda", "clip_range", "update_epochs", "minibatch_size", "learning_rate", "entropy_coefficient", "value_loss_coefficient", "hidden_sizes", "max_grad_norm"}
     unknown = set(value) - allowed
     if unknown:
         raise ValueError(f"hparams contains unknown fields: {sorted(unknown)}")
@@ -203,8 +203,8 @@ def _write_report(output: Path, state: dict[str, Any]) -> None:
     )
     if state["fine_tune"]:
         text += f"- Selection: {SELECTION_RULE}\n- Best artifact: `best/`; report: `selection_report.json`\n"
-    if state.get("early_stopped"):
-        text += f"- Early stopping: stopped after {state.get('early_stopping_stale_evaluations')} consecutive validation checks without improvement.\n"
+    if state.get("updates", 0):
+        text += "- Best deterministic training replay: `best_replay.json`\n"
     checkpoint.atomic_bytes(output / "training_report.md", text.encode())
 
 
@@ -281,19 +281,10 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         candidate = output / "model_source.py"
         if candidate.is_file():
             model_path = candidate
-    saved_early_stopping = None if saved_identity is None else saved_identity.get("early_stopping")
-    early_stop_patience = getattr(args, "early_stop_patience", None)
-    if early_stop_patience is None and saved_early_stopping is not None:
-        early_stop_patience = saved_early_stopping["patience"]
-    if early_stop_patience is not None and (
-        isinstance(early_stop_patience, bool) or not isinstance(early_stop_patience, int) or early_stop_patience < 0
-    ):
-        raise ValueError("--early-stop-patience must be a non-negative integer")
-    early_stopping = early_stop_patience is not None and early_stop_patience > 0
     fine_tune = bool(getattr(args, "fine_tune", False) or requested_warm_start)
-    if saved_identity is not None and saved_identity["selection"] is not None and saved_early_stopping is None:
+    if saved_identity is not None and saved_identity["selection"] is not None:
         fine_tune = True  # Preserve legacy fine-tune checkpoint behavior.
-    selection_enabled = fine_tune or early_stopping
+    selection_enabled = fine_tune
     max_updates = getattr(args, "max_updates", None)
     if max_updates is None:
         max_updates = 4 if fine_tune else args.steps
@@ -301,8 +292,9 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         raise ValueError("fine-tuning requires 1..32 updates and at most 65536 transitions per invocation")
     hparams = _load_hparams(getattr(args, "hparams", None))
     hparams.setdefault("rollout_length", args.rollout_length)
-    hparams.setdefault("learning_rate", getattr(args, "learning_rate", 1.0e-4))
-    hparams.setdefault("update_epochs", getattr(args, "update_epochs", 4))
+    hparams.setdefault("learning_rate", getattr(args, "learning_rate", 3.0e-4))
+    hparams.setdefault("update_epochs", getattr(args, "update_epochs", 10))
+    hparams.setdefault("minibatch_size", 64)
     hp = PPOHyperparameters(**hparams)
     if hp.update_epochs > 16 or hp.learning_rate > 0.01:
         raise ValueError("reference updates require at most 16 epochs and learning-rate <= 0.01")
@@ -321,7 +313,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         requested_eval_every = getattr(args, "eval_every", None)
         eval_max_steps = getattr(args, "eval_max_steps", None)
         if eval_max_steps is None:
-            eval_max_steps = 500 if early_stopping else 2400
+            eval_max_steps = 2400
         evaluation_tracks = tuple(TrackGeometry.from_file(path) for path in _resolve_tracks(
             getattr(args, "eval_track_dir", DEFAULT_TRACK_DIR), None,
         ))
@@ -337,19 +329,9 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         rollout_size = args.n_envs * args.rollout_length
         possible_updates = min(max_updates, (args.steps + rollout_size - 1) // rollout_size)
         auto_eval_every = requested_eval_every in (None, 0)
-        if auto_eval_every and early_stopping:
-            updates_per_budget = (args.budget_steps + rollout_size - 1) // rollout_size
-            total_eval_capacity = 100_000 // (len(evaluation_tracks) * eval_max_steps)
-            # Keep the interval stable across exact resumes and reserve one
-            # evaluation slot for the initial baseline on a fresh run.
-            periodic_capacity = total_eval_capacity - 1
-            if periodic_capacity < 1:
-                raise ValueError("early-stopping validation cap leaves no room for a post-training evaluation; lower eval-max-steps")
-            eval_every = max(1, (updates_per_budget + periodic_capacity - 1) // periodic_capacity)
-        else:
-            eval_every = 1 if auto_eval_every else requested_eval_every
+        eval_every = 1 if auto_eval_every else requested_eval_every
         if isinstance(eval_every, bool) or not isinstance(eval_every, int) or eval_every <= 0 or (not auto_eval_every and eval_every > 32):
-            raise ValueError("--eval-every must be 1..32 (or 0 for an automatic early-stopping interval)")
+            raise ValueError("--eval-every must be 1..32 (or 0 for an automatic interval)")
         evaluations_bound = int(current is None) + (possible_updates + eval_every - 1) // eval_every
         if evaluations_bound * len(evaluation_tracks) * eval_max_steps > 100_000:
             raise ValueError("evaluation cap: at most 100000 diagnostic steps per invocation; reduce eval-max-steps or increase eval-every")
@@ -362,10 +344,6 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         if (current is not None and saved_identity is not None
                 and args.budget_steps > int(saved_identity["budget_steps"])):
             selection_settings = saved_identity["selection"]
-    early_stopping_settings = (
-        {"patience": early_stop_patience, "monitor": SELECTION_RULE}
-        if early_stopping else None
-    )
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     random.seed(args.seed)
@@ -421,8 +399,6 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         "preprocessing": "running_reference_normalizer" if origin is None else origin["preprocessing"],
         "selection": selection_settings,
     }
-    if early_stopping_settings is not None:
-        identity["early_stopping"] = early_stopping_settings
     if hparams_path is not None:
         identity["hparams"] = hp.to_dict()
     if model_identity is not None:
@@ -501,7 +477,7 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     collector = RolloutCollector(env, policy.as_policy(), budget, run_id, normalizer=normalizer, seed=args.seed)
     if current is not None:
         checkpoint.restore_local_state(directory / "local_state.pt", trainer)
-        optimizer_steps = state["updates"] * hp.update_epochs
+        optimizer_steps = sum(int(row.get("optimizer_steps", hp.update_epochs)) for row in metrics)
         values = trainer.optimizer.state_dict()["state"]
         if bool(values) != bool(optimizer_steps) or any(float(item["step"]) != optimizer_steps for item in values.values()):
             raise ValueError("optimizer step count does not match completed updates")
@@ -521,8 +497,6 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
             "observation_size": env.observation_size, "hidden_sizes": [64, 64],
             "n_envs": args.n_envs, "rollout_length": args.rollout_length, "seed": args.seed,
             "fine_tune": fine_tune, "preprocessing": identity["preprocessing"],
-            "early_stopping_stale_evaluations": 0,
-            "early_stopped": False,
             "resume_note": "exact completed-rollout CPU state via atomic generation pointer; external budget never rolled back",
             "warm_start": origin,
         }
@@ -544,13 +518,6 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
         if evaluate:
             candidate = evaluate_candidate(policy, normalizer, evaluation_tracks, config, selection_settings["max_steps"])
             selection = select_candidate(selection, candidate, generation, state["updates"])
-            if early_stopping:
-                improved = selection["best_generation"] == generation
-                state["early_stopping_stale_evaluations"] = (
-                    0 if improved else int(state.get("early_stopping_stale_evaluations", 0)) + 1
-                )
-                if state["early_stopping_stale_evaluations"] >= early_stop_patience:
-                    state["early_stopped"] = True
         checkpoint.publish(
             output, generation, policy=policy, contract=contract, normalizer=normalizer,
             trainer=trainer, collector=collector, state=state, metrics=metrics,
@@ -562,67 +529,65 @@ def _run_locked(args: argparse.Namespace, output: Path) -> dict[str, Any]:
     if extended_budget:
         state["budget_steps"] = args.budget_steps
         state["budget_remaining"] = status["remaining_steps"]
-        state["early_stopped"] = False
-        state["early_stopping_stale_evaluations"] = 0
         save(evaluate=False)
 
     if current is None:
         save(evaluate=selection_enabled)
     print(f"training processor: {device}" + (f" ({torch.cuda.get_device_name(device)})" if device.type == "cuda" else ""), flush=True)
-    target = 0 if state.get("early_stopped", False) else min(args.steps, status["remaining_steps"])
+    target = min(args.steps, status["remaining_steps"])
     invocation_updates = 0
-    while target > 0 and invocation_updates < max_updates and not state.get("early_stopped", False):
-        batch_steps = min(args.n_envs * args.rollout_length, target)
-        rollout = collector.collect(batch_steps)
-        ppo_metrics = trainer.update(rollout.batch)
-        status = budget.status(run_id)
-        live_budget = budget.status()
-        if live_budget["max_steps_per_run"] > state["budget_steps"]:
-            extension = live_budget["max_steps_per_run"] - state["budget_steps"]
-            target += extension
-            state["budget_steps"] = live_budget["max_steps_per_run"]
-            state["early_stopped"] = False
-            state["early_stopping_stale_evaluations"] = 0
-            identity["budget_steps"] = live_budget["max_steps_per_run"]
-            args.budget_steps = live_budget["max_steps_per_run"]
-        state["updates"] += 1
-        state["budget_used"], state["budget_remaining"] = status["used_steps"], status["remaining_steps"]
-        metrics.append({
-            "update": state["updates"], "budget_used": status["used_steps"],
-            "budget_remaining": status["remaining_steps"],
-            **{name: rollout.metrics[name] for name in ("mean_episode_return", "lap_completion_rate", "mean_speed_mps", "crash_rate", "off_track_rate")},
-            "mean_sector_coverage_during_update": rollout.metrics.get("mean_sector_coverage_during_update"),
-            "signal_contributions": rollout.metrics.get("signal_contributions", {}),
-            "weighted_signal_sums": rollout.metrics.get("weighted_signal_sums", {}),
-            **ppo_metrics.to_dict(),
-        })
-        invocation_updates += 1
-        target -= batch_steps
-        evaluate = selection_enabled and state["updates"] % selection_settings["every"] == 0
-        save(evaluate=evaluate)
-        row = metrics[-1]
-        def display(name: str) -> str:
-            value = row[name]
-            return "n/a" if value is None else f"{float(value):.3f}"
-        print(
-            f"update {state['updates']}: steps {state['budget_used']}/{args.budget_steps} "
-            f"return={display('mean_episode_return')} lap={display('lap_completion_rate')} "
-            f"speed={display('mean_speed_mps')} m/s crash={display('crash_rate')} "
-            f"off_track={display('off_track_rate')} zones={display('mean_sector_coverage_during_update')}", flush=True,
-        )
-        print("SYNAPSE_METRIC " + json.dumps({
-            "kind": "training_progress",
-            "training_position": _training_position_payload(rollout.training_position or [], state["updates"]),
-            "public_validation": _public_validation_payload(selection, config.dt),
-            "early_stopping": {
-                "enabled": early_stopping,
-                "patience": early_stop_patience,
-                "stale_evaluations": state.get("early_stopping_stale_evaluations", 0),
-                "stopped": bool(state.get("early_stopped", False)),
+    replay_worker = BestTrainingReplay(output, tracks[0], config)
+    replay_worker.submit(policy, normalizer, state["updates"])
+    try:
+        while target > 0 and invocation_updates < max_updates:
+            batch_steps = min(args.n_envs * args.rollout_length, target)
+            rollout = collector.collect(batch_steps)
+            ppo_metrics = trainer.update(rollout.batch)
+            replay_worker.submit(policy, normalizer, state["updates"] + 1)
+            status = budget.status(run_id)
+            live_budget = budget.status()
+            if live_budget["max_steps_per_run"] > state["budget_steps"]:
+                extension = live_budget["max_steps_per_run"] - state["budget_steps"]
+                target += extension
+                state["budget_steps"] = live_budget["max_steps_per_run"]
+                identity["budget_steps"] = live_budget["max_steps_per_run"]
+                args.budget_steps = live_budget["max_steps_per_run"]
+            state["updates"] += 1
+            state["budget_used"], state["budget_remaining"] = status["used_steps"], status["remaining_steps"]
+            metrics.append({
+                "update": state["updates"], "budget_used": status["used_steps"],
+                "budget_remaining": status["remaining_steps"],
+                **{name: rollout.metrics[name] for name in ("mean_episode_return", "lap_completion_rate", "mean_speed_mps", "crash_rate", "off_track_rate")},
+                "mean_sector_coverage_during_update": rollout.metrics.get("mean_sector_coverage_during_update"),
+                "signal_contributions": rollout.metrics.get("signal_contributions", {}),
+                "weighted_signal_sums": rollout.metrics.get("weighted_signal_sums", {}),
+                **ppo_metrics.to_dict(),
+            })
+            invocation_updates += 1
+            target -= batch_steps
+            evaluate = selection_enabled and state["updates"] % selection_settings["every"] == 0
+            save(evaluate=evaluate)
+            row = metrics[-1]
+            def display(name: str) -> str:
+                value = row[name]
+                return "n/a" if value is None else f"{float(value):.3f}"
+            print(
+                f"update {state['updates']}: steps {state['budget_used']}/{args.budget_steps} "
+                f"return={display('mean_episode_return')} lap={display('lap_completion_rate')} "
+                f"speed={display('mean_speed_mps')} m/s crash={display('crash_rate')} "
+                f"off_track={display('off_track_rate')} zones={display('mean_sector_coverage_during_update')}", flush=True,
+            )
+            print("SYNAPSE_METRIC " + json.dumps({
+                "kind": "training_progress",
+                "training_position": _training_position_payload(rollout.training_position or [], state["updates"]),
+                "public_validation": _public_validation_payload(selection, config.dt),
+                "best_replay": str(output / "best_replay.json"),
             },
-        },
-            sort_keys=True, separators=(",", ":"), allow_nan=False,
-        ), flush=True)
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ), flush=True)
+    finally:
+        replay_worker.close()
+    print(f"best training replay: {output / 'best_replay.json'}", flush=True)
     _write_report(output, state)
     return state
 

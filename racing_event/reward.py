@@ -118,7 +118,7 @@ class RewardConfig:
         "crash": -10.0,
         "stuck": -8.0,
         "lap_complete": 20.0,
-        "checkpoint": 0.0,
+        "checkpoint": 1.0,
         "time": -0.15,
         "steer_smoothness": -0.05,
     })
