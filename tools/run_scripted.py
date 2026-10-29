@@ -26,15 +26,40 @@ def environment_hash(track: TrackGeometry, config_path: Path) -> str:
 
 
 def scripted_action(env: RacingEnv) -> np.ndarray:
-    """A deliberately small controller used only for simulator smoke tests."""
+    """Adaptive curvature aware controller for simulator smoke tests and trajectory replays."""
 
     projection = env.track.project(np.array([env.state.x, env.state.y], dtype=np.float64))
-    curvature = env.track.curvature_at_s(projection.s + max(15.0, env.state.speed * 0.75))
-    desired_angle = np.arctan(env.config.car.wheelbase_m * curvature)
+    v = env.state.speed
+    lookaheads = np.linspace(4.0, max(40.0, v * 1.8), 24)
+    target_v = 30.0
+
+    for dist in lookaheads:
+        curv = abs(env.track.curvature_at_s(projection.s + dist))
+        corner_v = np.sqrt(16.0 / max(curv, 0.0006))
+        if v > corner_v:
+            needed_dist = (v**2 - corner_v**2) / (2.0 * 11.0)
+            if dist <= needed_dist * 1.2:
+                target_v = min(target_v, corner_v)
+        else:
+            if dist < 8.0:
+                target_v = min(target_v, corner_v)
+
+    target_v = np.clip(target_v, 14.0, 30.0)
+    speed_err = target_v - v
+    if speed_err > 0.5:
+        throttle = 1.0 if speed_err > 3.0 else np.clip(speed_err / 2.5, 0.45, 1.0)
+    elif speed_err < -0.8:
+        throttle = np.clip(speed_err / 2.5, -1.0, -0.3)
+    else:
+        throttle = 0.2
+
+    la_dist = max(7.0, v * 0.35)
+    la_s = projection.s + la_dist
+    la_curv = env.track.curvature_at_s(la_s)
+    desired_angle = np.arctan(env.config.car.wheelbase_m * la_curv)
     steering = desired_angle / env.config.car.max_steering_rad
-    steering -= 0.9 * np.clip(projection.lateral_offset / 8.0, -1.0, 1.0)
-    steering -= 0.8 * env.track.observation_heading_error(env.state.heading, projection)
-    throttle = 0.65 if env.state.speed < 35.0 else 0.35
+    steering -= 0.65 * np.clip(projection.lateral_offset / 3.0, -1.0, 1.0)
+    steering -= 0.75 * env.track.observation_heading_error(env.state.heading, projection)
     return np.clip(np.asarray([steering, throttle], dtype=np.float64), -1.0, 1.0)
 
 

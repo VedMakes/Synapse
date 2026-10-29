@@ -1124,15 +1124,16 @@ function buildStartFinishStructure(track, trackCenter) {
   }
 
   /* 3. Overhead Gantry Structure */
-  const dirLx = bLeft[0] - trackCenter.x;
-  const dirLy = bLeft[1] - trackCenter.y;
-  const lenL = Math.hypot(dirLx, dirLy) || 1;
-  const pillarLeftPos = new THREE.Vector3(bLeft[0] + (dirLx / lenL) * 3.5, 0, -(bLeft[1] + (dirLy / lenL) * 3.5));
+  const c0 = track.centerline[idx];
+  const toLeftX = bLeft[0] - c0[0];
+  const toLeftY = bLeft[1] - c0[1];
+  const lenL = Math.hypot(toLeftX, toLeftY) || 1;
+  const pillarLeftPos = new THREE.Vector3(bLeft[0] + (toLeftX / lenL) * 3.0, 0, -(bLeft[1] + (toLeftY / lenL) * 3.0));
 
-  const dirRx = bRight[0] - trackCenter.x;
-  const dirRy = bRight[1] - trackCenter.y;
-  const lenR = Math.hypot(dirRx, dirRy) || 1;
-  const pillarRightPos = new THREE.Vector3(bRight[0] + (dirRx / lenR) * 3.5, 0, -(bRight[1] + (dirRy / lenR) * 3.5));
+  const toRightX = bRight[0] - c0[0];
+  const toRightY = bRight[1] - c0[1];
+  const lenR = Math.hypot(toRightX, toRightY) || 1;
+  const pillarRightPos = new THREE.Vector3(bRight[0] + (toRightX / lenR) * 3.0, 0, -(bRight[1] + (toRightY / lenR) * 3.0));
 
   const gantryHeight = 9.5;
   const pillarMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.8, roughness: 0.3 });
@@ -1530,12 +1531,7 @@ function buildTracksidePosters(track, trackCenter) {
     combMat.multiplyMatrices(parentDummy.matrix, subDummy.matrix);
     wallReflInstances[t].setMatrixAt(tCount, combMat);
 
-    /* Ground specular reflection decal */
-    subDummy.position.set(0, 0.022 - d.posY, 3.4);
-    subDummy.rotation.set(-Math.PI / 2, 0, 0);
-    subDummy.updateMatrix();
-    combMat.multiplyMatrices(parentDummy.matrix, subDummy.matrix);
-    reflInstances[t].setMatrixAt(tCount, combMat);
+    /* Ground reflection omitted for crisp daylight visibility */
   }
 
   for (let t = 0; t < sponsorConfigs.length; t++) {
@@ -1590,6 +1586,7 @@ function buildStadiumLights(track, trackCenter) {
 
   const towerData = [];
   for (let i = 0; i < n; i += step) {
+    const cp = track.centerline[i];
     const bL = track.barrier_left[i];
     const bR = track.barrier_right[i];
 
@@ -1597,16 +1594,23 @@ function buildStadiumLights(track, trackCenter) {
     const distR = Math.hypot(bR[0] - trackCenter.x, bR[1] - trackCenter.y);
     const outerBarrier = distL > distR ? bL : bR;
 
-    const outDx = outerBarrier[0] - trackCenter.x;
-    const outDy = outerBarrier[1] - trackCenter.y;
-    const outLen = Math.hypot(outDx, outDy) || 1;
+    const normX = outerBarrier[0] - cp[0];
+    const normY = outerBarrier[1] - cp[1];
+    const normLen = Math.hypot(normX, normY) || 1;
 
-    const poleX = outerBarrier[0] + (outDx / outLen) * 22;
-    const poleZ = -(outerBarrier[1] + (outDy / outLen) * 22);
+    const poleX = outerBarrier[0] + (normX / normLen) * 22;
+    const poleZ = -(outerBarrier[1] + (normY / normLen) * 22);
     const poleHeight = 26;
 
-    const trackPtX = track.centerline[i][0];
-    const trackPtZ = -track.centerline[i][1];
+    let minTrackDist = Infinity;
+    for (let k = 0; k < n; k += 4) {
+      const d = Math.hypot(poleX - track.centerline[k][0], -poleZ - track.centerline[k][1]);
+      if (d < minTrackDist) minTrackDist = d;
+    }
+    if (minTrackDist < 20.0) continue;
+
+    const trackPtX = cp[0];
+    const trackPtZ = -cp[1];
     const lookAngle = Math.atan2(trackPtX - poleX, trackPtZ - poleZ);
 
     towerData.push({ poleX, poleZ, poleHeight, lookAngle, trackPtX, trackPtZ });
@@ -2170,11 +2174,42 @@ function buildGrandstands(track, trackCenter) {
   const pillarGeo = new THREE.CylinderGeometry(0.22, 0.22, 7.4, 8);
   const seatBenchGeo = new THREE.BoxGeometry(16.4, 0.24, 0.65);
 
-  const standIndices = [];
-  for (let i = 0; i < n; i += step) {
-    standIndices.push(i);
+  const margin = Math.max(16, Math.floor(n / 24));
+  const step = Math.max(8, Math.floor(n / 16));
+  const validStands = [];
+
+  for (let i = margin; i < n - margin; i += step) {
+    const cp = track.centerline[i];
+    const bL = track.barrier_left[i];
+    const bR = track.barrier_right[i];
+
+    const distL = Math.hypot(bL[0] - trackCenter.x, bL[1] - trackCenter.y);
+    const distR = Math.hypot(bR[0] - trackCenter.x, bR[1] - trackCenter.y);
+    const outerP = distL > distR ? bL : bR;
+
+    const normX = outerP[0] - cp[0];
+    const normY = outerP[1] - cp[1];
+    const normLen = Math.hypot(normX, normY) || 1;
+
+    const posX = outerP[0] + (normX / normLen) * 20.0;
+    const posZ = -(outerP[1] + (normY / normLen) * 20.0);
+
+    let minTrackDist = Infinity;
+    for (let k = 0; k < n; k += 4) {
+      const d = Math.hypot(posX - track.centerline[k][0], -posZ - track.centerline[k][1]);
+      if (d < minTrackDist) minTrackDist = d;
+    }
+    if (minTrackDist < 18.0) continue;
+
+    const trackPtX = cp[0];
+    const trackPtZ = -cp[1];
+    const standAngle = Math.atan2(posX - trackPtX, posZ - trackPtZ);
+    const totalAngle = standAngle + Math.PI;
+
+    validStands.push({ posX, posZ, totalAngle });
   }
-  const numStands = standIndices.length;
+
+  const numStands = validStands.length;
   const fansPerRow = 16;
   const numRows = 4;
   const totalSeatedFans = numStands * numRows * fansPerRow;
@@ -2224,28 +2259,9 @@ function buildGrandstands(track, trackCenter) {
   ];
 
   for (let stIdx = 0; stIdx < numStands; stIdx++) {
-    const i = standIndices[stIdx];
-    const bL = track.barrier_left[i];
-    const bR = track.barrier_right[i];
-
-    const distL = Math.hypot(bL[0] - trackCenter.x, bL[1] - trackCenter.y);
-    const distR = Math.hypot(bR[0] - trackCenter.x, bR[1] - trackCenter.y);
-    const outerP = distL > distR ? bL : bR;
-
-    const outDx = outerP[0] - trackCenter.x;
-    const outDy = outerP[1] - trackCenter.y;
-    const outLen = Math.hypot(outDx, outDy) || 1;
-
-    const posX = outerP[0] + (outDx / outLen) * 9.0;
-    const posZ = -(outerP[1] + (outDy / outLen) * 9.0);
-
-    const trackPtX = track.centerline[i][0];
-    const trackPtZ = -track.centerline[i][1];
-    const standAngle = Math.atan2(posX - trackPtX, posZ - trackPtZ);
-    const totalAngle = standAngle + Math.PI;
-
-    parentDummy.position.set(posX, 0, posZ);
-    parentDummy.rotation.set(0, totalAngle, 0);
+    const stData = validStands[stIdx];
+    parentDummy.position.set(stData.posX, 0, stData.posZ);
+    parentDummy.rotation.set(0, stData.totalAngle, 0);
     parentDummy.updateMatrix();
 
     /* 1. Terraced concrete platforms and risers */
@@ -2462,11 +2478,11 @@ function buildTrackScene(track) {
   /* 1. Asphalt Road Surface with procedural grain bump map */
   const asphaltBump = getAsphaltTexture();
   const roadMat = new THREE.MeshStandardMaterial({
-    color: 0x202632,
-    roughness: 0.70,
-    metalness: 0.22,
+    color: 0x363b46,
+    roughness: 0.72,
+    metalness: 0.12,
     bumpMap: asphaltBump,
-    bumpScale: 0.02,
+    bumpScale: 0.015,
     side: THREE.DoubleSide,
   });
   group.add(buildRibbonMesh(track.left_boundary, track.right_boundary, roadMat, 0.015));
@@ -2488,24 +2504,24 @@ function buildTrackScene(track) {
     rubberPolyR.push([p[0] - nx * RUBBER_WIDTH, p[1] - ny * RUBBER_WIDTH]);
   }
   const rubberMat = new THREE.MeshStandardMaterial({
-    color: 0x0c1017,
-    roughness: 0.88,
-    metalness: 0.28,
+    color: 0x22262e,
+    roughness: 0.82,
+    metalness: 0.15,
     side: THREE.DoubleSide,
   });
   group.add(buildRibbonMesh(rubberPolyL, rubberPolyR, rubberMat, 0.018));
 
-  /* 3. Runoff Areas: Volcanic Basalt Traps and Midnight Blue Runoffs */
+  /* 3. Runoff Areas: Sandy Golden Gravel Traps and F1 Royal Blue Runoffs */
   const gravelMat = new THREE.MeshStandardMaterial({
-    color: 0x221e1a,
-    roughness: 0.94,
-    metalness: 0.06,
+    color: 0xd9b372,
+    roughness: 0.95,
+    metalness: 0.0,
     side: THREE.DoubleSide,
   });
   const blueRunoffMat = new THREE.MeshStandardMaterial({
-    color: 0x0a2c66,
-    roughness: 0.78,
-    metalness: 0.18,
+    color: 0x1e3a8a,
+    roughness: 0.75,
+    metalness: 0.1,
     side: THREE.DoubleSide,
   });
 
@@ -2529,8 +2545,8 @@ function buildTrackScene(track) {
 
   /* 6. Safety Barrier Walls */
   const barrierHeight = 1.35;
-  group.add(buildBarrierWall(track.barrier_left, barrierHeight, 0x161c28));
-  group.add(buildBarrierWall(track.barrier_right, barrierHeight, 0x161c28));
+  group.add(buildBarrierWall(track.barrier_left, barrierHeight, 0xf1f5f9));
+  group.add(buildBarrierWall(track.barrier_right, barrierHeight, 0xf1f5f9));
 
   /* 7. Beveled 3D Apex Rumble Curbs */
   group.add(buildCurbs(track));
@@ -2544,17 +2560,11 @@ function buildTrackScene(track) {
   /* 10. Trackside Posters and Synapse Hoardings */
   group.add(buildTracksidePosters(track, trackCenter));
 
-  /* 11. Aesthetic Trackside Lighting Poles along sides of asphalt */
-  group.add(buildTracksideLightingPoles(track, trackCenter));
-
-  /* 12. Stadium Perimeter Lights */
+  /* 11. Stadium Perimeter Floodlight Towers */
   group.add(buildStadiumLights(track, trackCenter));
 
-  /* 13. Spectator Grandstands */
+  /* 12. Spectator Grandstands */
   group.add(buildGrandstands(track, trackCenter));
-
-  /* 14. Hazy Red Asphalt Embedded Ground Lights */
-  group.add(buildAsphaltHazeLights(track));
 
   return group;
 }
@@ -3072,6 +3082,7 @@ function buildF1CarModel(liveryColor, accentColor, carNumber = '1') {
 /* Main Application State */
 
 let scene, camera, renderer3d, clock;
+let mainSunLight = null, hemiLight = null, ambientLight = null, groundMesh = null;
 let replayA = null, replayB = null;
 let carModelA = null, carModelB = null;
 let trackGroup = null;
@@ -3537,56 +3548,57 @@ function updateRPMShiftLights(elemId, gear, speedKmh) {
 function initThreeJS() {
   scene = new THREE.Scene();
 
-  /* Cyberpunk midnight atmosphere */
-  scene.background = new THREE.Color(0x060c18);
-  scene.fog = new THREE.FogExp2(0x070e1c, 0.00075);
+  /* Vibrant daylight azure sky and soft atmospheric haze */
+  scene.background = new THREE.Color(0x7ec0ee);
+  scene.fog = new THREE.FogExp2(0xa0d4f7, 0.00018);
 
-  camera = new THREE.PerspectiveCamera(54, window.innerWidth / window.innerHeight, 0.4, 1200);
+  camera = new THREE.PerspectiveCamera(54, window.innerWidth / window.innerHeight, 0.4, 4500);
   camera.position.set(0, 60, 0);
 
   renderer3d = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: 'high-performance' });
   renderer3d.setSize(window.innerWidth, window.innerHeight);
-  renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+  renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 1.75));
   renderer3d.shadowMap.enabled = true;
   renderer3d.shadowMap.type = THREE.PCFSoftShadowMap;
   renderer3d.toneMapping = THREE.ACESFilmicToneMapping;
-  renderer3d.toneMappingExposure = 1.20;
+  renderer3d.toneMappingExposure = 1.18;
 
-  /* Directional moonlight providing crisp highlights across the track and car livery */
-  const moonLight = new THREE.DirectionalLight(0x7598c4, 1.25);
-  moonLight.position.set(70, 190, 50);
-  moonLight.castShadow = true;
-  moonLight.shadow.mapSize.width = 1024;
-  moonLight.shadow.mapSize.height = 1024;
-  moonLight.shadow.camera.near = 10;
-  moonLight.shadow.camera.far = 450;
-  moonLight.shadow.camera.left = -180;
-  moonLight.shadow.camera.right = 180;
-  moonLight.shadow.camera.top = 180;
-  moonLight.shadow.camera.bottom = -180;
-  moonLight.shadow.bias = -0.0003;
-  scene.add(moonLight);
+  /* High intensity warm sunlight */
+  mainSunLight = new THREE.DirectionalLight(0xfff8ee, 3.2);
+  mainSunLight.position.set(140, 220, 100);
+  mainSunLight.castShadow = true;
+  mainSunLight.shadow.mapSize.width = 2048;
+  mainSunLight.shadow.mapSize.height = 2048;
+  mainSunLight.shadow.camera.near = 10;
+  mainSunLight.shadow.camera.far = 1200;
+  mainSunLight.shadow.camera.left = -300;
+  mainSunLight.shadow.camera.right = 300;
+  mainSunLight.shadow.camera.top = 300;
+  mainSunLight.shadow.camera.bottom = -300;
+  mainSunLight.shadow.bias = -0.0004;
+  scene.add(mainSunLight);
+  scene.add(mainSunLight.target);
 
-  /* Deep sky and turf hemisphere lighting */
-  const hemi = new THREE.HemisphereLight(0x384f73, 0x121e16, 0.95);
-  scene.add(hemi);
+  /* Sky blue above and warm green grass bounce below */
+  hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x55aa44, 1.35);
+  scene.add(hemiLight);
 
-  /* Soft ambient night fill ensuring grandstands and outfield are lightly visible */
-  const ambient = new THREE.AmbientLight(0x283852, 1.15);
-  scene.add(ambient);
+  /* Ambient daylight fill */
+  ambientLight = new THREE.AmbientLight(0xdbeafe, 0.85);
+  scene.add(ambientLight);
 
-  /* Vast night stadium outfield ground plane */
-  const groundGeo = new THREE.PlaneGeometry(1800, 1800);
+  /* Vast countryside grass ground plane */
+  const groundGeo = new THREE.PlaneGeometry(6000, 6000);
   const groundMat = new THREE.MeshStandardMaterial({
-    color: 0x12241b,
-    roughness: 0.92,
-    metalness: 0.02,
+    color: 0x3d8b37,
+    roughness: 0.90,
+    metalness: 0.04,
   });
-  const ground = new THREE.Mesh(groundGeo, groundMat);
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.y = -0.06;
-  ground.receiveShadow = true;
-  scene.add(ground);
+  groundMesh = new THREE.Mesh(groundGeo, groundMat);
+  groundMesh.rotation.x = -Math.PI / 2;
+  groundMesh.position.y = -0.06;
+  groundMesh.receiveShadow = true;
+  scene.add(groundMesh);
 
   clock = new THREE.Clock();
   window.addEventListener('resize', onResize);
@@ -3622,6 +3634,41 @@ function loadRaceIntoScene() {
     trackBounds.maxX = Math.max(trackBounds.maxX, p[0]);
     trackBounds.minZ = Math.min(trackBounds.minZ, -p[1]);
     trackBounds.maxZ = Math.max(trackBounds.maxZ, -p[1]);
+  }
+
+  /* Dynamic scene scaling for any circuit scale */
+  const spanX = trackBounds.maxX - trackBounds.minX;
+  const spanZ = trackBounds.maxZ - trackBounds.minZ;
+  const maxDim = Math.max(spanX, spanZ, 450);
+  const centerX = (trackBounds.minX + trackBounds.maxX) / 2;
+  const centerZ = (trackBounds.minZ + trackBounds.maxZ) / 2;
+
+  if (camera) {
+    camera.far = Math.max(4500, maxDim * 4.5);
+    camera.updateProjectionMatrix();
+  }
+
+  if (groundMesh) {
+    groundMesh.position.set(centerX, -0.06, centerZ);
+    const reqGroundSize = Math.max(8000, maxDim * 3.8);
+    groundMesh.scale.set(reqGroundSize / 6000, reqGroundSize / 6000, 1);
+  }
+
+  if (mainSunLight) {
+    mainSunLight.position.set(centerX + maxDim * 0.45, maxDim * 0.85, centerZ + maxDim * 0.35);
+    mainSunLight.target.position.set(centerX, 0, centerZ);
+    mainSunLight.target.updateMatrixWorld();
+    mainSunLight.shadow.camera.near = 10;
+    mainSunLight.shadow.camera.far = maxDim * 2.8;
+    mainSunLight.shadow.camera.left = -maxDim * 0.65;
+    mainSunLight.shadow.camera.right = maxDim * 0.65;
+    mainSunLight.shadow.camera.top = maxDim * 0.65;
+    mainSunLight.shadow.camera.bottom = -maxDim * 0.65;
+    mainSunLight.shadow.camera.updateProjectionMatrix();
+  }
+
+  if (scene && scene.fog) {
+    scene.fog.density = 0.65 / (maxDim * 3.5);
   }
 
   /* Build F1 Cars:
