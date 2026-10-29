@@ -3646,10 +3646,16 @@ function loadRaceIntoScene() {
 
   const trackId = replayA.track.meta?.id || replayA.track.meta?.track_id || 'CIRCUIT';
   const trackTag = document.getElementById('track-name-tag');
-  if (trackTag) trackTag.textContent = trackId.replace('synthetic_', '').toUpperCase();
+  if (trackTag) {
+    if (trackId.includes('monaco')) trackTag.textContent = 'MONACO GP';
+    else if (trackId.includes('spa')) trackTag.textContent = 'SPA-FRANCORCHAMPS';
+    else trackTag.textContent = trackId.replace('synthetic_', '').toUpperCase();
+  }
 
   if (trackId.includes('flowing')) currentTrackKey = 'flowing';
   else if (trackId.includes('tight')) currentTrackKey = 'tight';
+  else if (trackId.includes('monaco')) currentTrackKey = 'monaco';
+  else if (trackId.includes('spa')) currentTrackKey = 'spa';
   else if (trackId.includes('oval')) currentTrackKey = 'oval';
   if (trackSwitcher) trackSwitcher.value = currentTrackKey;
 
@@ -4279,7 +4285,9 @@ async function loadTrack(trackKey) {
   const trackFiles = {
     oval: ['./racer_a.json', './racer_b.json'],
     flowing: ['./flowing_a.json', './flowing_b.json'],
-    tight: ['./tight_a.json', './tight_b.json']
+    tight: ['./tight_a.json', './tight_b.json'],
+    monaco: ['./monaco_a.json', './monaco_b.json'],
+    spa: ['./spa_a.json', './spa_b.json']
   };
 
   const files = trackFiles[trackKey] || trackFiles.oval;

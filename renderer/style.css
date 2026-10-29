@@ -260,7 +260,7 @@ body:has(#hero-section:not(.hidden)) #hud-bottom {
   border: 1.5px solid rgba(255, 255, 255, 0.16);
   border-top: 2.5px solid var(--cyan); /* Cyan telemetry accent stripe along the top edge of the card */
   border-radius: 14px;
-  max-width: 630px;
+  max-width: 760px;
   width: 92%;
   padding: 22px 28px;
   text-align: center;
@@ -339,7 +339,7 @@ body:has(#hero-section:not(.hidden)) #hud-bottom {
 /* Interactive grid of track cards showing circuit icons and descriptions */
 .hero-track-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 10px;
 }
 
