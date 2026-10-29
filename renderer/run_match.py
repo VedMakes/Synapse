@@ -133,7 +133,8 @@ def main() -> None:
     frames_b = []
     active = [True, True]
     finish_step = [None, None]
-    status_result = ["running", "running"]
+    status_result = ["running", "running"]
+    info = {}
 
     for step in range(args.max_steps):
         act_a = sess_a.run(None, {"observations": obs[0:1]})[0] if active[0] else np.zeros((1, 2), dtype=np.float32)
@@ -149,8 +150,15 @@ def main() -> None:
                 "y": float(st["y"][0]),
                 "heading": float(st["heading"][0]),
                 "speed": float(st["speed"][0]),
+                "lateral_velocity": float(st["lateral_velocity"][0]),
+                "yaw_rate": float(st["yaw_rate"][0]),
                 "steer": float(st["steer"][0]),
+                "steering_command": float(act_a[0, 0]),
+                "throttle_brake": float(act_a[0, 1]),
+                "off_track": bool(info["off_track"][0]) if "off_track" in info else False,
                 "events": [],
+                "terminated": False,
+                "truncated": False,
             })
         if active[1]:
             frames_b.append({
@@ -159,8 +167,15 @@ def main() -> None:
                 "y": float(st["y"][1]),
                 "heading": float(st["heading"][1]),
                 "speed": float(st["speed"][1]),
+                "lateral_velocity": float(st["lateral_velocity"][1]),
+                "yaw_rate": float(st["yaw_rate"][1]),
                 "steer": float(st["steer"][1]),
+                "steering_command": float(act_b[0, 0]),
+                "throttle_brake": float(act_b[0, 1]),
+                "off_track": bool(info["off_track"][1]) if "off_track" in info else False,
                 "events": [],
+                "terminated": False,
+                "truncated": False,
             })
 
         obs, rewards, term, trunc, info = env.step(actions, active_mask=np.array(active, dtype=bool))

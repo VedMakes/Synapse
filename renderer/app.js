@@ -71,16 +71,27 @@ function sampleAtTime(frames, tickHz, timeS) {
   const a = frames[tickA];
   const b = frames[tickB];
 
+  const aTb = Number.isFinite(a.throttle_brake) ? a.throttle_brake : 0;
+  const bTb = Number.isFinite(b.throttle_brake) ? b.throttle_brake : 0;
+  const aYaw = Number.isFinite(a.yaw_rate) ? a.yaw_rate : 0;
+  const bYaw = Number.isFinite(b.yaw_rate) ? b.yaw_rate : 0;
+  const aLat = Number.isFinite(a.lateral_velocity) ? a.lateral_velocity : 0;
+  const bLat = Number.isFinite(b.lateral_velocity) ? b.lateral_velocity : 0;
+  const aSpd = Number.isFinite(a.speed) ? a.speed : 0;
+  const bSpd = Number.isFinite(b.speed) ? b.speed : 0;
+  const aStr = Number.isFinite(a.steer) ? a.steer : 0;
+  const bStr = Number.isFinite(b.steer) ? b.steer : 0;
+
   return {
     x: a.x + (b.x - a.x) * frac,
     y: a.y + (b.y - a.y) * frac,
     heading: lerpAngle(a.heading, b.heading, frac),
-    speed: a.speed + (b.speed - a.speed) * frac,
-    steer: a.steer + (b.steer - a.steer) * frac,
-    throttle_brake: a.throttle_brake + (b.throttle_brake - a.throttle_brake) * frac,
-    yaw_rate: a.yaw_rate + (b.yaw_rate - a.yaw_rate) * frac,
-    lateral_velocity: a.lateral_velocity + (b.lateral_velocity - a.lateral_velocity) * frac,
-    off_track: a.off_track,
+    speed: aSpd + (bSpd - aSpd) * frac,
+    steer: aStr + (bStr - aStr) * frac,
+    throttle_brake: aTb + (bTb - aTb) * frac,
+    yaw_rate: aYaw + (bYaw - aYaw) * frac,
+    lateral_velocity: aLat + (bLat - aLat) * frac,
+    off_track: Boolean(a.off_track),
     events: a.events || [],
     terminated: a.terminated || false,
     truncated: a.truncated || false,
