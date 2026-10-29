@@ -75,8 +75,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--policy-budget-ms",
         type=float,
-        default=50.0,
-        help="Inference deadline budget in milliseconds (default: 50.0)",
+        default=250.0,
+        help="Inference deadline budget in milliseconds (default: 250.0)",
     )
     parser.add_argument(
         "--cooldown-seconds",
@@ -151,12 +151,20 @@ def main() -> None:
     renderer_url = f"http://127.0.0.1:8765/?live={ws_url}"
 
     def announce(endpoint: str) -> None:
-        print(f"\n[LIVE TELECAST READY]")
-        print(f"  WebSocket Endpoint: {endpoint}")
-        print(f"  Renderer 3D URL:    {renderer_url}")
-        print("  Press Ctrl+C to abort at any time.\n")
+        print(f"\n[LIVE TELECAST READY]", flush=True)
+        print(f"  WebSocket Endpoint: {endpoint}", flush=True)
+        print(f"  Renderer 3D URL:    {renderer_url}", flush=True)
+        print("  Press Ctrl+C to abort at any time.\n", flush=True)
         if args.open_browser:
             webbrowser.open(renderer_url)
+        print("  Awaiting 3D viewer connection before dropping green flag...", flush=True)
+        for _ in range(80):
+            if publisher.connected_clients > 0:
+                print("  3D viewer connected! Green flag sequence in 1.5s...", flush=True)
+                time.sleep(1.5)
+                return
+            time.sleep(0.1)
+        print("  Starting race clock...", flush=True)
 
     try:
         report = run_live_onnx_race(

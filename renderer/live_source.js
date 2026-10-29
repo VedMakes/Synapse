@@ -72,12 +72,19 @@ export function parseLiveMessage(raw, previous = {}) {
     }
     return { kind, message, runId: message.run_id, seq: previous.seq ?? -1 };
   }
-  if (!Array.isArray(message.cars) || message.cars.length < 1 || message.cars.length > 4) {
-    throw new Error('Live state cars are invalid');
+  if (kind === 'synapse.live.state') {
+    if (!Array.isArray(message.cars) || message.cars.length < 1 || message.cars.length > 4) {
+      throw new Error('Live state cars are invalid');
+    }
+    message.cars.forEach(validateCar);
   }
-  message.cars.forEach(validateCar);
-  if (kind === 'synapse.live.end' && !Array.isArray(message.results)) {
-    throw new Error('Live end results are invalid');
+  if (kind === 'synapse.live.end') {
+    if (!Array.isArray(message.results)) {
+      throw new Error('Live end results are invalid');
+    }
+    if (Array.isArray(message.cars)) {
+      message.cars.forEach(validateCar);
+    }
   }
   return { kind, message, runId: message.run_id, seq: message.seq };
 }

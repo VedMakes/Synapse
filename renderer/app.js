@@ -5771,6 +5771,29 @@ async function autoInit() {
   /* Safety timer guaranteeing the loading overlay will never stay stuck on screen */
   const safetyTimer = setTimeout(dismissLoader, 1500);
 
+  const matchQuery = new URLSearchParams(window.location.search).get('match');
+  if (matchQuery) {
+    try {
+      const [resA, resB] = await Promise.all([
+        fetch('match_a.json'),
+        fetch('match_b.json'),
+      ]);
+      if (resA.ok && resB.ok) {
+        replayA = parseReplay(await resA.json());
+        replayB = parseReplay(await resB.json());
+        if (heroSection) heroSection.classList.add('hidden');
+        document.body.classList.remove('hero-active');
+        isHeroMode = false;
+        clearTimeout(safetyTimer);
+        startRace();
+        showAlert('FIA KNOCKOUT MATCH LOADED — GREEN FLAG', 'info', 3000);
+        return;
+      }
+    } catch (e) {
+      console.warn('Match replay load failed:', e);
+    }
+  }
+
   /* 1. Check embedded data for standalone bundled HTML distributions */
   const dataA = document.getElementById('replay-data-a');
   const dataB = document.getElementById('replay-data-b');
