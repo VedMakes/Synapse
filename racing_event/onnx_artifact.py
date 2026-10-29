@@ -182,7 +182,7 @@ def load_onnx_artifact(path: str | Path) -> OnnxPolicyArtifact:
     for value in (*contract.track_hashes, contract.config_hash):
         _require_hash(value, "contract hash")
     validate_model(contents["model.onnx"], contract.observation.size)
-    if not (ort.__version__ == RUNTIME_VERSION or ort.__version__.startswith("1.")):
+    if ort.__version__ != RUNTIME_VERSION:
         raise ValueError(f"ONNX runtime must be pinned to {RUNTIME_VERSION}")
     options = ort.SessionOptions()
     options.intra_op_num_threads = options.inter_op_num_threads = 1
