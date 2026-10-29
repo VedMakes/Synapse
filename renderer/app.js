@@ -2534,6 +2534,468 @@ function buildGrandstands(track, trackCenter) {
  * Here I orchestrate the asphalt surface, dark rubberized racing line groove laid down by slick tires,
  * gravel traps, royal blue runoff areas, safety barriers, curbs, gantry, lighting, and grandstands.
  */
+
+/*
+ * Procedural Facade Texture for Monte Carlo Luxury High Rise Buildings
+ * Generates warm golden illuminated penthouse windows, cyan corporate suites, and balconies.
+ */
+let buildingFacadeTexCached = null;
+function getBuildingFacadeTexture() {
+  if (buildingFacadeTexCached) return buildingFacadeTexCached;
+  const canvas = document.createElement('canvas');
+  canvas.width = 512;
+  canvas.height = 512;
+  const ctx = canvas.getContext('2d');
+
+  /* Warm Mediterranean architectural sandstone tone */
+  ctx.fillStyle = '#1e2430';
+  ctx.fillRect(0, 0, 512, 512);
+
+  /* Horizontal concrete slab floor lines */
+  ctx.fillStyle = '#2d3748';
+  for (let y = 0; y < 512; y += 32) {
+    ctx.fillRect(0, y, 512, 4);
+  }
+
+  /* Grid of architectural window panes with varied night illumination */
+  for (let y = 6; y < 512; y += 32) {
+    for (let x = 8; x < 512; x += 24) {
+      const rand = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+      const seed = rand - Math.floor(rand);
+
+      if (seed > 0.45) {
+        /* Warm golden residential penthouse light */
+        ctx.fillStyle = '#ffd166';
+        ctx.fillRect(x, y, 16, 22);
+      } else if (seed > 0.25) {
+        /* Cool modern azure corporate architectural light */
+        ctx.fillStyle = '#64dfdf';
+        ctx.fillRect(x, y, 16, 22);
+      } else {
+        /* Dark unlit window glass with subtle blue reflection */
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(x, y, 16, 22);
+      }
+    }
+  }
+
+  buildingFacadeTexCached = new THREE.CanvasTexture(canvas);
+  buildingFacadeTexCached.wrapS = THREE.RepeatWrapping;
+  buildingFacadeTexCached.wrapT = THREE.RepeatWrapping;
+  buildingFacadeTexCached.colorSpace = THREE.SRGBColorSpace;
+  return buildingFacadeTexCached;
+}
+
+/*
+ * Themed Infield and World Environment Builder
+ * Tailors world decoration specifically for Monaco, Spa, and standard Grand Prix circuits.
+ */
+function buildThemedWorldEnvironment(track, trackCenter) {
+  const group = new THREE.Group();
+  const n = track.centerline.length;
+  const trackId = track.meta?.id || currentTrackKey || 'oval';
+
+  function pointInPoly(x, y, poly) {
+    let inside = false;
+    for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+      const xi = poly[i][0], yi = poly[i][1];
+      const xj = poly[j][0], yj = poly[j][1];
+      const intersect = ((yi > y) !== (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi);
+      if (intersect) inside = !inside;
+    }
+    return inside;
+  }
+
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of track.centerline) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  const spanX = maxX - minX;
+  const spanY = maxY - minY;
+
+  if (trackId === 'monaco') {
+    /* 
+     * MONACO MONTE CARLO GRAND PRIX ENVIRONMENT
+     * 1. Port Hercule Yacht Marina with luxury superyachts moored along the Mediterranean basin
+     * 2. Monte Carlo luxury pastel high rise architecture with illuminated penthouse windows
+     * 3. Mediterranean coastal palm trees and Italian columnar cypress trees
+     * 4. F1 team hospitality stations with VIP terraces
+     */
+
+    /* Water basin for Port Hercule marina in harbour infield */
+    const waterW = 380;
+    const waterH = 260;
+    const waterGeo = new THREE.PlaneGeometry(waterW, waterH);
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x011f33,
+      roughness: 0.12,
+      metalness: 0.88,
+      emissive: 0x001d2d,
+      emissiveIntensity: 0.35,
+    });
+    const waterMesh = new THREE.Mesh(waterGeo, waterMat);
+    waterMesh.rotation.x = -Math.PI / 2;
+    waterMesh.position.set(-130, 0.015, 490);
+    group.add(waterMesh);
+
+    /* Mooring wooden pontoons */
+    const pierMat = new THREE.MeshStandardMaterial({ color: 0x1f1610, roughness: 0.85, metalness: 0.15 });
+    const bollardMat = new THREE.MeshBasicMaterial({ color: 0xffaa22 });
+    const pierGeo = new THREE.BoxGeometry(4.5, 0.35, 140);
+    const bollardGeo = new THREE.CylinderGeometry(0.12, 0.12, 0.45, 6);
+
+    const pierOffsets = [-60, -10, 40, 90];
+    for (let pIdx = 0; pIdx < pierOffsets.length; pIdx++) {
+      const pier = new THREE.Mesh(pierGeo, pierMat);
+      pier.position.set(-130 + pierOffsets[pIdx], 0.12, 490);
+      group.add(pier);
+
+      /* Mooring bollards with subtle amber beacon lights */
+      for (let bz = -60; bz <= 60; bz += 25) {
+        const bollard = new THREE.Mesh(bollardGeo, bollardMat);
+        bollard.position.set(-130 + pierOffsets[pIdx] + 2.0, 0.45, 490 + bz);
+        group.add(bollard);
+      }
+    }
+
+    /* Luxury Superyachts in Port Hercule */
+    const yachtCount = 14;
+    const hullGeo = new THREE.BoxGeometry(18.0, 3.2, 5.8);
+    const bowGeo = new THREE.CylinderGeometry(0.1, 2.9, 4.2, 4);
+    const cabinGeo = new THREE.BoxGeometry(10.5, 2.5, 4.6);
+    const bridgeGeo = new THREE.BoxGeometry(6.2, 1.8, 3.8);
+    const mastGeo = new THREE.CylinderGeometry(0.08, 0.12, 4.8, 6);
+    const glowGeo = new THREE.PlaneGeometry(6.5, 3.5);
+
+    const yachtWhiteMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.18, metalness: 0.15 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x08131e, roughness: 0.10, metalness: 0.90 });
+    const underwaterGlowMat = new THREE.MeshBasicMaterial({
+      color: 0x00f0ff,
+      transparent: true,
+      opacity: 0.70,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+
+    for (let yIdx = 0; yIdx < yachtCount; yIdx++) {
+      const col = yIdx % 4;
+      const row = Math.floor(yIdx / 4);
+      const yX = -130 + pierOffsets[col] + (row % 2 === 0 ? 9.5 : -9.5);
+      const yZ = 440 + row * 38;
+
+      const yachtGroup = new THREE.Group();
+      yachtGroup.position.set(yX, 1.4, yZ);
+      yachtGroup.rotation.y = (col % 2 === 0) ? Math.PI / 2 : -Math.PI / 2;
+
+      /* Hull */
+      const hullMesh = new THREE.Mesh(hullGeo, yachtWhiteMat);
+      yachtGroup.add(hullMesh);
+
+      /* Bow */
+      const bowMesh = new THREE.Mesh(bowGeo, yachtWhiteMat);
+      bowMesh.position.set(10.8, 0, 0);
+      bowMesh.rotation.z = -Math.PI / 2;
+      bowMesh.rotation.y = Math.PI / 4;
+      yachtGroup.add(bowMesh);
+
+      /* Cabin levels */
+      const cabinMesh = new THREE.Mesh(cabinGeo, yachtWhiteMat);
+      cabinMesh.position.set(-1.2, 2.4, 0);
+      yachtGroup.add(cabinMesh);
+
+      const bridgeMesh = new THREE.Mesh(bridgeGeo, glassMat);
+      bridgeMesh.position.set(0.4, 4.2, 0);
+      yachtGroup.add(bridgeMesh);
+
+      /* Radar mast */
+      const mastMesh = new THREE.Mesh(mastGeo, yachtWhiteMat);
+      mastMesh.position.set(-1.8, 6.2, 0);
+      yachtGroup.add(mastMesh);
+
+      /* Underwater stern LED glow illuminating the dark harbour water */
+      const glowMesh = new THREE.Mesh(glowGeo, underwaterGlowMat);
+      glowMesh.rotation.x = -Math.PI / 2;
+      glowMesh.position.set(-9.2, -1.2, 0);
+      yachtGroup.add(glowMesh);
+
+      group.add(yachtGroup);
+    }
+
+    /* Monte Carlo Luxury High Rise Buildings */
+    const facadeTex = getBuildingFacadeTexture();
+    const bldgMat = new THREE.MeshStandardMaterial({
+      map: facadeTex,
+      emissive: 0xffffff,
+      emissiveMap: facadeTex,
+      emissiveIntensity: 0.75,
+      roughness: 0.40,
+      metalness: 0.30,
+    });
+    const roofTrimMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff1122 });
+
+    const stepGrid = 42;
+    let bldgCount = 0;
+    for (let x = minX - 40; x <= maxX + 40; x += stepGrid) {
+      for (let y = minY - 40; y <= maxY + 40; y += stepGrid) {
+        if (bldgCount >= 34) break;
+        let minTrackDist = Infinity;
+        for (let i = 0; i < n; i += 4) {
+          const d = Math.hypot(x - track.centerline[i][0], y - track.centerline[i][1]);
+          if (d < minTrackDist) minTrackDist = d;
+        }
+
+        /* Skip the yacht marina basin zone */
+        const inMarina = (x > -230 && x < -20 && -y > 380 && -y < 600);
+        if (inMarina) continue;
+
+        if (minTrackDist > 25.0) {
+          const isInside = pointInPoly(x, y, track.centerline);
+          const isSafeOutfield = (!isInside && minTrackDist < 120.0);
+
+          if (isInside || isSafeOutfield) {
+            const bW = 20.0 + (bldgCount % 3) * 5.0;
+            const bD = 18.0 + (bldgCount % 2) * 4.0;
+            const bH = 32.0 + ((bldgCount * 7) % 36);
+
+            const bldgGeo = new THREE.BoxGeometry(bW, bH, bD);
+            const bldgMesh = new THREE.Mesh(bldgGeo, bldgMat);
+            bldgMesh.position.set(x, bH / 2, -y);
+            group.add(bldgMesh);
+
+            /* Glowing neon rooftop border trim */
+            const trimGeo = new THREE.BoxGeometry(bW + 0.3, 0.4, bD + 0.3);
+            const trimMesh = new THREE.Mesh(trimGeo, roofTrimMat);
+            trimMesh.position.set(x, bH + 0.2, -y);
+            group.add(trimMesh);
+
+            /* Aviation warning beacon light on highest towers */
+            if (bH > 48.0) {
+              const beaconGeo = new THREE.SphereGeometry(0.5, 6, 6);
+              const beaconMesh = new THREE.Mesh(beaconGeo, beaconMat);
+              beaconMesh.position.set(x, bH + 3.0, -y);
+              group.add(beaconMesh);
+            }
+
+            bldgCount++;
+          }
+        }
+      }
+    }
+
+    /* Mediterranean Palm Trees and Columnar Cypress Trees */
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x4a3728, roughness: 0.9 });
+    const palmFrondMat = new THREE.MeshStandardMaterial({ color: 0x1d5c2b, roughness: 0.6, side: THREE.DoubleSide });
+    const cypressMat = new THREE.MeshStandardMaterial({ color: 0x143d22, roughness: 0.75 });
+
+    const palmTrunkGeo = new THREE.CylinderGeometry(0.22, 0.38, 8.5, 6);
+    const frondGeo = new THREE.PlaneGeometry(3.6, 1.2);
+    const cypressGeo = new THREE.CylinderGeometry(0.12, 1.4, 11.5, 7);
+
+    for (let i = 0; i < n; i += 18) {
+      const bL = track.barrier_left[i];
+      const cp = track.centerline[i];
+      const normX = bL[0] - cp[0];
+      const normY = bL[1] - cp[1];
+      const len = Math.hypot(normX, normY) || 1;
+
+      const treeX = bL[0] + (normX / len) * 7.5;
+      const treeZ = -(bL[1] + (normY / len) * 7.5);
+
+      if (i % 36 === 0) {
+        /* Palm tree */
+        const trunkMesh = new THREE.Mesh(palmTrunkGeo, trunkMat);
+        trunkMesh.position.set(treeX, 4.25, treeZ);
+        trunkMesh.rotation.z = (Math.sin(i) * 0.12);
+        group.add(trunkMesh);
+
+        for (let f = 0; f < 6; f++) {
+          const frond = new THREE.Mesh(frondGeo, palmFrondMat);
+          const angle = (f / 6) * Math.PI * 2;
+          frond.position.set(treeX + Math.cos(angle) * 1.4, 8.2, treeZ + Math.sin(angle) * 1.4);
+          frond.rotation.set(-0.35, angle, 0);
+          group.add(frond);
+        }
+      } else {
+        /* Italian Cypress */
+        const cypressMesh = new THREE.Mesh(cypressGeo, cypressMat);
+        cypressMesh.position.set(treeX, 5.75, treeZ);
+        group.add(cypressMesh);
+      }
+    }
+
+  } else if (trackId === 'spa') {
+    /* 
+     * SPA-FRANCORCHAMPS GRAND PRIX ENVIRONMENT
+     * 1. Dense Ardennes evergreen pine forest groves encircling the circuit and filling the infield
+     * 2. F1 team logistics village with articulated transport trailers and paddock marquees
+     * 3. Trackside safety medical units and wooden marshal towers
+     * 4. Broadcast communications uplink dishes
+     */
+
+    const trunkMat = new THREE.MeshStandardMaterial({ color: 0x3d2817, roughness: 0.95 });
+    const pineCrownMat1 = new THREE.MeshStandardMaterial({ color: 0x0c2415, roughness: 0.85 });
+    const pineCrownMat2 = new THREE.MeshStandardMaterial({ color: 0x133820, roughness: 0.85 });
+    const pineCrownMat3 = new THREE.MeshStandardMaterial({ color: 0x1b4a2c, roughness: 0.85 });
+
+    const trunkGeo = new THREE.CylinderGeometry(0.35, 0.65, 14.0, 6);
+    const crown1Geo = new THREE.ConeGeometry(5.2, 5.8, 7);
+    const crown2Geo = new THREE.ConeGeometry(3.8, 5.2, 7);
+    const crown3Geo = new THREE.ConeGeometry(2.4, 4.6, 7);
+
+    /* Sample infield and outfield forest grid spots */
+    const stepGrid = 68;
+    const treePositions = [];
+
+    for (let x = minX - 30; x <= maxX + 30; x += stepGrid) {
+      for (let y = minY - 30; y <= maxY + 30; y += stepGrid) {
+        let minTrackDist = Infinity;
+        for (let i = 0; i < n; i += 4) {
+          const d = Math.hypot(x - track.centerline[i][0], y - track.centerline[i][1]);
+          if (d < minTrackDist) minTrackDist = d;
+        }
+
+        if (minTrackDist > 24.0) {
+          const isInside = pointInPoly(x, y, track.centerline);
+          const isOutfieldRidge = (!isInside && minTrackDist < 160.0);
+
+          if (isInside || isOutfieldRidge) {
+            /* Create natural clustered grove variations */
+            treePositions.push([x, -y]);
+            treePositions.push([x + 14.0, -y + 12.0]);
+            treePositions.push([x - 12.0, -y + 16.0]);
+          }
+        }
+      }
+    }
+
+    const totalTrees = Math.min(260, treePositions.length);
+    const trunkInst = new THREE.InstancedMesh(trunkGeo, trunkMat, totalTrees);
+    const crown1Inst = new THREE.InstancedMesh(crown1Geo, pineCrownMat1, totalTrees);
+    const crown2Inst = new THREE.InstancedMesh(crown2Geo, pineCrownMat2, totalTrees);
+    const crown3Inst = new THREE.InstancedMesh(crown3Geo, pineCrownMat3, totalTrees);
+
+    const dummy = new THREE.Object3D();
+
+    for (let t = 0; t < totalTrees; t++) {
+      const [tx, tz] = treePositions[t];
+      const scaleRand = 0.85 + (t % 5) * 0.08;
+
+      /* Trunk */
+      dummy.position.set(tx, 7.0 * scaleRand, tz);
+      dummy.scale.set(scaleRand, scaleRand, scaleRand);
+      dummy.rotation.set(0, (t * 1.3), 0);
+      dummy.updateMatrix();
+      trunkInst.setMatrixAt(t, dummy.matrix);
+
+      /* Lower foliage tier */
+      dummy.position.set(tx, 7.5 * scaleRand, tz);
+      dummy.updateMatrix();
+      crown1Inst.setMatrixAt(t, dummy.matrix);
+
+      /* Middle foliage tier */
+      dummy.position.set(tx, 11.2 * scaleRand, tz);
+      dummy.updateMatrix();
+      crown2Inst.setMatrixAt(t, dummy.matrix);
+
+      /* Top foliage tier */
+      dummy.position.set(tx, 14.8 * scaleRand, tz);
+      dummy.updateMatrix();
+      crown3Inst.setMatrixAt(t, dummy.matrix);
+    }
+
+    trunkInst.instanceMatrix.needsUpdate = true;
+    crown1Inst.instanceMatrix.needsUpdate = true;
+    crown2Inst.instanceMatrix.needsUpdate = true;
+    crown3Inst.instanceMatrix.needsUpdate = true;
+
+    group.add(trunkInst);
+    group.add(crown1Inst);
+    group.add(crown2Inst);
+    group.add(crown3Inst);
+
+    /* F1 Team Logistics Village and Paddock Trailers in Spa central plateau */
+    const trailerMatCyan = new THREE.MeshStandardMaterial({ color: 0x00f0ff, roughness: 0.35, metalness: 0.65 });
+    const trailerMatPapaya = new THREE.MeshStandardMaterial({ color: 0xff6600, roughness: 0.35, metalness: 0.65 });
+    const trailerMatDark = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.35, metalness: 0.75 });
+    const marqueeMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.40, emissive: 0x1a2636, emissiveIntensity: 0.25 });
+
+    const trailerGeo = new THREE.BoxGeometry(14.0, 3.8, 2.8);
+    const marqueeGeo = new THREE.BoxGeometry(18.0, 4.2, 12.0);
+
+    const paddockCenterX = 220;
+    const paddockCenterZ = 620;
+
+    const trailerColors = [trailerMatCyan, trailerMatPapaya, trailerMatDark, trailerMatDark];
+    for (let tr = 0; tr < 4; tr++) {
+      const trailer = new THREE.Mesh(trailerGeo, trailerColors[tr]);
+      trailer.position.set(paddockCenterX + tr * 5.5, 1.9, paddockCenterZ);
+      group.add(trailer);
+    }
+
+    /* Hospitality marquee tent */
+    const marquee = new THREE.Mesh(marqueeGeo, marqueeMat);
+    marquee.position.set(paddockCenterX + 8.0, 2.1, paddockCenterZ + 18.0);
+    group.add(marquee);
+
+    /* Broadcast satellite dish and telecommunications antenna mast */
+    const commPoleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.85 });
+    const commBeaconMat = new THREE.MeshBasicMaterial({ color: 0xff1122 });
+    const dishMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.3 });
+
+    const commPoleGeo = new THREE.CylinderGeometry(0.25, 0.45, 28.0, 8);
+    const dishGeo = new THREE.CylinderGeometry(2.4, 0.4, 0.8, 12);
+    const commBeaconGeo = new THREE.SphereGeometry(0.45, 6, 6);
+
+    const commTower = new THREE.Mesh(commPoleGeo, commPoleMat);
+    commTower.position.set(paddockCenterX - 18.0, 14.0, paddockCenterZ + 10.0);
+    group.add(commTower);
+
+    const satelliteDish = new THREE.Mesh(dishGeo, dishMat);
+    satelliteDish.position.set(paddockCenterX - 18.0, 22.0, paddockCenterZ + 10.0);
+    satelliteDish.rotation.set(0.65, 0.4, 0);
+    group.add(satelliteDish);
+
+    const commBeacon = new THREE.Mesh(commBeaconGeo, commBeaconMat);
+    commBeacon.position.set(paddockCenterX - 18.0, 28.4, paddockCenterZ + 10.0);
+    group.add(commBeacon);
+
+  } else {
+    /* 
+     * STANDARD INFIELD ENVIRONMENT (Oval, Flowing, and Tight Loops)
+     * F1 Pit lane garage complex, pit wall gantry, and decorative landscaping
+     */
+
+    const garageMat = new THREE.MeshStandardMaterial({ color: 0x16202e, roughness: 0.45, metalness: 0.65 });
+    const pitDoorMat = new THREE.MeshBasicMaterial({ color: 0x00f0ff });
+    const pitRoofMat = new THREE.MeshStandardMaterial({ color: 0x0d141e, roughness: 0.5 });
+
+    const bldgW = Math.min(85.0, spanX * 0.45);
+    const bldgH = 5.2;
+    const bldgD = 12.0;
+
+    const garageGeo = new THREE.BoxGeometry(bldgW, bldgH, bldgD);
+    const garageMesh = new THREE.Mesh(garageGeo, garageMat);
+    garageMesh.position.set(trackCenter.x, bldgH / 2, -trackCenter.y);
+    group.add(garageMesh);
+
+    /* 6 Pit box bay doors with glowing neon cyan trim */
+    const doorGeo = new THREE.PlaneGeometry(bldgW / 8.5, 3.2);
+    for (let d = -3; d <= 3; d++) {
+      if (d === 0) continue;
+      const doorMesh = new THREE.Mesh(doorGeo, pitDoorMat);
+      doorMesh.position.set(trackCenter.x + d * (bldgW / 7.5), 1.6, -trackCenter.y + bldgD / 2 + 0.05);
+      group.add(doorMesh);
+    }
+  }
+
+  return group;
+}
+
 function buildTrackScene(track) {
   const group = new THREE.Group();
 
@@ -2639,6 +3101,9 @@ function buildTrackScene(track) {
 
   /* 14. Hazy Red Asphalt Embedded Ground Lights */
   group.add(buildAsphaltHazeLights(track));
+
+  /* 15. Themed Infield and Trackside World Environments (Monaco Port Hercule yacht marina and Monte Carlo architecture, Spa Ardennes pine forests and F1 logistics village) */
+  group.add(buildThemedWorldEnvironment(track, trackCenter));
 
   return group;
 }
