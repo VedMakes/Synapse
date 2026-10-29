@@ -1439,7 +1439,13 @@ function buildTracksidePosters(track, trackCenter) {
     { poly: track.barrier_right, sideOffset: 0.12, isLeft: false }
   ];
 
-  const step = Math.max(8, Math.floor(n / 16));
+  let totalTrackLength = 0;
+  for (let i = 0; i < n; i++) {
+    const next = track.centerline[(i + 1) % n];
+    totalTrackLength += Math.hypot(next[0] - track.centerline[i][0], next[1] - track.centerline[i][1]);
+  }
+  const posterTargetPerSide = Math.max(20, Math.min(260, Math.floor(totalTrackLength / 24)));
+  const step = Math.max(1, Math.round(n / posterTargetPerSide));
   const boardData = [];
   let boardIndex = 0;
 
@@ -1578,7 +1584,14 @@ function buildTracksidePosters(track, trackCenter) {
 function buildStadiumLights(track, trackCenter) {
   const group = new THREE.Group();
   const n = track.centerline.length;
-  const step = Math.max(8, Math.floor(n / 14));
+
+  let totalTrackLength = 0;
+  for (let i = 0; i < n; i++) {
+    const next = track.centerline[(i + 1) % n];
+    totalTrackLength += Math.hypot(next[0] - track.centerline[i][0], next[1] - track.centerline[i][1]);
+  }
+  const towerTarget = Math.max(10, Math.min(55, Math.floor(totalTrackLength / 75)));
+  const step = Math.max(1, Math.round(n / towerTarget));
 
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.85, roughness: 0.3 });
   const platformMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.7, roughness: 0.4 });
@@ -1789,7 +1802,14 @@ function getStudFlareTexture() {
 function buildTracksideLightingPoles(track, trackCenter) {
   const group = new THREE.Group();
   const n = track.centerline.length;
-  const step = Math.max(3, Math.floor(n / 32));
+
+  let totalTrackLength = 0;
+  for (let i = 0; i < n; i++) {
+    const next = track.centerline[(i + 1) % n];
+    totalTrackLength += Math.hypot(next[0] - track.centerline[i][0], next[1] - track.centerline[i][1]);
+  }
+  const poleTarget = Math.max(24, Math.min(280, Math.floor(totalTrackLength / 24)));
+  const step = Math.max(1, Math.round(n / poleTarget));
 
   const poleMat = new THREE.MeshStandardMaterial({ color: 0x0c1322, metalness: 0.85, roughness: 0.3 });
   const headMat = new THREE.MeshStandardMaterial({ color: 0x060a14, roughness: 0.4 });
@@ -1970,7 +1990,14 @@ function buildTracksideLightingPoles(track, trackCenter) {
 function buildAsphaltHazeLights(track) {
   const group = new THREE.Group();
   const n = track.centerline.length;
-  const step = Math.max(1, Math.floor(n / 65));
+
+  let totalTrackLength = 0;
+  for (let i = 0; i < n; i++) {
+    const next = track.centerline[(i + 1) % n];
+    totalTrackLength += Math.hypot(next[0] - track.centerline[i][0], next[1] - track.centerline[i][1]);
+  }
+  const targetLights = Math.max(40, Math.min(500, Math.floor(totalTrackLength / 8)));
+  const step = Math.max(1, Math.round(n / targetLights));
 
   const groundHazeMat = new THREE.MeshBasicMaterial({
     map: getRedHazeTexture(),
@@ -2131,7 +2158,6 @@ function buildAsphaltHazeLights(track) {
 function buildGrandstands(track, trackCenter) {
   const group = new THREE.Group();
   const n = track.centerline.length;
-  const step = Math.max(6, Math.floor(n / 16));
 
   const concreteMat = new THREE.MeshStandardMaterial({ color: 0x4a5d78, roughness: 0.45, metalness: 0.3 });
   const wallMat = new THREE.MeshStandardMaterial({ color: 0x1e2c3d, roughness: 0.5, metalness: 0.4 });
@@ -2188,8 +2214,15 @@ function buildGrandstands(track, trackCenter) {
   const pillarGeo = new THREE.CylinderGeometry(0.22, 0.22, 7.4, 8);
   const seatBenchGeo = new THREE.BoxGeometry(16.4, 0.24, 0.65);
 
-  const margin = Math.max(16, Math.floor(n / 24));
-  const step = Math.max(8, Math.floor(n / 16));
+  let totalTrackLength = 0;
+  for (let i = 0; i < n; i++) {
+    const next = track.centerline[(i + 1) % n];
+    totalTrackLength += Math.hypot(next[0] - track.centerline[i][0], next[1] - track.centerline[i][1]);
+  }
+
+  const standTarget = Math.max(14, Math.min(75, Math.floor(totalTrackLength / 45)));
+  const step = Math.max(1, Math.round(n / standTarget));
+  const margin = Math.max(8, Math.floor(n / 32));
   const validStands = [];
 
   for (let i = margin; i < n - margin; i += step) {
@@ -2204,23 +2237,43 @@ function buildGrandstands(track, trackCenter) {
     const normX = outerP[0] - cp[0];
     const normY = outerP[1] - cp[1];
     const normLen = Math.hypot(normX, normY) || 1;
+    const nx = normX / normLen;
+    const ny = normY / normLen;
 
-    const posX = outerP[0] + (normX / normLen) * 20.0;
-    const posZ = -(outerP[1] + (normY / normLen) * 20.0);
+    const posX = outerP[0] + nx * 22.0;
+    const posZ = -(outerP[1] + ny * 22.0);
 
-    let minTrackDist = Infinity;
-    for (let k = 0; k < n; k += 4) {
-      const d = Math.hypot(posX - track.centerline[k][0], -posZ - track.centerline[k][1]);
-      if (d < minTrackDist) minTrackDist = d;
+    const standAngle = Math.atan2(nx, -ny) + Math.PI;
+    const totalAngle = standAngle;
+
+    const cosA = Math.cos(totalAngle);
+    const sinA = Math.sin(totalAngle);
+
+    let collides = false;
+    const testOffsets = [
+      [0, 0],
+      [-9.2, -3.2], [9.2, -3.2],
+      [-9.2, 3.8], [9.2, 3.8]
+    ];
+
+    for (const [ox, oz] of testOffsets) {
+      const wx = posX + ox * cosA - oz * sinA;
+      const wz = posZ + ox * sinA + oz * cosA;
+
+      for (let k = 0; k < n; k += 4) {
+        const dCenter = Math.hypot(wx - track.centerline[k][0], -wz - track.centerline[k][1]);
+        if (dCenter < 17.0) { collides = true; break; }
+        const dBL = Math.hypot(wx - track.barrier_left[k][0], -wz - track.barrier_left[k][1]);
+        if (dBL < 4.0) { collides = true; break; }
+        const dBR = Math.hypot(wx - track.barrier_right[k][0], -wz - track.barrier_right[k][1]);
+        if (dBR < 4.0) { collides = true; break; }
+      }
+      if (collides) break;
     }
-    if (minTrackDist < 18.0) continue;
 
-    const trackPtX = cp[0];
-    const trackPtZ = -cp[1];
-    const standAngle = Math.atan2(posX - trackPtX, posZ - trackPtZ);
-    const totalAngle = standAngle + Math.PI;
-
-    validStands.push({ posX, posZ, totalAngle });
+    if (!collides) {
+      validStands.push({ posX, posZ, totalAngle });
+    }
   }
 
   const numStands = validStands.length;
@@ -3103,7 +3156,7 @@ function buildF1CarModel(liveryColor, accentColor, carNumber = '1') {
 /* Main Application State */
 
 let scene, camera, renderer3d, clock;
-let mainSunLight = null, hemiLight = null, ambientLight = null, groundMesh = null;
+let mainSunLight = null, hemiLight = null, ambientLight = null, cameraFillLight = null, groundMesh = null;
 let replayA = null, replayB = null;
 let carModelA = null, carModelB = null;
 let trackGroup = null;
@@ -3600,20 +3653,26 @@ function initThreeJS() {
   scene.add(mainSunLight);
   scene.add(mainSunLight.target);
 
+  /* Soft broadcast fill light attached to camera providing crisp view on car livery */
+  cameraFillLight = new THREE.DirectionalLight(0xa5c8f8, 0.95);
+  cameraFillLight.position.set(0, 0, 1);
+  camera.add(cameraFillLight);
+  scene.add(camera);
+
   /* Deep sky and turf hemisphere lighting */
-  hemiLight = new THREE.HemisphereLight(0x384f73, 0x121e16, 1.15);
+  hemiLight = new THREE.HemisphereLight(0x4a658f, 0x162232, 1.25);
   scene.add(hemiLight);
 
   /* Soft ambient night fill ensuring grandstands and outfield are lightly visible */
-  ambientLight = new THREE.AmbientLight(0x283852, 1.25);
+  ambientLight = new THREE.AmbientLight(0x334460, 1.35);
   scene.add(ambientLight);
 
   /* Vast night stadium outfield ground plane */
   const groundGeo = new THREE.PlaneGeometry(6000, 6000);
   const groundMat = new THREE.MeshStandardMaterial({
-    color: 0x12241b,
-    roughness: 0.92,
-    metalness: 0.02,
+    color: 0x0a1626,
+    roughness: 0.90,
+    metalness: 0.05,
   });
   groundMesh = new THREE.Mesh(groundGeo, groundMat);
   groundMesh.rotation.x = -Math.PI / 2;
@@ -3676,20 +3735,21 @@ function loadRaceIntoScene() {
   }
 
   if (mainSunLight) {
-    mainSunLight.position.set(centerX + maxDim * 0.45, maxDim * 0.85, centerZ + maxDim * 0.35);
+    mainSunLight.position.set(centerX + 60, 160, centerZ + 50);
     mainSunLight.target.position.set(centerX, 0, centerZ);
     mainSunLight.target.updateMatrixWorld();
     mainSunLight.shadow.camera.near = 10;
-    mainSunLight.shadow.camera.far = maxDim * 2.8;
-    mainSunLight.shadow.camera.left = -maxDim * 0.65;
-    mainSunLight.shadow.camera.right = maxDim * 0.65;
-    mainSunLight.shadow.camera.top = maxDim * 0.65;
-    mainSunLight.shadow.camera.bottom = -maxDim * 0.65;
+    mainSunLight.shadow.camera.far = 320;
+    mainSunLight.shadow.camera.left = -90;
+    mainSunLight.shadow.camera.right = 90;
+    mainSunLight.shadow.camera.top = 90;
+    mainSunLight.shadow.camera.bottom = -90;
     mainSunLight.shadow.camera.updateProjectionMatrix();
+    mainSunLight.shadow.bias = -0.0004;
   }
 
   if (scene && scene.fog) {
-    scene.fog.density = 0.65 / (maxDim * 3.5);
+    scene.fog.density = 0.00045;
   }
 
   /* Build F1 Cars:
@@ -4253,6 +4313,14 @@ function animate() {
   updateCamera(sA, sB, rotYA, rotYB, dt);
   drawMinimap(sA, sB, rotYA, rotYB);
 
+  if (mainSunLight && carModelA && carModelB) {
+    const midX = (carModelA.position.x + carModelB.position.x) / 2;
+    const midZ = (carModelA.position.z + carModelB.position.z) / 2;
+    mainSunLight.target.position.set(midX, 0, midZ);
+    mainSunLight.position.set(midX + 60, 160, midZ + 50);
+    mainSunLight.target.updateMatrixWorld();
+  }
+
   /* Synchronize audio engine with vehicle speeds, camera focus, and hero mode state */
   soundSystem.update(sA, sB, playing, cameraMode, isHeroMode);
 
@@ -4340,6 +4408,7 @@ function showWinnerScreen() {
  * I switch seamlessly between official circuits: Oval Speedway, Flowing GP Circuit, and Tight Technical Circuit.
  */
 async function loadTrack(trackKey) {
+  if (!scene) initThreeJS();
   currentTrackKey = trackKey;
   if (trackSwitcher) trackSwitcher.value = trackKey;
   if (winnerModal) winnerModal.classList.add('hidden');
@@ -4909,6 +4978,7 @@ async function autoInit() {
 
   /* 3. Fallback, dismiss loading overlay and present the hero section */
   clearTimeout(safetyTimer);
+  if (!scene) initThreeJS();
   dismissLoader();
 }
 
