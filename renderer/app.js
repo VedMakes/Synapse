@@ -4512,6 +4512,7 @@ function onResize() {
  */
 function loadRaceIntoScene() {
   const track = replayA.track;
+  const trackId = track.meta?.id || track.meta?.track_id || currentTrackKey || 'oval';
 
   /* Reset spectator flags */
   spectatorFlags = [];
@@ -4605,19 +4606,19 @@ function loadRaceIntoScene() {
   document.getElementById('telem-name-b').textContent = replayB.participantId.toUpperCase();
   timeTotal.textContent = liveMode ? 'LIVE' : formatTime(maxTime);
 
-  const trackId = replayA.track.meta?.id || replayA.track.meta?.track_id || 'CIRCUIT';
+  const displayTrackId = replayA.track.meta?.id || replayA.track.meta?.track_id || trackId || 'CIRCUIT';
   const trackTag = document.getElementById('track-name-tag');
   if (trackTag) {
-    if (trackId.includes('monaco')) trackTag.textContent = 'MONACO GP';
-    else if (trackId.includes('spa')) trackTag.textContent = 'SPA-FRANCORCHAMPS';
-    else trackTag.textContent = trackId.replace('synthetic_', '').toUpperCase();
+    if (displayTrackId.includes('monaco')) trackTag.textContent = 'MONACO GP';
+    else if (displayTrackId.includes('spa')) trackTag.textContent = 'SPA-FRANCORCHAMPS';
+    else trackTag.textContent = displayTrackId.replace('synthetic_', '').toUpperCase();
   }
 
-  if (trackId.includes('flowing')) currentTrackKey = 'flowing';
-  else if (trackId.includes('tight')) currentTrackKey = 'tight';
-  else if (trackId.includes('monaco')) currentTrackKey = 'monaco';
-  else if (trackId.includes('spa')) currentTrackKey = 'spa';
-  else if (trackId.includes('oval')) currentTrackKey = 'oval';
+  if (displayTrackId.includes('flowing')) currentTrackKey = 'flowing';
+  else if (displayTrackId.includes('tight')) currentTrackKey = 'tight';
+  else if (displayTrackId.includes('monaco')) currentTrackKey = 'monaco';
+  else if (displayTrackId.includes('spa')) currentTrackKey = 'spa';
+  else if (displayTrackId.includes('oval')) currentTrackKey = 'oval';
   if (trackSwitcher) trackSwitcher.value = currentTrackKey;
 
   /* Initial camera position behind start line */
