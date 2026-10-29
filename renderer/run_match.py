@@ -1,6 +1,7 @@
 """Synapse F1 Grand Prix Knockout Match Evaluator and 3D Broadcaster."""
 
 import argparse
+import dataclasses
 import datetime
 import json
 from pathlib import Path
@@ -59,8 +60,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-steps",
         type=int,
-        default=2400,
-        help="Maximum simulation ticks (default: 2400 = 80 seconds at 30 Hz)",
+        default=6500,
+        help="Maximum simulation ticks (default: 6500 for full lap)",
     )
     parser.add_argument(
         "--open-browser",
@@ -118,6 +119,11 @@ def main() -> None:
 
     track = TrackGeometry.from_file(track_path)
     config = SimulationConfig.from_file(config_path)
+    if args.max_steps != config.episode.max_steps:
+        config = dataclasses.replace(
+            config,
+            episode=dataclasses.replace(config.episode, max_steps=args.max_steps),
+        )
 
     import onnxruntime as ort
     sess_a = ort.InferenceSession(str(model_a_path))
