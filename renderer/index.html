@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <!-- I show a loading spinner overlay while Three.js and telemetry files initialize -->
+  
   <div id="loading-overlay">
     <div class="loader-container">
       <div class="f1-loader-badge"><span class="f1-red-mark"></span>FORMULA 1</div>
@@ -19,7 +19,7 @@
       <div class="loader-sub" id="load-status">INITIALIZING TELEMETRY STREAM…</div>
     </div>
   </div>
-  <!-- Failsafe timer ensuring the loading screen fades out even if assets or network take longer -->
+  
   <script>
     setTimeout(function() {
       var overlay = document.getElementById('loading-overlay');
@@ -32,16 +32,16 @@
     }, 1800);
   </script>
 
-  <!-- Here I built the hero showcase overlay for circuit and racer selection before the Grand Prix starts -->
+  
   <div id="hero-section" class="hero-overlay">
-    <!-- Top bar displaying FIA championship logo header -->
+    
     <div class="hero-top-bar">
       <div class="hero-series-badge">
         <span class="f1-red-mark"></span>FIA FORMULA 1 WORLD CHAMPIONSHIP™
       </div>
     </div>
 
-    <!-- Centered glassmorphism card containing circuit choices and racer selectors -->
+    
     <div class="hero-card">
       <div class="hero-card-header">
         <div class="hero-logo-tag"><span class="f1-red-mark"></span>SYNAPSE AI RACING</div>
@@ -49,7 +49,7 @@
         <p class="hero-subtitle">AUTONOMOUS DUAL-CAR CHAMPIONSHIP SHOWDOWN</p>
       </div>
 
-      <!-- Circuit selection cards allowing quick toggling between the three tracks -->
+      
       <div class="hero-section-group">
         <label class="hero-group-label">🏁 SELECT RACING CIRCUIT</label>
         <div class="hero-track-grid">
@@ -91,11 +91,11 @@
         </div>
       </div>
 
-      <!-- Head to head racer cards where I let users pick presets or upload custom telemetry JSONs -->
+      
       <div class="hero-section-group">
         <label class="hero-group-label">🏎️ SELECT HEAD-TO-HEAD RACERS</label>
         <div class="hero-racers-row">
-          <!-- Car 1 configuration with electric cyan livery accents -->
+          
           <div class="hero-racer-card cyan-border">
             <div class="racer-tag cyan-bg">CAR 1 • CYAN</div>
             <select id="hero-select-racer-a" class="hero-select">
@@ -108,7 +108,7 @@
 
           <div class="hero-vs-badge">VS</div>
 
-          <!-- Car 2 configuration with radiant papaya livery accents -->
+          
           <div class="hero-racer-card orange-border">
             <div class="racer-tag orange-bg">CAR 2 • PAPAYA</div>
             <select id="hero-select-racer-b" class="hero-select">
@@ -121,7 +121,7 @@
         </div>
       </div>
 
-      <!-- Launch Grand Prix button that transitions the view from intro into the live race -->
+      
       <div class="hero-action-box">
         <button id="btn-launch-gp" class="hero-launch-btn pulse">
           <span class="btn-play-icon">▶</span>
@@ -133,7 +133,7 @@
         </div>
       </div>
 
-      <!-- Live ONNX Telecast connection box -->
+      
       <div class="hero-live-box">
         <div class="hero-divider"><span>OR CONNECT TO LIVE ONNX TELECAST</span></div>
         <div class="hero-live-row">
@@ -146,19 +146,19 @@
 
 
 
-  <!-- Fullscreen white optical flash element triggered on dynamic camera cuts -->
+  
   <div id="broadcast-cut-flash" class="cut-flash"></div>
 
-  <!-- 3D canvas Three.js WebGL rendering viewport -->
+  
   <canvas id="race-canvas"></canvas>
 
-  <!-- Floating banner displaying live alerts for overtakes, safety flags, and track limits -->
+  
   <div id="broadcast-alert" class="broadcast-alert hidden">
     <span class="alert-icon">⚡</span>
     <span class="alert-text" id="alert-text">GREEN FLAG — RACE STARTED</span>
   </div>
 
-  <!-- Official FIA style classification podium modal popping up upon race completion -->
+  
   <div id="winner-modal" class="winner-modal hidden">
     <div class="winner-card">
       <div class="winner-header">
@@ -203,7 +203,7 @@
     </div>
   </div>
 
-  <!-- Top left live timing tower showing driver positions, deltas, and telemetry telemetry -->
+  
   <div id="hud-top-left" class="hud-panel">
     <div class="timing-tower">
       <div class="tower-header">
@@ -259,7 +259,7 @@
     </div>
   </div>
 
-  <!-- Top right radar minimap and active track selector menu -->
+  
   <div id="hud-top-right" class="hud-panel">
     <div class="minimap-container">
       <div class="minimap-header">
@@ -275,10 +275,10 @@
     </div>
   </div>
 
-  <!-- Bottom playback control bar with clean two row layout -->
+  
   <div id="hud-bottom" class="hud-panel">
     <div class="playback-bar">
-      <!-- Full width scrubber slider tracking elapsed and total race duration -->
+      
       <div class="scrubber-row">
         <span id="time-current" class="time-digit">00:00.000</span>
         <div class="scrubber-track-wrap">
@@ -287,7 +287,7 @@
         <span id="time-total" class="time-digit">00:00.000</span>
       </div>
 
-      <!-- Secondary control row with transport buttons, speed multipliers, camera views, and audio toggles -->
+      
       <div class="actions-row">
         <div class="control-group transport-group">
           <button id="btn-restart" class="ctrl-btn" title="Restart">⏮</button>
@@ -329,9 +329,9 @@
     </div>
   </div>
 
-  <!-- Bottom left driver telemetry HUD box styled after modern F1 digital steering wheels -->
+  
   <div id="telemetry-a" class="telemetry-panel left">
-    <!-- Multi color LED rev shift light bar indicating engine RPM thresholds -->
+    
     <div class="f1-rpm-bar" id="rpm-bar-a">
       <div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div>
       <div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div>
@@ -368,9 +368,9 @@
     </div>
   </div>
 
-  <!-- Bottom right driver telemetry HUD box styled after modern F1 digital steering wheels -->
+  
   <div id="telemetry-b" class="telemetry-panel right">
-    <!-- Multi color LED rev shift light bar indicating engine RPM thresholds -->
+    
     <div class="f1-rpm-bar" id="rpm-bar-b">
       <div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div><div class="rpm-led green"></div>
       <div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div><div class="rpm-led red"></div>
@@ -407,7 +407,7 @@
     </div>
   </div>
 
-  <!-- Import map referencing Three.js ES modules from CDN -->
+  
   <script type="importmap">
   {
     "imports": {
