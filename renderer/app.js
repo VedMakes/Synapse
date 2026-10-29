@@ -4060,6 +4060,7 @@ const heroSection = document.getElementById('hero-section');
 const heroCamLabel = document.getElementById('hero-cam-label');
 const cutFlashElem = document.getElementById('broadcast-cut-flash');
 const btnLaunchGP = document.getElementById('btn-launch-gp');
+const btnLaunchMatch = document.getElementById('btn-launch-match');
 const btnHeroShow = document.getElementById('btn-hero-show');
 const heroSelectRacerA = document.getElementById('hero-select-racer-a');
 const heroSelectRacerB = document.getElementById('hero-select-racer-b');
@@ -5751,12 +5752,67 @@ if (btnLiveConnect) {
   });
 }
 
+
+/* Load and broadcast pre-evaluated knockout match replay */
+async function loadMatchReplays() {
+  try {
+    const [resA, resB] = await Promise.all([
+      fetch('match_a.json'),
+      fetch('match_b.json')
+    ]);
+    if (!resA.ok || !resB.ok) {
+      showAlert('NO MATCH REPLAY FOUND, RUN run_match.bat FIRST', 'warn', 3000);
+      return false;
+    }
+    replayA = parseReplay(await resA.json());
+    replayB = parseReplay(await resB.json());
+
+    if (heroSection) heroSection.classList.add('hidden');
+    document.body.classList.remove('hero-active');
+    isHeroMode = false;
+
+    startRace();
+
+    currentTime = 0;
+    playing = true;
+    if (btnPlay) btnPlay.textContent = '⏸';
+    winnerShownForCurrentRace = false;
+    if (winnerModal) winnerModal.classList.add('hidden');
+
+    cameraMode = 'battle';
+    document.querySelectorAll('.cam-btn').forEach(b => b.classList.remove('active'));
+    document.querySelector('[data-cam="battle"]')?.classList.add('active');
+
+    soundSystem.ensureResumed();
+    soundSystem.stopHeroBGM(1.0);
+    soundSystem.crowd?.ensurePlaying();
+
+    showAlert('🏆 FIA KNOCKOUT SHOWDOWN STARTED, GREEN FLAG!', 'info', 3200);
+    return true;
+  } catch (e) {
+    showAlert(`MATCH LOAD ERROR: ${e.message}`, 'warn', 3000);
+    return false;
+  }
+}
+
+if (btnLaunchMatch) {
+  btnLaunchMatch.addEventListener('click', () => {
+    loadMatchReplays();
+  });
+}
+
 /* Automatic launch on page load */
 async function autoInit() {
   const liveQuery = new URLSearchParams(window.location.search).get('live');
   if (liveQuery) {
     startLiveConnection(liveQuery);
     return;
+  }
+
+  const matchQuery = new URLSearchParams(window.location.search).get('match');
+  if (matchQuery) {
+    const ok = await loadMatchReplays();
+    if (ok) return;
   }
 
   function dismissLoader() {
@@ -5770,29 +5826,6 @@ async function autoInit() {
 
   /* Safety timer guaranteeing the loading overlay will never stay stuck on screen */
   const safetyTimer = setTimeout(dismissLoader, 1500);
-
-  const matchQuery = new URLSearchParams(window.location.search).get('match');
-  if (matchQuery) {
-    try {
-      const [resA, resB] = await Promise.all([
-        fetch('match_a.json'),
-        fetch('match_b.json'),
-      ]);
-      if (resA.ok && resB.ok) {
-        replayA = parseReplay(await resA.json());
-        replayB = parseReplay(await resB.json());
-        if (heroSection) heroSection.classList.add('hidden');
-        document.body.classList.remove('hero-active');
-        isHeroMode = false;
-        clearTimeout(safetyTimer);
-        startRace();
-        showAlert('FIA KNOCKOUT MATCH LOADED — GREEN FLAG', 'info', 3000);
-        return;
-      }
-    } catch (e) {
-      console.warn('Match replay load failed:', e);
-    }
-  }
 
   /* 1. Check embedded data for standalone bundled HTML distributions */
   const dataA = document.getElementById('replay-data-a');

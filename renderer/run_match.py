@@ -84,11 +84,10 @@ def resolve_track(track_arg: str) -> Path:
 
 
 def build_replay_payload(header: dict, frames: list, result: dict) -> dict:
-    return {
-        "header": header,
-        "frames": frames,
-        "result": result,
-    }
+    payload = dict(header)
+    payload["frames"] = frames
+    payload["result"] = result
+    return payload
 
 
 def main() -> None:
@@ -266,3 +265,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
