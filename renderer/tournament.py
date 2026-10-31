@@ -30,6 +30,8 @@ from racing_event.vector_env import VectorizedRacingEnv
 
 REPLAY_DIR = Path(__file__).resolve().parent / "replays"
 REPLAY_DIR.mkdir(parents=True, exist_ok=True)
+KEEPIN_DIR = Path(__file__).resolve().parent / "keepin"
+KEEPIN_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def resolve_circuit(track_arg: str) -> Path:
@@ -280,15 +282,16 @@ def cmd_match(args: argparse.Namespace) -> None:
         direct = Path(team_query)
         if direct.is_file():
             return direct.resolve()
-        cand1 = REPLAY_DIR / f"{team_query}_{circuit_name}.json"
-        if cand1.is_file():
-            return cand1.resolve()
-        cand2 = REPLAY_DIR / f"{team_query}.json"
-        if cand2.is_file():
-            return cand2.resolve()
-        matches = list(REPLAY_DIR.glob(f"*{team_query}*.json"))
-        if matches:
-            return matches[0].resolve()
+        for folder in (REPLAY_DIR, KEEPIN_DIR):
+            cand1 = folder / f"{team_query}_{circuit_name}.json"
+            if cand1.is_file():
+                return cand1.resolve()
+            cand2 = folder / f"{team_query}.json"
+            if cand2.is_file():
+                return cand2.resolve()
+            matches = list(folder.glob(f"*{team_query}*.json"))
+            if matches:
+                return matches[0].resolve()
         raise FileNotFoundError(f"Could not find replay for '{team_query}'. Run simulate first!")
 
     replay_a_path = resolve_replay(team_a)
