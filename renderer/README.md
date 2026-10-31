@@ -4,17 +4,6 @@ A modern, broadcast-grade **2.5D WebGL F1 TV Chase Viewer** built with Three.js 
 
 ---
 
-## 🔒 Competition Privacy and Replay Security
-
-> **IMPORTANT FOR ORGANIZERS:**
-> Model telemetry files (`*.json`) contain full 30 Hz observation, velocity, and action pairs (`[steering_command, throttle_brake]`).
-> Releasing these files allows participants to clone the driving policy via behavioral cloning (imitation learning) and bypass reinforcement learning training.
-> 
-> All `.json` replays and telemetry dumps are strictly gitignored under `renderer/.gitignore`.
-> Organizers can safely keep private participant replays on their local machine inside `renderer/keepin/` or `renderer/replays/`, which will never be tracked or committed to GitHub.
-
----
-
 ## 🌟 Visual & Environmental Features
 
 - **F1 Grand Prix Hero Section & Cinematic Highlight Showcase:**
